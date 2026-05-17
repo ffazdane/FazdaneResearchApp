@@ -1,0 +1,36 @@
+# Secrets & Credentials
+config.yaml
+.env
+credentials/
+*.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# Logs
+logs/*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/secrets.toml

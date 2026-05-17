@@ -1,0 +1,252 @@
+"""
+FazDane Analytics — Tier 2
+Market Structure Dashboard
+"""
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import yfinance as yf
+import plotly.graph_objects as go
+from datetime import datetime
+import logging
+from modules.base_module import FazDaneModule
+
+logger = logging.getLogger("MarketStructure")
+
+ASSETS = {
+    "/ES (E-mini S&P 500)": "ES=F",
+    "/NQ (E-mini Nasdaq 100)": "NQ=F",
+    "/YM (E-mini Dow)": "YM=F",
+    "/RTY (Russell 2000)": "RTY=F",
+    "SPY": "SPY",
+    "QQQ": "QQQ",
+    "IWM": "IWM",
+    "Gold": "GC=F",
+    "Crude Oil": "CL=F",
+    "VIX": "^VIX",
+    "Apple (AAPL)": "AAPL",
+    "Microsoft (MSFT)": "MSFT",
+    "Alphabet (GOOGL)": "GOOGL",
+    "Amazon (AMZN)": "AMZN",
+    "NVIDIA (NVDA)": "NVDA",
+    "Meta (META)": "META",
+    "Tesla (TSLA)": "TSLA",
+    "Netflix, Inc. (NFLX)": "NFLX",
+    "SPX Technologies, Inc. (SPXC)": "SPXC",
+}
+
+DOW_ORDER = ["Monday","Tuesday","Wednesday","Thursday","Friday"]
+WEEK_ORDER = ["Week1","Week2","Week3","Week4","Week5"]
+MONTH_ORDER = [
+    "January","February","March","April","May","June",
+    "July","August","September","October","November","December"
+]
+VIEW_OPTIONS = [
+    "Average Return",
+    "Contribution",
+    "T-Stat",
+    "Positive Probability",
+    "Return Attribution"
+]
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_market_history(symbol, start, end):
+    df = yf.download(symbol, start=start, end=end, auto_adjust=False, progress=False)
+    if df.empty:
+        return pd.DataFrame()
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(-1)
+    
+    if "Close" in df.columns:
+        s = df["Close"]
+        if isinstance(s, pd.DataFrame):
+            s = s.iloc[:, 0]
+    else:
+        s = df.iloc[:, 0]
+        
+    return s
+
+def week_of_month(date):
+    d = date.day
+    if d <= 7: return "Week1"
+    if d <= 14: return "Week2"
+    if d <= 21: return "Week3"
+    if d <= 28: return "Week4"
+    return "Week5"
+
+def compounded(series):
+    s = series.dropna()
+    if len(s) == 0: return np.nan
+    return (1 + s).prod() - 1
+
+def t_stat(series):
+    s = series.dropna()
+    if len(s) < 2: return np.nan
+    mean = s.mean()
+    std = s.std(ddof=1)
+    if std == 0: return np.nan
+    return mean / (std / np.sqrt(len(s)))
+
+def positive_prob(series):
+    s = series.dropna()
+    if len(s) == 0: return np.nan
+    return (s > 0).mean() * 100
+
+def build_matrix(df, segment_col, segment_order, view):
+    if view == "Average Return":
+        mat = df.pivot_table(index="MonthName", columns=segment_col, values="Return", aggfunc="mean").reindex(index=MONTH_ORDER, columns=segment_order) * 100
+    elif view == "Contribution":
+        mean = df.pivot_table(index="MonthName", columns=segment_col, values="Return", aggfunc="mean")
+        count = df.pivot_table(index="MonthName", columns=segment_col, values="Return", aggfunc="count")
+        mat = (mean * count * 100).reindex(index=MONTH_ORDER, columns=segment_order)
+    elif view == "T-Stat":
+        mat = df.groupby(["MonthName", segment_col])["Return"].apply(t_stat).unstack(segment_col).reindex(index=MONTH_ORDER, columns=segment_order)
+    elif view == "Positive Probability":
+        mat = df.groupby(["MonthName", segment_col])["Return"].apply(positive_prob).unstack(segment_col).reindex(index=MONTH_ORDER, columns=segment_order)
+    elif view == "Return Attribution":
+        mat = df.groupby(["MonthName", segment_col])["Return"].apply(lambda s: compounded(s) * 100).unstack(segment_col).reindex(index=MONTH_ORDER, columns=segment_order)
+    else:
+        mat = pd.DataFrame()
+    return mat
+
+def month_total(df):
+    return df.groupby("MonthName")["Return"].apply(compounded) * 100
+
+def segment_total(df, segment_col, order):
+    return df.groupby(segment_col)["Return"].apply(compounded).reindex(order) * 100
+
+def year_total(df):
+    return compounded(df["Return"]) * 100
+
+class MarketStructureModule(FazDaneModule):
+    MODULE_NAME = "Market Structure Heatmap"
+    MODULE_ICON = "🗓️"
+    MODULE_DESCRIPTION = "Month × Segment Analytics Engine for Market Seasonality"
+    TIER = 2
+    SOURCE_NOTEBOOK = "02-Weekday Ticker Heatmap.ipynb"
+    CACHE_TTL = 3600
+    REQUIRES_LIVE_DATA = True
+    DATA_SOURCES = ["yfinance"]
+
+    def render_sidebar(self):
+        current_year = datetime.now().year
+        
+        asset_options = list(ASSETS.keys()) + ["Custom Ticker..."]
+        self.asset_label = st.selectbox("Asset:", options=asset_options, index=0)
+        
+        if self.asset_label == "Custom Ticker...":
+            self.symbol = st.text_input("Enter Ticker Symbol (e.g. AAPL):", value="AAPL").strip().upper()
+            self.asset_label = self.symbol  # Use ticker as label for charts
+        else:
+            self.symbol = ASSETS[self.asset_label]
+        
+        self.year = st.selectbox("Year:", options=list(range(current_year, current_year - 20, -1)), index=0)
+        
+        self.segment_mode = st.selectbox("Segment:", options=["Weekday", "Week of Month"], index=0)
+        self.view = st.selectbox("View:", options=VIEW_OPTIONS, index=0)
+        
+        if st.button("🔄 Generate Report", use_container_width=True, type="primary"):
+            st.rerun()
+
+    def render_main(self):
+        self.render_section_header("🗓️ Market Structure Dashboard", "Analyze asset seasonality, returns, and structural flow patterns by weekday and month.")
+        
+        # Determine current date bounds
+        current_year = datetime.now().year
+        
+        start = f"{self.year}-01-01"
+        if self.year == current_year:
+            end = datetime.now().strftime("%Y-%m-%d")
+        else:
+            end = f"{self.year}-12-31"
+        
+        with st.spinner(f"Fetching data for {self.symbol} ({self.year})..."):
+            close_data = fetch_market_history(self.symbol, start, end)
+            
+        if close_data.empty:
+            st.warning(f"⚠️ No data found for {self.symbol} in {self.year}.")
+            return
+            
+        df = pd.DataFrame({"Date": close_data.index, "Close": close_data.values})
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.sort_values("Date")
+        df["Return"] = df["Close"].pct_change()
+        
+        df["Day"] = df["Date"].dt.day_name()
+        df["MonthName"] = df["Date"].dt.month_name()
+        df["WeekOfMonth"] = df["Date"].apply(week_of_month)
+        
+        df = df[df["Day"].isin(DOW_ORDER)]
+        df = df.dropna(subset=["Return"])
+        
+        if df.empty:
+            st.warning("⚠️ Not enough trading data to compute returns for this year.")
+            return
+
+        if self.segment_mode == "Weekday":
+            seg_col = "Day"
+            seg_order = DOW_ORDER
+        else:
+            seg_col = "WeekOfMonth"
+            seg_order = WEEK_ORDER
+
+        matrix = build_matrix(df, seg_col, seg_order, self.view)
+        m_total = month_total(df).reindex(MONTH_ORDER)
+        s_total = segment_total(df, seg_col, seg_order)
+        y_total = year_total(df)
+        
+        pivot = matrix.copy()
+        pivot["Month Total (Comp %)"] = m_total
+        
+        bottom = list(s_total.values) + [y_total]
+        pivot.loc["Year Total (Comp %)"] = bottom
+        
+        # Plotly rendering
+        z_vals = pivot.values.astype(float)
+        
+        # Create text array
+        text_array = []
+        for i in range(pivot.shape[0]):
+            row_texts = []
+            for j in range(pivot.shape[1]):
+                val = z_vals[i, j]
+                if np.isfinite(val):
+                    row_texts.append(f"{val:.2f}")
+                else:
+                    row_texts.append("")
+            text_array.append(row_texts)
+            
+        fig = go.Figure(data=go.Heatmap(
+            z=z_vals,
+            x=pivot.columns.tolist(),
+            y=pivot.index.tolist(),
+            text=text_array,
+            texttemplate="%{text}",
+            colorscale='RdYlGn',
+            zmid=0,
+            showscale=True,
+            colorbar=dict(title=self.view, thickness=15),
+            hoverinfo="x+y+z",
+            hovertemplate="<b>%{y} - %{x}</b><br>Value: %{text}<extra></extra>"
+        ))
+        
+        calc_height = max(500, (len(pivot) + 1) * 45)
+        
+        fig.update_layout(
+            title=f"{self.asset_label} – {self.view} (Month × {self.segment_mode}) – {self.year}",
+            title_font=dict(size=18, color="#3ab54a"),
+            paper_bgcolor="#0d1b2e",
+            plot_bgcolor="#0d1b2e",
+            font=dict(color="#e2e8f0"),
+            height=calc_height,
+            margin=dict(l=0, r=0, t=60, b=40),
+            xaxis=dict(side="top", gridcolor="#1e3a5f", tickfont=dict(size=12, color="#e2e8f0")),
+            yaxis=dict(autorange="reversed", gridcolor="#1e3a5f", tickfont=dict(size=12, color="#94a3b8"))
+        )
+        
+        # Add separating lines
+        fig.add_hline(y=len(pivot) - 1.5, line_width=2, line_color="#cbd5e1")
+        fig.add_vline(x=len(seg_order) - 0.5, line_width=2, line_color="#cbd5e1")
+        
+        st.plotly_chart(fig, use_container_width=True)
