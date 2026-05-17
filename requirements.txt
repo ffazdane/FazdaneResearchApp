@@ -1,36 +1,9 @@
-# ══════════════════════════════════════════════════════════════════════
-# FazDane Analytics - Requirements
-# ══════════════════════════════════════════════════════════════════════
-
-# Core Framework
 streamlit
-python-dotenv
-
-# Authentication
 bcrypt
-
-# Data Processing
 pandas
 numpy
 scipy
-
-# Financial Data
 yfinance
-pandas-datareader
-
-# Technical Analysis
-pandas-ta
-
-# Visualization
 plotly
 matplotlib
 seaborn
-
-# Utilities
-requests
-python-dateutil
-pytz
-pyyaml
-
-# Development / Testing
-pytest
