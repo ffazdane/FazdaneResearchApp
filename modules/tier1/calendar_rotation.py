@@ -395,7 +395,11 @@ class CalendarRotationModule(FazDaneModule):
             font=dict(family="Inter, sans-serif", size=11, color="#E2E8F0"),
             height=850,
             showlegend=True,
-            legend=dict(orientation="v", yanchor="top", y=0.99, xanchor="left", x=1.08, bgcolor="rgba(13,27,46,0.8)", bordercolor="#1e3a5f", borderwidth=1),
+            legend=dict(
+                orientation="v", yanchor="top", y=0.99, xanchor="left", x=1.08, 
+                bgcolor="rgba(13,27,46,0.8)", bordercolor="#1e3a5f", borderwidth=1,
+                font=dict(color="#E2E8F0")
+            ),
             margin=dict(l=40, r=140, t=80, b=40)
         )
 
@@ -411,7 +415,7 @@ class CalendarRotationModule(FazDaneModule):
         for annotation in fig['layout']['annotations']:
             annotation['font'] = dict(size=14, color="#e2e8f0")
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, theme=None)
 
     def _render_top_candidates(self, combined_scores):
         st.markdown("### 🏆 Top Rotation Candidates")
