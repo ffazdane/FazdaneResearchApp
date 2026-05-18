@@ -12,52 +12,10 @@ from datetime import datetime, timedelta
 from scipy.interpolate import splprep, splev
 import logging
 from modules.base_module import FazDaneModule
+from utils.universe_manager import render_universe_manager
 
 logger = logging.getLogger("SectorRotation")
 
-# ============================================================
-# Universe Definitions
-# ============================================================
-
-UNIVERSES = {
-    "SPX Sectors": {
-        "tickers": {
-            "XLC": "Communication Services", "XLY": "Consumer Discretionary", 
-            "XLP": "Consumer Staples", "XLE": "Energy", "XLF": "Financials", 
-            "XLV": "Health Care", "XLI": "Industrials", "XLB": "Materials", 
-            "XLRE": "Real Estate", "XLK": "Technology", "XLU": "Utilities"
-        },
-        "benchmark": "SPY",
-        "caption": "SPX Sector Rotation Matrix vs SPY"
-    },
-    "MAG 7": {
-        "tickers": {
-            "AAPL": "Apple", "MSFT": "Microsoft", "NVDA": "Nvidia", 
-            "AMZN": "Amazon", "META": "Meta Platforms", "GOOGL": "Alphabet", 
-            "TSLA": "Tesla"
-        },
-        "benchmark": "QQQ",
-        "caption": "MAG 7 Rotation Matrix vs QQQ"
-    },
-    "Leading ETFs": {
-        "tickers": {
-            "QQQ": "Nasdaq 100 ETF", "SPY": "S&P 500 ETF", "IWM": "Russell 2000 ETF", 
-            "DIA": "Dow Jones ETF", "SMH": "Semiconductor ETF", "XLK": "Technology ETF", 
-            "XLF": "Financial ETF", "XLE": "Energy ETF", "GLD": "Gold ETF", 
-            "SLV": "Silver ETF", "TLT": "Long Bond ETF", "HYG": "High Yield Bond ETF"
-        },
-        "benchmark": "SPY",
-        "caption": "Leading ETF Rotation Matrix vs SPY"
-    },
-    "Major Indexes": {
-        "tickers": {
-            "^GSPC": "S&P 500", "^IXIC": "Nasdaq Composite", "^DJI": "Dow Jones", 
-            "^RUT": "Russell 2000", "^NYA": "NYSE Composite", "^VIX": "Volatility Index"
-        },
-        "benchmark": "^GSPC",
-        "caption": "Major Index Rotation Matrix vs S&P 500"
-    }
-}
 
 # Fixed distinct colors for Plotly
 COLORS = ["#06b6d4", "#3b82f6", "#10b981", "#f59e0b", "#6366f1", "#ec4899", "#8b5cf6", "#14b8a6", "#f97316", "#84cc16", "#ef4444", "#a855f7", "#fbbf24", "#34d399", "#f87171"]
@@ -168,47 +126,31 @@ class SectorRotationModule(FazDaneModule):
 
     def render_sidebar(self):
         st.markdown("**Matrix Configuration**")
-        
-        # State management to update benchmark when universe changes
-        def on_universe_change():
-            univ = st.session_state.sr_univ_sel
-            if univ != "Custom Tickers":
-                st.session_state.sr_bench_input = UNIVERSES[univ]["benchmark"]
-            else:
-                st.session_state.sr_bench_input = "SPY"
-        
-        universe = st.selectbox(
-            "Universe:", 
-            options=list(UNIVERSES.keys()) + ["Custom Tickers"], 
-            index=0, 
-            key="sr_univ_sel",
-            on_change=on_universe_change
+
+        universe_name, tickers_list, benchmark = render_universe_manager(
+            key_prefix="sr",
+            show_benchmark=True,
+            label="Ticker Universe:"
         )
-        
-        custom_tickers = ""
-        if universe == "Custom Tickers":
-            custom_tickers = st.text_area("Custom Tickers:", "AAPL, MSFT, NVDA, AMD, META, TSLA, GOOGL", key="sr_custom")
-            
-        benchmark = st.text_input(
-            "Benchmark:", 
-            value=UNIVERSES.get(universe, {}).get("benchmark", "SPY"), 
-            key="sr_bench_input"
-        )
-        
+        # Store selections for render_main
+        st.session_state["sr_universe_name"] = universe_name
+        st.session_state["sr_tickers_list"] = tickers_list
+        st.session_state["sr_benchmark_live"] = benchmark
+
         st.markdown("**Chart Parameters**")
         period_type = st.selectbox("Period Type:", ["days", "weeks", "months"], index=1, key="sr_ptype")
         period_number = st.slider("Periods:", 3, 52, 12, 1, key="sr_pnum")
         tail_len = st.slider("Tail Length:", 3, 15, 6, 1, key="sr_tail")
         ema_span = st.slider("Smooth (EMA Span):", 2, 10, 4, 1, key="sr_ema")
-        
+
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         scan_clicked = st.button("🔄 Generate Matrix", use_container_width=True, type="primary")
-        
+
         if scan_clicked:
             st.session_state["sr_state"] = {
-                "universe": universe,
-                "custom_tickers": custom_tickers,
-                "benchmark": benchmark.strip().upper(),
+                "universe_name": universe_name,
+                "ticker_dict": {t: t for t in tickers_list},
+                "benchmark": benchmark,
                 "period_type": period_type,
                 "period_number": period_number,
                 "tail_length": tail_len,
@@ -217,23 +159,17 @@ class SectorRotationModule(FazDaneModule):
 
     def render_main(self):
         state = st.session_state.get("sr_state", {
-            "universe": "SPX Sectors",
-            "custom_tickers": "",
+            "universe_name": "SPX Sectors",
+            "ticker_dict": {t: t for t in ["XLC","XLY","XLP","XLE","XLF","XLV","XLI","XLB","XLRE","XLK","XLU"]},
             "benchmark": "SPY",
             "period_type": "weeks",
             "period_number": 12,
             "tail_length": 6,
             "ema_span": 4
         })
-        
-        # Resolve Universe
-        if state["universe"] == "Custom Tickers":
-            t_list = [t.strip().upper() for t in state["custom_tickers"].replace("\n", ",").split(",") if t.strip()]
-            ticker_dict = {t: t for t in t_list}
-            caption = f"Custom Rotation Matrix vs {state['benchmark']}"
-        else:
-            ticker_dict = UNIVERSES[state["universe"]]["tickers"]
-            caption = UNIVERSES[state["universe"]]["caption"]
+
+        ticker_dict = state["ticker_dict"]
+        caption = f"{state['universe_name']} Rotation Matrix vs {state['benchmark']}"
 
         self.render_section_header(
             "🔄 " + caption,

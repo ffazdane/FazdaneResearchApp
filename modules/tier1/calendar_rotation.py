@@ -12,6 +12,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import logging
 from modules.base_module import FazDaneModule
+from utils.universe_manager import render_universe_multiselect
 
 logger = logging.getLogger("CalendarRotation")
 
@@ -162,8 +163,16 @@ def add_scores(df, rotation_latest):
     return df.sort_values("calendar_score", ascending=False).reset_index(drop=True)
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def analyze_universe(univ_name):
-    ctx = configure_universe(univ_name)
+def analyze_universe(univ_name, tickers, benchmark):
+    ticker_list = list(tickers)
+    candidates = sorted(set([t for t in ticker_list if t != benchmark]))
+    ctx = {
+        "selected_universe": univ_name,
+        "benchmark": benchmark,
+        "ticker_names": {t: t for t in ticker_list},
+        "tickers": ticker_list,
+        "candidates": candidates,
+    }
     close, volume = download_price_data(ctx["candidates"], ctx["benchmark"])
     if close.empty: return None
     rotation = compute_rotation(close, ctx["benchmark"])
@@ -189,19 +198,12 @@ class CalendarRotationModule(FazDaneModule):
 
     def render_sidebar(self):
         st.markdown("**Analysis Configuration**")
-        
-        selected = st.multiselect(
-            "Select Universes:",
-            options=list(UNIVERSES.keys()),
-            default=["Calendar Candidates", "SPX Sectors"],
-            key="cal_univ_sel"
+        selected, selected_data = render_universe_multiselect(
+            key_prefix="cal",
+            show_benchmark=True,
+            label="Select Universes:",
+            default_names=["Calendar Candidates", "SPX Sectors"],
         )
-        
-        custom_t = ""
-        custom_b = "SPY"
-        if "Custom Tickers" in selected:
-            custom_t = st.text_area("Custom Tickers (comma separated):", "MSTR, PLTR, CRWD, UBER, LLY", key="cal_custom_t")
-            custom_b = st.text_input("Custom Benchmark:", "SPY", key="cal_custom_b")
         
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         scan_clicked = st.button("🚀 Run Multi-Universe Analysis", use_container_width=True, type="primary")
@@ -212,18 +214,13 @@ class CalendarRotationModule(FazDaneModule):
             else:
                 st.session_state["cal_state"] = {
                     "universes": selected,
-                    "custom_t": custom_t,
-                    "custom_b": custom_b
+                    "universe_data": selected_data,
                 }
 
     def render_main(self):
-        state = st.session_state.get("cal_state", {"universes": ["Calendar Candidates", "SPX Sectors"], "custom_t": "", "custom_b": "SPY"})
+        state = st.session_state.get("cal_state", {"universes": ["Calendar Candidates", "SPX Sectors"], "universe_data": {}})
         selected_universes = state["universes"]
-        
-        if "Custom Tickers" in selected_universes and state.get("custom_t"):
-            t_list = [t.strip().upper() for t in state["custom_t"].replace("\n", ",").split(",") if t.strip()]
-            UNIVERSES["Custom Tickers"]["tickers"] = {t: t for t in t_list}
-            UNIVERSES["Custom Tickers"]["benchmark"] = state.get("custom_b", "SPY").strip().upper()
+        universe_data = state.get("universe_data", {})
         
         self.render_section_header(
             "📅 Calendar Option Strategy Rotation Matrix",
@@ -237,7 +234,18 @@ class CalendarRotationModule(FazDaneModule):
         MULTI_RESULTS = {}
         with st.spinner("Analyzing universes and calculating calendar scores..."):
             for univ in selected_universes:
-                res = analyze_universe(univ)
+                data = universe_data.get(univ)
+                if not data:
+                    data = UNIVERSES.get(univ, {})
+                    data = {
+                        "tickers": list(data.get("tickers", {}).keys()),
+                        "benchmark": data.get("benchmark", "SPY"),
+                    }
+                res = analyze_universe(
+                    univ,
+                    tuple(data.get("tickers", [])),
+                    data.get("benchmark", "SPY"),
+                )
                 if res: MULTI_RESULTS[univ] = res
 
         if not MULTI_RESULTS:
@@ -269,6 +277,9 @@ class CalendarRotationModule(FazDaneModule):
             "MAG 7": "#F59E0B",
             "Leading ETFs": "#EF4444"
         }
+        palette = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#06B6D4", "#EC4899", "#84CC16"]
+        for idx, univ_name in enumerate(MULTI_RESULTS.keys()):
+            universe_colors.setdefault(univ_name, palette[idx % len(palette)])
 
         fig = sp.make_subplots(
             rows=2, cols=2,

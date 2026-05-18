@@ -12,6 +12,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import logging
 from modules.base_module import FazDaneModule
+from utils.universe_manager import render_universe_manager
 
 logger = logging.getLogger("IronCondor")
 
@@ -24,6 +25,12 @@ MAG7 = {"NVDA": "NVDA", "AAPL": "AAPL", "MSFT": "MSFT", "AMZN": "AMZN", "META": 
 CUSTOM_TICKERS = {"AVGO": "AVGO", "NFLX": "NFLX", "AMD": "AMD", "SPY": "SPY", "QQQ": "QQQ", "IWM": "IWM"}
 ALL_MAP = {**INDICES, **MAG7, **CUSTOM_TICKERS}
 
+def _label_for_ticker(ticker):
+    for label, mapped in ALL_MAP.items():
+        if mapped == ticker:
+            return label
+    return ticker
+
 def _vix_info(v):
     if v < 15: return "Low", "#10b981"
     if v < 20: return "Normal", "#10b981"
@@ -32,17 +39,18 @@ def _vix_info(v):
     return "Extreme Fear", "#ef4444"
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_all_data(days):
+def fetch_all_data(days, ticker_items):
+    ticker_map = dict(ticker_items)
     end_dt = datetime.today()
     start_dt = end_dt - timedelta(days=days + 15)
-    tickers = list(set(ALL_MAP.values()))
+    tickers = sorted(set(list(ticker_map.values()) + ["^VIX"]))
 
     raw = yf.download(tickers, start=start_dt.strftime("%Y-%m-%d"), end=end_dt.strftime("%Y-%m-%d"), auto_adjust=True, progress=False, threads=True)
     if raw.empty: return {}
 
     single = len(tickers) == 1
     result = {}
-    for label, ticker in ALL_MAP.items():
+    for label, ticker in ticker_map.items():
         try:
             close = (raw["Close"].dropna() if single else raw["Close"][ticker].dropna()).tail(days)
             if close.empty: continue
@@ -95,7 +103,18 @@ class IronCondorModule(FazDaneModule):
         days = st.slider("Lookback Days:", 7, 365, 30, 1, key="ic_days")
         
         st.markdown("**Strategy Builder**")
-        tradeable = sorted([(f"{label} ({t})", t) for label, t in ALL_MAP.items() if t != "^VIX"])
+        universe_name, tickers_list, _ = render_universe_manager(
+            key_prefix="ic",
+            show_benchmark=False,
+            label="Ticker Universe:",
+        )
+        ticker_map = {_label_for_ticker(ticker): ticker for ticker in tickers_list if ticker != "^VIX"}
+        if not ticker_map:
+            ticker_map = {label: ticker for label, ticker in ALL_MAP.items() if ticker != "^VIX"}
+        st.session_state["ic_ticker_map"] = ticker_map
+        st.caption(f"{len(ticker_map)} instruments selected from {universe_name}.")
+
+        tradeable = sorted([(f"{label} ({t})", t) for label, t in ticker_map.items()])
         ticker = st.selectbox("Instrument:", options=[t for _, t in tradeable], format_func=lambda x: [l for l, t in tradeable if t == x][0], index=0, key="ic_ticker")
         
         bias = st.selectbox("Market Bias:", ["Neutral", "Bullish", "Bearish"], index=0, key="ic_bias").lower()
@@ -111,11 +130,12 @@ class IronCondorModule(FazDaneModule):
         state = st.session_state
         days = state.get("ic_days", 30)
         ticker = state.get("ic_ticker", "^GSPC")
+        ticker_map = state.get("ic_ticker_map", {label: ticker for label, ticker in ALL_MAP.items() if ticker != "^VIX"})
         
         self.render_section_header("🦅 Iron Condor Dashboard", f"{days}-Day Window & Options Strategy Monitor")
         
         with st.spinner(f"Fetching {days}-day data..."):
-            DATA = fetch_all_data(days)
+            DATA = fetch_all_data(days, tuple(sorted(ticker_map.items())))
             
         if not DATA:
             st.error("Failed to load data. Please try again.")

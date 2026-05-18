@@ -11,30 +11,9 @@ import plotly.graph_objects as go
 from datetime import datetime
 import logging
 from modules.base_module import FazDaneModule
+from utils.universe_manager import render_universe_manager
 
 logger = logging.getLogger("MarketStructure")
-
-ASSETS = {
-    "/ES (E-mini S&P 500)": "ES=F",
-    "/NQ (E-mini Nasdaq 100)": "NQ=F",
-    "/YM (E-mini Dow)": "YM=F",
-    "/RTY (Russell 2000)": "RTY=F",
-    "SPY": "SPY",
-    "QQQ": "QQQ",
-    "IWM": "IWM",
-    "Gold": "GC=F",
-    "Crude Oil": "CL=F",
-    "VIX": "^VIX",
-    "Apple (AAPL)": "AAPL",
-    "Microsoft (MSFT)": "MSFT",
-    "Alphabet (GOOGL)": "GOOGL",
-    "Amazon (AMZN)": "AMZN",
-    "NVIDIA (NVDA)": "NVDA",
-    "Meta (META)": "META",
-    "Tesla (TSLA)": "TSLA",
-    "Netflix, Inc. (NFLX)": "NFLX",
-    "SPX Technologies, Inc. (SPXC)": "SPXC",
-}
 
 DOW_ORDER = ["Monday","Tuesday","Wednesday","Thursday","Friday"]
 WEEK_ORDER = ["Week1","Week2","Week3","Week4","Week5"]
@@ -131,15 +110,21 @@ class MarketStructureModule(FazDaneModule):
 
     def render_sidebar(self):
         current_year = datetime.now().year
-        
-        asset_options = list(ASSETS.keys()) + ["Custom Ticker..."]
-        self.asset_label = st.selectbox("Asset:", options=asset_options, index=0)
-        
-        if self.asset_label == "Custom Ticker...":
-            self.symbol = st.text_input("Enter Ticker Symbol (e.g. AAPL):", value="AAPL").strip().upper()
-            self.asset_label = self.symbol  # Use ticker as label for charts
+
+        st.markdown("**Ticker Universe**")
+        _, tickers_list, _ = render_universe_manager(
+            key_prefix="ms",
+            show_benchmark=False,
+            label="Asset List:"
+        )
+
+        # Single asset selector from the universe
+        if tickers_list:
+            self.symbol = st.selectbox("Select Asset:", options=tickers_list, index=0)
+            self.asset_label = self.symbol
         else:
-            self.symbol = ASSETS[self.asset_label]
+            self.symbol = st.text_input("Enter Ticker Symbol:", value="SPY").strip().upper()
+            self.asset_label = self.symbol
         
         self.year = st.selectbox("Year:", options=list(range(current_year, current_year - 20, -1)), index=0)
         

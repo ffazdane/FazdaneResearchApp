@@ -12,6 +12,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import logging
 from modules.base_module import FazDaneModule
+from utils.universe_manager import render_universe_manager
 
 logger = logging.getLogger("MarketBreadth")
 
@@ -44,13 +45,13 @@ SECTORS = {
 }
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_market_data(lookback_days: int):
+def fetch_market_data(lookback_days: int, breadth_symbols: tuple):
     # Need 1 year (252 trading days) of data PRIOR to the lookback window for 52-week highs/lows
     end_date = datetime.today()
     # 365 calendar days = ~252 trading days. Add buffer.
     start_date = end_date - timedelta(days=lookback_days + 380)
     
-    tickers = SP100_SYMBOLS + list(SECTORS.keys()) + ["SPY"]
+    tickers = list(dict.fromkeys(list(breadth_symbols) + list(SECTORS.keys()) + ["SPY"]))
     try:
         data = yf.download(tickers, start=start_date, end=end_date, progress=False)
         close_df = data["Close"].ffill()
@@ -61,11 +62,14 @@ def fetch_market_data(lookback_days: int):
         logger.error(f"Error fetching market data: {e}")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-def calculate_breadth(close_df, high_df, low_df, lookback_days):
+def calculate_breadth(close_df, high_df, low_df, lookback_days, breadth_symbols):
     # Filter to SP100
-    sp100_close = close_df[SP100_SYMBOLS].dropna(axis=1, how='all')
-    sp100_high = high_df[SP100_SYMBOLS].dropna(axis=1, how='all')
-    sp100_low = low_df[SP100_SYMBOLS].dropna(axis=1, how='all')
+    available = [ticker for ticker in breadth_symbols if ticker in close_df.columns]
+    if not available:
+        return pd.DataFrame()
+    sp100_close = close_df[available].dropna(axis=1, how='all')
+    sp100_high = high_df[available].dropna(axis=1, how='all')
+    sp100_low = low_df[available].dropna(axis=1, how='all')
     
     # Daily returns
     returns = sp100_close.pct_change()
@@ -141,6 +145,16 @@ class MarketBreadthModule(FazDaneModule):
 
     def render_sidebar(self):
         st.markdown("**Parameters**")
+        universe_name, breadth_symbols, _ = render_universe_manager(
+            key_prefix="mb",
+            show_benchmark=False,
+            label="Breadth Universe:",
+        )
+        if not breadth_symbols:
+            breadth_symbols = SP100_SYMBOLS
+        st.session_state["mb_symbols"] = breadth_symbols
+        st.caption(f"{len(breadth_symbols)} breadth symbols selected from {universe_name}.")
+
         lookback = st.slider("Lookback Window (Days)", 30, 252, 90, 30, key="mb_lookback_widget")
         
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
@@ -157,16 +171,20 @@ class MarketBreadthModule(FazDaneModule):
         )
         
         lookback = st.session_state.get("mb_lookback_val", 90)
+        breadth_symbols = st.session_state.get("mb_symbols", SP100_SYMBOLS)
         
         with st.spinner("Fetching market data and calculating breadth metrics..."):
-            close_df, high_df, low_df = fetch_market_data(lookback)
+            close_df, high_df, low_df = fetch_market_data(lookback, tuple(breadth_symbols))
             
         if close_df.empty:
             st.error("Failed to fetch market data.")
             return
             
-        breadth_df = calculate_breadth(close_df, high_df, low_df, lookback)
+        breadth_df = calculate_breadth(close_df, high_df, low_df, lookback, breadth_symbols)
         sector_df = calculate_sector_breadth(close_df, lookback)
+        if breadth_df.empty:
+            st.warning("No breadth data found for the selected universe.")
+            return
         
         # Latest metrics
         latest = breadth_df.iloc[-1]

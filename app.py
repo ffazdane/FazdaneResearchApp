@@ -52,6 +52,18 @@ st.markdown(
         /* Background */
         .stApp { background: #0d1b2e; color: #e2e8f0; }
 
+        /* Hide Streamlit header/banner chrome */
+        header[data-testid="stHeader"],
+        [data-testid="stToolbar"],
+        [data-testid="stDecoration"],
+        #MainMenu,
+        footer {
+            visibility: hidden !important;
+            height: 0 !important;
+            min-height: 0 !important;
+            display: none !important;
+        }
+
         /* ALL text */
         p, li, span, label, small,
         .stMarkdown p, .stMarkdown li, .stMarkdown span { color: #e2e8f0; }
@@ -128,7 +140,7 @@ st.markdown(
         [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p { color: #94a3b8 !important; }
 
         /* Main content */
-        .stMainBlockContainer { background: #0d1b2e !important; padding-top: 1.5rem; }
+        .stMainBlockContainer { background: #0d1b2e !important; padding-top: 0.75rem; }
 
         /* Headings */
         h1, h2, h3 { font-family: 'Courier Prime', monospace !important; color: #3ab54a !important; }
@@ -310,6 +322,7 @@ with st.sidebar:
             "⚪ Select Tier 2 Module...",
             "🔥 Multi-Timeframe Money Flow",
             "🗓️ Market Structure Heatmap",
+            "🧮 Correlation Matrix",
             "🔍 Stock Ticker Screener",
             "📉 Implied Volatility Analysis",
             "🏦 Index Analysis Dashboard",
@@ -349,6 +362,7 @@ with st.sidebar:
         ("⚙️ ES Pivot Analys.", "🟢 Live"),
         ("🔥 Money Flow", "🟢 Live"),
         ("🗓️ Market Structure", "🟢 Live"),
+        ("🧮 Correlations", "🟢 Live"),
     ]
     for name, status in module_statuses:
         st.markdown(
@@ -427,6 +441,12 @@ elif active_module == "🗓️ Market Structure Heatmap":
     module.run()
     logger.info(f"User {user['username']} → Market Structure")
 
+elif active_module == "🧮 Correlation Matrix":
+    from modules.tier2.correlation_matrix import CorrelationMatrixModule
+    module = CorrelationMatrixModule()
+    module.run()
+    logger.info(f"User {user['username']} → Correlation Matrix")
+
 elif active_module in tier2_options:
     st.info(f"{active_module} — Tier 2 module coming in Weeks 3–4")
 
@@ -476,7 +496,7 @@ else:
     with col1:
         st.metric("📦 Total Modules", "18+", help="Across Tier 1–4")
     with col2:
-        st.metric("🟢 Live Now", "8", help="Options Liquidity, Market Breadth, Sector Rotation, Calendar Matrix, Iron Condor, ES Pivot, Money Flow, Market Structure")
+        st.metric("🟢 Live Now", "9", help="Options Liquidity, Market Breadth, Sector Rotation, Calendar Matrix, Iron Condor, ES Pivot, Money Flow, Market Structure, Correlation Matrix")
     with col3:
         st.metric("🔄 Tier 1 Progress", "100%", help="6 of 6 Tier 1 modules complete")
     with col4:
@@ -549,6 +569,7 @@ else:
                 <div style="font-size:13px;line-height:1.9;color:#475569;">
                     🟢 <span style="color:#e2e8f0;">🔥 Multi-Timeframe Money Flow</span><br>
                     🟢 <span style="color:#e2e8f0;">🗓️ Market Structure Heatmap</span><br>
+                    🟢 <span style="color:#e2e8f0;">🧮 Correlation Matrix</span><br>
                     ⚪ 🔍 Stock Ticker Screener<br>
                     ⚪ 📉 Implied Volatility Analysis<br>
                     ⚪ 🏦 Index Analysis Dashboard<br>

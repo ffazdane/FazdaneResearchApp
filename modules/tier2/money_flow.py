@@ -15,6 +15,7 @@ from matplotlib.transforms import blended_transform_factory
 from datetime import datetime, timedelta
 import logging
 from modules.base_module import FazDaneModule
+from utils.universe_manager import render_universe_manager
 
 logger = logging.getLogger("MoneyFlow")
 
@@ -57,6 +58,10 @@ def get_text_color(val, bg_color):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_money_flow_data(tickers, interval, days_mult, lookback):
+    tickers = list(tickers)
+    if not tickers:
+        return pd.DataFrame()
+
     end_date = datetime.now()
     start_date = end_date - timedelta(days=lookback * days_mult)
     
@@ -91,31 +96,14 @@ class MoneyFlowModule(FazDaneModule):
     DATA_SOURCES = ["yfinance"]
 
     def render_sidebar(self):
-        self.asset_sets = load_asset_sets()
-        if not self.asset_sets:
-            st.error("Asset sets config not found.")
-            return
-
-        st.markdown("**Data Window**")
-        self.selection = st.selectbox("Asset Set:", options=list(self.asset_sets.keys()), index=2)
-        
-        # Give user the ability to edit the exact tickers
-        default_tickers = ", ".join(self.asset_sets[self.selection])
-        self.custom_tickers_str = st.text_area(
-            "Edit Tickers (comma-separated):",
-            value=default_tickers,
-            height=100
+        st.markdown("**Ticker Universe**")
+        self.mf_universe_name, self.mf_tickers, _ = render_universe_manager(
+            key_prefix="mf",
+            show_benchmark=False,
+            label="Asset List:"
         )
-        
-        if st.button("💾 Save to List permanently", use_container_width=True):
-            raw_tickers = [t.strip().upper() for t in self.custom_tickers_str.split(',')]
-            valid_tickers = [t for t in raw_tickers if t]
-            self.asset_sets[self.selection] = valid_tickers
-            save_asset_sets(self.asset_sets)
-            st.success(f"Updated '{self.selection}'!")
-            fetch_money_flow_data.clear()
-            st.rerun()
-            
+        st.caption(f"{len(self.mf_tickers)} tickers selected from {self.mf_universe_name}.")
+
         self.timeframe = st.selectbox("Interval:", options=['Daily', 'Weekly', 'Monthly', 'Yearly'], index=0)
         self.lookback = st.number_input("Lookback Periods:", min_value=1, max_value=500, value=10)
         
@@ -140,9 +128,8 @@ class MoneyFlowModule(FazDaneModule):
         
         cfg = CONFIG[self.timeframe]
         
-        # Parse custom tickers from the text area
-        raw_tickers = [t.strip().upper() for t in self.custom_tickers_str.split(',')]
-        initial_tickers = [t for t in raw_tickers if t]
+        # Use tickers from universe manager
+        initial_tickers = tuple(self.mf_tickers)
         
         if not initial_tickers:
             st.warning("⚠️ Please provide at least one valid ticker symbol.")
@@ -165,6 +152,9 @@ class MoneyFlowModule(FazDaneModule):
             
         returns = close_data.pct_change().dropna(how='all') * 100
         period_returns = returns.tail(self.lookback).fillna(0)
+        if period_returns.empty:
+            st.warning("Not enough return history for the selected universe and lookback.")
+            return
         
         # True Cumulative
         cumulative = ((period_returns / 100 + 1).prod() - 1) * 100
@@ -290,7 +280,8 @@ class MoneyFlowModule(FazDaneModule):
 
         plt.subplots_adjust(bottom=0.25, top=0.9)
 
-        title_str = f'{self.timeframe.upper()} {header_filter}: {self.selection.upper()}'
+        universe_name = getattr(self, "mf_universe_name", "Selected Universe")
+        title_str = f'{self.timeframe.upper()} {header_filter}: {universe_name.upper()}'
         plt.title(title_str, fontsize=18, fontweight='bold', pad=60, color='black')
         
         plt.text(

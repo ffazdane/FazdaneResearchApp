@@ -13,6 +13,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import logging
 from modules.base_module import FazDaneModule
+from utils.universe_manager import render_universe_manager
 
 logger = logging.getLogger("OptionsLiquidity")
 
@@ -188,13 +189,12 @@ class OptionsLiquidityModule(FazDaneModule):
 
     def render_sidebar(self):
         st.markdown("**Watchlist**")
-        symbols_raw = st.text_area(
-            "Symbols (one per line or comma-separated)",
-            value="\n".join(DEFAULT_SYMBOLS[:10]),
-            height=180,
-            key="ol_symbols",
-            help="Enter ticker symbols to scan",
+        universe_name, symbols, _ = render_universe_manager(
+            key_prefix="ol",
+            show_benchmark=False,
+            label="Ticker Universe:",
         )
+        st.caption(f"{len(symbols)} symbols selected from {universe_name}.")
 
         st.markdown("**Filters**")
         min_volume = st.slider("Min Volume", 0, 5000, 500, 100, key="ol_min_vol")
@@ -219,10 +219,6 @@ class OptionsLiquidityModule(FazDaneModule):
                                  type="primary", key="ol_scan")
         export_clicked = st.button("📥 Export CSV", use_container_width=True,
                                    key="ol_export")
-
-        # Parse symbols
-        raw = symbols_raw.replace(",", "\n")
-        symbols = [s.strip().upper() for s in raw.splitlines() if s.strip()]
 
         if scan_clicked:
             if not symbols:
