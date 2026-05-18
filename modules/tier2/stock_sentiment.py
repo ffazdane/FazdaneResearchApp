@@ -245,6 +245,8 @@ def fetch_price_performance(ticker: str, days: int) -> pd.DataFrame:
 def merge_news_price(news: pd.DataFrame, perf: pd.DataFrame) -> pd.DataFrame:
     if news.empty:
         return news
+    news = news.copy()
+    news["Date"] = pd.to_datetime(news["Date"], errors="coerce").dt.tz_localize(None).dt.normalize().astype("datetime64[ns]")
     if perf.empty:
         merged = news.copy()
         merged["PriceDate"] = pd.NaT
@@ -254,6 +256,9 @@ def merge_news_price(news: pd.DataFrame, perf: pd.DataFrame) -> pd.DataFrame:
     else:
         news_sorted = news.sort_values("Date").copy()
         perf_sorted = perf[["Date", "Pct_Change", "Close"]].sort_values("Date").copy()
+        perf_sorted["Date"] = pd.to_datetime(perf_sorted["Date"], errors="coerce").dt.tz_localize(None).dt.normalize().astype("datetime64[ns]")
+        news_sorted = news_sorted.dropna(subset=["Date"])
+        perf_sorted = perf_sorted.dropna(subset=["Date"])
         merged = pd.merge_asof(
             news_sorted,
             perf_sorted.rename(columns={"Date": "PriceDate"}),
@@ -265,8 +270,10 @@ def merge_news_price(news: pd.DataFrame, perf: pd.DataFrame) -> pd.DataFrame:
         merged["PriceMatch"] = np.where(merged["PriceDate"].notna(), "Next trading day", "No price data")
         missing = merged["PriceDate"].isna()
         if missing.any():
+            missing_dates = merged.loc[missing, ["Date"]].copy()
+            missing_news = news_sorted[news_sorted["Date"].isin(missing_dates["Date"])].sort_values("Date")
             backward = pd.merge_asof(
-                news_sorted.loc[missing].sort_values("Date"),
+                missing_news,
                 perf_sorted.rename(columns={"Date": "PriceDate"}),
                 left_on="Date",
                 right_on="PriceDate",
