@@ -85,16 +85,36 @@ class IronCondorModule(FazDaneModule):
     def render_sidebar(self):
         st.markdown("""
         <style>
-        /* Force black text for number inputs with white backgrounds */
-        input[type="number"] {
-            color: #000000 !important;
-            -webkit-text-fill-color: #000000 !important;
-            font-weight: 600 !important;
+        /* Match Iron Condor number inputs to the app sidebar theme */
+        [data-testid="stSidebar"] .stNumberInput,
+        [data-testid="stSidebar"] .stNumberInput * {
+            color: #e2e8f0 !important;
+            -webkit-text-fill-color: #e2e8f0 !important;
         }
-        /* Make the plus/minus signs visible */
+        [data-testid="stSidebar"] .stNumberInput label,
+        [data-testid="stSidebar"] .stNumberInput label *,
+        [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
+            color: #cbd5e1 !important;
+            -webkit-text-fill-color: #cbd5e1 !important;
+        }
+        [data-testid="stSidebar"] .stNumberInput div[data-baseweb="input"],
+        [data-testid="stSidebar"] .stNumberInput div[data-baseweb="base-input"] {
+            background: rgba(21,40,71,0.9) !important;
+            border-color: #1e3a5f !important;
+        }
+        input[type="number"] {
+            color: #e2e8f0 !important;
+            -webkit-text-fill-color: #e2e8f0 !important;
+            font-weight: 600 !important;
+            background: rgba(21,40,71,0.9) !important;
+        }
+        input[type="number"]::placeholder {
+            color: #94a3b8 !important;
+            -webkit-text-fill-color: #94a3b8 !important;
+        }
         div[data-baseweb="base-input"] svg {
-            fill: #000000 !important;
-            color: #000000 !important;
+            fill: #e2e8f0 !important;
+            color: #e2e8f0 !important;
         }
         </style>
         """, unsafe_allow_html=True)
@@ -149,6 +169,12 @@ class IronCondorModule(FazDaneModule):
         st.markdown("### Market Overview")
         
         idx_tks = [t for t in INDICES.values() if t in DATA]
+        if not idx_tks:
+            idx_tks = list(DATA.keys())[:5]
+            st.caption("No index symbols found in the selected universe. Showing selected instruments instead.")
+        if not idx_tks:
+            st.warning("No instruments are available for the market overview.")
+            return
         cols = st.columns(len(idx_tks))
         
         for i, t in enumerate(idx_tks):
@@ -172,6 +198,8 @@ class IronCondorModule(FazDaneModule):
             d = DATA[t]
             norm = (d["close"] / d["close"].iloc[0] - 1) * 100
             fig.add_trace(go.Scatter(x=norm.index, y=norm.values, mode='lines', name=d['label'], line=dict(color=colors.get(t, "#94a3b8"), width=2)))
+        if not fig.data:
+            return
             
         fig.update_layout(
             title=dict(text="Index Relative Performance", font=dict(color="#e2e8f0")),
@@ -215,7 +243,7 @@ class IronCondorModule(FazDaneModule):
         be_lo = sp - cred;  be_hi = sc + cred
         prob = max(5, min(85, 70 - abs(pa-5)*1.5 - abs(ca-4)*1.2))
 
-        st.markdown(f"### Strategy Builder: {ticker} @ \${price:,.2f}")
+        st.markdown(f"### Strategy Builder: {ticker} @ ${price:,.2f}")
         st.caption(f"DTE {dte} | {bias.title()} | VIX {vix_v:.1f}")
 
         # Legs Table

@@ -37,6 +37,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger("FazDaneApp")
 
+
+def launch_module(module_name: str, tier: int) -> None:
+    st.session_state["pending_nav"] = {"module": module_name, "tier": tier}
+    st.rerun()
+
+
+def render_home_module_button(label: str, module_name: str, tier: int, key: str) -> None:
+    if st.button(label, key=key, use_container_width=True):
+        launch_module(module_name, tier)
+
 # ══════════════════════════════════════════════════════════════════════
 # GLOBAL CSS — FazDane Analytics Brand
 # Colors: navy #0d1b2e, blue #1a3a8f, green #3ab54a
@@ -262,6 +272,23 @@ if not st.session_state.authenticated:
 
 user = get_current_user()
 
+pending_nav = st.session_state.pop("pending_nav", None)
+if pending_nav:
+    module_name = pending_nav.get("module")
+    tier = pending_nav.get("tier")
+    if tier == 1:
+        st.session_state["tier1_module_nav"] = module_name
+        st.session_state["tier2_nav"] = "⚪ Select Tier 2 Module..."
+        st.session_state["tier3_nav"] = "⚪ Select Tier 3 Module..."
+    elif tier == 2:
+        st.session_state["tier1_module_nav"] = "⚪ Select Tier 1 Module..."
+        st.session_state["tier2_nav"] = module_name
+        st.session_state["tier3_nav"] = "⚪ Select Tier 3 Module..."
+    elif tier == 3:
+        st.session_state["tier1_module_nav"] = "⚪ Select Tier 1 Module..."
+        st.session_state["tier2_nav"] = "⚪ Select Tier 2 Module..."
+        st.session_state["tier3_nav"] = module_name
+
 with st.sidebar:
     # Logo
     try:
@@ -296,23 +323,30 @@ with st.sidebar:
     st.divider()
 
     # ── Tier 1: Live Trading ──────────────────────────────────────────
-    st.markdown(
+    if st.button("🏠 Home Dashboard", use_container_width=True, key="home_dashboard_nav"):
+        st.session_state["tier1_module_nav"] = "⚪ Select Tier 1 Module..."
+        st.session_state["tier2_nav"] = "⚪ Select Tier 2 Module..."
+        st.session_state["tier3_nav"] = "⚪ Select Tier 3 Module..."
+        st.rerun()
+
+    with st.expander("🔥 Tier 1 — Live Trading", expanded=False):
+        st.markdown(
         "<div style='color:#3ab54a;font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;'>🔥 Tier 1 — Live Trading</div>",
         unsafe_allow_html=True,
-    )
+        )
 
-    tier1_options = [
-        "🏠 Home Dashboard",
+        tier1_options = [
+        "⚪ Select Tier 1 Module...",
         "💧 Options Liquidity Discovery",
         "📊 Market Breadth Dashboard",
         "📅 Calendar Strategy Matrix",
         "🦅 Iron Condor Analyzer",
         "⚙️ ES Pivot Analysis",
         "🔄 Sector Rotation Monitor",
-    ]
-    tier1_sel = st.radio(
-        "tier1", tier1_options, key="tier1_nav", label_visibility="collapsed"
-    )
+        ]
+        tier1_sel = st.radio(
+            "tier1", tier1_options, key="tier1_module_nav", label_visibility="collapsed"
+        )
 
     st.divider()
 
@@ -327,8 +361,6 @@ with st.sidebar:
             "📄 Equity Income Statement",
             "📅 Equity / Index Seasonality",
             "📰 Stock Sentiment Analysis",
-            "📉 Implied Volatility Analysis",
-            "🏦 Index Analysis Dashboard",
         ]
         tier2_sel = st.radio(
             "tier2", tier2_options, key="tier2_nav", label_visibility="collapsed"
@@ -387,7 +419,7 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════
 
 # Determine which module is active — tier1 takes precedence
-if tier1_sel and tier1_sel != "🏠 Home Dashboard":
+if tier1_sel and tier1_sel != "⚪ Select Tier 1 Module...":
     active_module = tier1_sel
 elif st.session_state.get("tier2_nav") and st.session_state.get("tier2_nav") != tier2_options[0]:
     active_module = st.session_state.get("tier2_nav")
@@ -520,16 +552,21 @@ else:
         unsafe_allow_html=True,
     )
 
+    from modules.tier2.macro_intelligence import render_macro_dashboard
+    render_macro_dashboard(show_download=True)
+
+    st.divider()
+
     # Platform stats
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("📦 Total Modules", "18+", help="Across Tier 1–4")
     with col2:
-        st.metric("🟢 Live Now", "13", help="Options Liquidity, Market Breadth, Sector Rotation, Calendar Matrix, Iron Condor, ES Pivot, Money Flow, Market Structure, Correlation Matrix, Earnings Calendar, Equity Income Statement, Equity / Index Seasonality, Stock Sentiment Analysis")
+        st.metric("🟢 Live Now", "14", help="Macro Intelligence, Options Liquidity, Market Breadth, Sector Rotation, Calendar Matrix, Iron Condor, ES Pivot, Money Flow, Market Structure, Correlation Matrix, Earnings Calendar, Equity Income Statement, Equity / Index Seasonality, Stock Sentiment Analysis")
     with col3:
         st.metric("🔄 Tier 1 Progress", "100%", help="6 of 6 Tier 1 modules complete")
     with col4:
-        st.metric("📊 Data Sources", "yfinance", help="More integrations coming")
+        st.metric("📊 Data Sources", "yfinance + FRED", help="FRED macro data is enabled when FRED_API_KEY is configured")
 
     st.divider()
 
@@ -538,6 +575,29 @@ else:
         "<h3 style='color:#3ab54a;'>📦 Module Roadmap</h3>",
         unsafe_allow_html=True,
     )
+
+    st.markdown("#### Click To Open A Module")
+    launch_col_1, launch_col_2 = st.columns(2)
+    with launch_col_1:
+        st.markdown("**Tier 1 - Live Trading**")
+        render_home_module_button("💧 Options Liquidity Discovery", "💧 Options Liquidity Discovery", 1, "home_options_liquidity")
+        render_home_module_button("📊 Market Breadth Dashboard", "📊 Market Breadth Dashboard", 1, "home_market_breadth")
+        render_home_module_button("🔄 Sector Rotation Monitor", "🔄 Sector Rotation Monitor", 1, "home_sector_rotation")
+        render_home_module_button("📅 Calendar Strategy Matrix", "📅 Calendar Strategy Matrix", 1, "home_calendar_strategy")
+        render_home_module_button("🦅 Iron Condor Analyzer", "🦅 Iron Condor Analyzer", 1, "home_iron_condor")
+        render_home_module_button("⚙️ ES Pivot Analysis", "⚙️ ES Pivot Analysis", 1, "home_es_pivot")
+
+    with launch_col_2:
+        st.markdown("**Tier 2 - Analysis**")
+        render_home_module_button("🔥 Multi-Timeframe Money Flow", "🔥 Multi-Timeframe Money Flow", 2, "home_money_flow")
+        render_home_module_button("🗓️ Market Structure Heatmap", "🗓️ Market Structure Heatmap", 2, "home_market_structure")
+        render_home_module_button("🧮 Correlation Matrix", "🧮 Correlation Matrix", 2, "home_correlation")
+        render_home_module_button("📺 Earnings Calendar", "📺 Earnings Calendar", 2, "home_earnings")
+        render_home_module_button("📄 Equity Income Statement", "📄 Equity Income Statement", 2, "home_income_statement")
+        render_home_module_button("📅 Equity / Index Seasonality", "📅 Equity / Index Seasonality", 2, "home_seasonality")
+        render_home_module_button("📰 Stock Sentiment Analysis", "📰 Stock Sentiment Analysis", 2, "home_sentiment")
+
+    st.divider()
 
     col_a, col_b = st.columns(2)
 
@@ -602,9 +662,7 @@ else:
                     🟢 <span style="color:#e2e8f0;">📺 Earnings Calendar</span><br>
                     🟢 <span style="color:#e2e8f0;">📄 Equity Income Statement</span><br>
                     🟢 <span style="color:#e2e8f0;">📅 Equity / Index Seasonality</span><br>
-                    🟢 <span style="color:#e2e8f0;">📰 Stock Sentiment Analysis</span><br>
-                    ⚪ 📉 Implied Volatility Analysis<br>
-                    ⚪ 🏦 Index Analysis Dashboard
+                    🟢 <span style="color:#e2e8f0;">📰 Stock Sentiment Analysis</span>
                 </div>
             </div>
             """,
