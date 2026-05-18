@@ -145,7 +145,34 @@ st.markdown(
             border-right: 1px solid #1e3a5f;
         }
         [data-testid="stSidebar"] * { color: #e2e8f0 !important; }
-        [data-testid="stSidebar"] .stRadio label { padding: 6px 8px; border-radius: 6px; transition: background 0.2s; }
+        [data-testid="stSidebar"] .stButton > button {
+            min-height: 36px;
+            padding: 7px 10px !important;
+            font-size: 13px !important;
+            font-weight: 600 !important;
+            line-height: 1.25 !important;
+        }
+        [data-testid="stSidebar"] [data-testid="stExpander"] summary {
+            min-height: 34px;
+            padding: 7px 8px !important;
+        }
+        [data-testid="stSidebar"] [data-testid="stExpander"] summary p {
+            font-size: 13px !important;
+            font-weight: 600 !important;
+            line-height: 1.25 !important;
+        }
+        [data-testid="stSidebar"] .stRadio label {
+            padding: 5px 7px;
+            border-radius: 6px;
+            transition: background 0.2s;
+            min-height: 30px;
+        }
+        [data-testid="stSidebar"] .stRadio label p,
+        [data-testid="stSidebar"] .stRadio label span {
+            font-size: 12.5px !important;
+            font-weight: 500 !important;
+            line-height: 1.25 !important;
+        }
         [data-testid="stSidebar"] .stRadio label:hover { background: rgba(58,181,74,0.12) !important; }
         [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p { color: #94a3b8 !important; }
 
@@ -278,15 +305,15 @@ if pending_nav:
     tier = pending_nav.get("tier")
     if tier == 1:
         st.session_state["tier1_module_nav"] = module_name
-        st.session_state["tier2_nav"] = "⚪ Select Tier 2 Module..."
-        st.session_state["tier3_nav"] = "⚪ Select Tier 3 Module..."
+        st.session_state["tier2_nav"] = "⚪ Select Analysis Module..."
+        st.session_state["tier3_nav"] = "⚪ Select Forecasting Module..."
     elif tier == 2:
-        st.session_state["tier1_module_nav"] = "⚪ Select Tier 1 Module..."
+        st.session_state["tier1_module_nav"] = "⚪ Select Live Trading Module..."
         st.session_state["tier2_nav"] = module_name
-        st.session_state["tier3_nav"] = "⚪ Select Tier 3 Module..."
+        st.session_state["tier3_nav"] = "⚪ Select Forecasting Module..."
     elif tier == 3:
-        st.session_state["tier1_module_nav"] = "⚪ Select Tier 1 Module..."
-        st.session_state["tier2_nav"] = "⚪ Select Tier 2 Module..."
+        st.session_state["tier1_module_nav"] = "⚪ Select Live Trading Module..."
+        st.session_state["tier2_nav"] = "⚪ Select Analysis Module..."
         st.session_state["tier3_nav"] = module_name
 
 with st.sidebar:
@@ -324,19 +351,19 @@ with st.sidebar:
 
     # ── Tier 1: Live Trading ──────────────────────────────────────────
     if st.button("🏠 Home Dashboard", use_container_width=True, key="home_dashboard_nav"):
-        st.session_state["tier1_module_nav"] = "⚪ Select Tier 1 Module..."
-        st.session_state["tier2_nav"] = "⚪ Select Tier 2 Module..."
-        st.session_state["tier3_nav"] = "⚪ Select Tier 3 Module..."
+        st.session_state["tier1_module_nav"] = "⚪ Select Live Trading Module..."
+        st.session_state["tier2_nav"] = "⚪ Select Analysis Module..."
+        st.session_state["tier3_nav"] = "⚪ Select Forecasting Module..."
         st.rerun()
 
-    with st.expander("🔥 Tier 1 — Live Trading", expanded=False):
+    with st.expander("🔥 Live Trading", expanded=False):
         st.markdown(
-        "<div style='color:#3ab54a;font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;'>🔥 Tier 1 — Live Trading</div>",
+        "<div style='color:#3ab54a;font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;'>🔥 Live Trading</div>",
         unsafe_allow_html=True,
         )
 
         tier1_options = [
-        "⚪ Select Tier 1 Module...",
+        "⚪ Select Live Trading Module...",
         "💧 Options Liquidity Discovery",
         "📊 Market Breadth Dashboard",
         "📅 Calendar Strategy Matrix",
@@ -351,9 +378,9 @@ with st.sidebar:
     st.divider()
 
     # ── Tier 2: Analysis ──────────────────────────────────────────────
-    with st.expander("📈 Tier 2 — Analysis & Intelligence", expanded=False):
+    with st.expander("📈 Analysis & Intelligence", expanded=False):
         tier2_options = [
-            "⚪ Select Tier 2 Module...",
+            "⚪ Select Analysis Module...",
             "🔥 Multi-Timeframe Money Flow",
             "🗓️ Market Structure Heatmap",
             "🧮 Correlation Matrix",
@@ -367,9 +394,9 @@ with st.sidebar:
         )
 
     # ── Tier 3: Forecasting ───────────────────────────────────────────
-    with st.expander("🔮 Tier 3 — Forecasting & Cycles", expanded=False):
+    with st.expander("🔮 Forecasting & Cycles", expanded=False):
         tier3_options = [
-            "⚪ Select Tier 3 Module...",
+            "⚪ Select Forecasting Module...",
             "🔮 SPX Price Forecasting",
             "🌙 Bradley Siderograph",
             "🌊 Elliott Wave Analysis",
@@ -419,7 +446,7 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════
 
 # Determine which module is active — tier1 takes precedence
-if tier1_sel and tier1_sel != "⚪ Select Tier 1 Module...":
+if tier1_sel and tier1_sel != "⚪ Select Live Trading Module...":
     active_module = tier1_sel
 elif st.session_state.get("tier2_nav") and st.session_state.get("tier2_nav") != tier2_options[0]:
     active_module = st.session_state.get("tier2_nav")
@@ -509,10 +536,10 @@ elif active_module == "📰 Stock Sentiment Analysis":
     logger.info(f"User {user['username']} → Stock Sentiment Analysis")
 
 elif active_module in tier2_options:
-    st.info(f"{active_module} — Tier 2 module coming in Weeks 3–4")
+    st.info(f"{active_module} — Analysis module coming in Weeks 3–4")
 
 elif active_module in tier3_options:
-    st.info(f"{active_module} — Tier 3 module coming in Weeks 5–6")
+    st.info(f"{active_module} — Forecasting module coming in Weeks 5–6")
 
 else:
     # ══════════════════════════════════════════════════════════════════
@@ -552,50 +579,56 @@ else:
         unsafe_allow_html=True,
     )
 
+    macro_module_tabs = [
+        {
+            "label": "Live Trading",
+            "items": [
+                {"label": "💧 Options Liquidity Discovery", "module": "💧 Options Liquidity Discovery", "tier": 1, "key": "macro_options_liquidity"},
+                {"label": "📊 Market Breadth Dashboard", "module": "📊 Market Breadth Dashboard", "tier": 1, "key": "macro_market_breadth"},
+                {"label": "🔄 Sector Rotation Monitor", "module": "🔄 Sector Rotation Monitor", "tier": 1, "key": "macro_sector_rotation"},
+                {"label": "📅 Calendar Strategy Matrix", "module": "📅 Calendar Strategy Matrix", "tier": 1, "key": "macro_calendar_strategy"},
+                {"label": "🦅 Iron Condor Analyzer", "module": "🦅 Iron Condor Analyzer", "tier": 1, "key": "macro_iron_condor"},
+                {"label": "⚙️ ES Pivot Analysis", "module": "⚙️ ES Pivot Analysis", "tier": 1, "key": "macro_es_pivot"},
+            ],
+        },
+        {
+            "label": "Analysis & Intelligence",
+            "items": [
+                {"label": "🔥 Multi-Timeframe Money Flow", "module": "🔥 Multi-Timeframe Money Flow", "tier": 2, "key": "macro_money_flow"},
+                {"label": "🗓️ Market Structure Heatmap", "module": "🗓️ Market Structure Heatmap", "tier": 2, "key": "macro_market_structure"},
+                {"label": "🧮 Correlation Matrix", "module": "🧮 Correlation Matrix", "tier": 2, "key": "macro_correlation"},
+                {"label": "📺 Earnings Calendar", "module": "📺 Earnings Calendar", "tier": 2, "key": "macro_earnings"},
+                {"label": "📄 Equity Income Statement", "module": "📄 Equity Income Statement", "tier": 2, "key": "macro_income_statement"},
+                {"label": "📅 Equity / Index Seasonality", "module": "📅 Equity / Index Seasonality", "tier": 2, "key": "macro_seasonality"},
+                {"label": "📰 Stock Sentiment Analysis", "module": "📰 Stock Sentiment Analysis", "tier": 2, "key": "macro_sentiment"},
+            ],
+        },
+        {
+            "label": "Forecasting",
+            "items": [
+                {"label": "🔮 SPX Price Forecasting", "module": "🔮 SPX Price Forecasting", "tier": 3, "key": "macro_spx_forecast"},
+                {"label": "🌙 Bradley Siderograph", "module": "🌙 Bradley Siderograph", "tier": 3, "key": "macro_bradley"},
+                {"label": "🌊 Elliott Wave Analysis", "module": "🌊 Elliott Wave Analysis", "tier": 3, "key": "macro_elliott"},
+                {"label": "⏰ Market Cycle Timing", "module": "⏰ Market Cycle Timing", "tier": 3, "key": "macro_cycle_timing"},
+            ],
+        },
+    ]
+
     from modules.tier2.macro_intelligence import render_macro_dashboard
-    render_macro_dashboard(show_download=True)
+    render_macro_dashboard(show_download=True, module_tabs=macro_module_tabs, launch_callback=launch_module)
 
     st.divider()
 
     # Platform stats
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("📦 Total Modules", "18+", help="Across Tier 1–4")
+        st.metric("📦 Total Modules", "18+", help="Across all research categories")
     with col2:
         st.metric("🟢 Live Now", "14", help="Macro Intelligence, Options Liquidity, Market Breadth, Sector Rotation, Calendar Matrix, Iron Condor, ES Pivot, Money Flow, Market Structure, Correlation Matrix, Earnings Calendar, Equity Income Statement, Equity / Index Seasonality, Stock Sentiment Analysis")
     with col3:
-        st.metric("🔄 Tier 1 Progress", "100%", help="6 of 6 Tier 1 modules complete")
+        st.metric("🔄 Live Trading Progress", "100%", help="6 of 6 live trading modules complete")
     with col4:
         st.metric("📊 Data Sources", "yfinance + FRED", help="FRED macro data is enabled when FRED_API_KEY is configured")
-
-    st.divider()
-
-    # Module grid
-    st.markdown(
-        "<h3 style='color:#3ab54a;'>📦 Module Roadmap</h3>",
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("#### Click To Open A Module")
-    launch_col_1, launch_col_2 = st.columns(2)
-    with launch_col_1:
-        st.markdown("**Tier 1 - Live Trading**")
-        render_home_module_button("💧 Options Liquidity Discovery", "💧 Options Liquidity Discovery", 1, "home_options_liquidity")
-        render_home_module_button("📊 Market Breadth Dashboard", "📊 Market Breadth Dashboard", 1, "home_market_breadth")
-        render_home_module_button("🔄 Sector Rotation Monitor", "🔄 Sector Rotation Monitor", 1, "home_sector_rotation")
-        render_home_module_button("📅 Calendar Strategy Matrix", "📅 Calendar Strategy Matrix", 1, "home_calendar_strategy")
-        render_home_module_button("🦅 Iron Condor Analyzer", "🦅 Iron Condor Analyzer", 1, "home_iron_condor")
-        render_home_module_button("⚙️ ES Pivot Analysis", "⚙️ ES Pivot Analysis", 1, "home_es_pivot")
-
-    with launch_col_2:
-        st.markdown("**Tier 2 - Analysis**")
-        render_home_module_button("🔥 Multi-Timeframe Money Flow", "🔥 Multi-Timeframe Money Flow", 2, "home_money_flow")
-        render_home_module_button("🗓️ Market Structure Heatmap", "🗓️ Market Structure Heatmap", 2, "home_market_structure")
-        render_home_module_button("🧮 Correlation Matrix", "🧮 Correlation Matrix", 2, "home_correlation")
-        render_home_module_button("📺 Earnings Calendar", "📺 Earnings Calendar", 2, "home_earnings")
-        render_home_module_button("📄 Equity Income Statement", "📄 Equity Income Statement", 2, "home_income_statement")
-        render_home_module_button("📅 Equity / Index Seasonality", "📅 Equity / Index Seasonality", 2, "home_seasonality")
-        render_home_module_button("📰 Stock Sentiment Analysis", "📰 Stock Sentiment Analysis", 2, "home_sentiment")
 
     st.divider()
 

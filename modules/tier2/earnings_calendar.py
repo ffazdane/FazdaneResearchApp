@@ -14,7 +14,7 @@ import streamlit.components.v1 as components
 import yfinance as yf
 
 from modules.base_module import FazDaneModule
-from utils.universe_manager import render_universe_manager
+from utils.universe_manager import get_tickers, render_universe_manager
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
@@ -238,9 +238,16 @@ class EarningsCalendarModule(FazDaneModule):
         )
         self.month_filter = st.selectbox(
             "Months to Display:",
-            ["Only months with earnings", "All months"],
+            ["Current month", "Only months with earnings", "All months"],
             index=0,
             key="earnings_month_filter",
+        )
+        current_month_index = datetime.now().month - 1
+        self.selected_month = st.selectbox(
+            "Jump to Month:",
+            list(calendar.month_name)[1:],
+            index=current_month_index,
+            key="earnings_selected_month",
         )
         self.show_table = st.checkbox("Show detail table", value=True, key="earnings_show_table")
 
@@ -260,6 +267,16 @@ class EarningsCalendarModule(FazDaneModule):
 
         with st.spinner(f"Fetching earnings dates for {len(self.tickers)} tickers..."):
             earnings_map, records, failures = fetch_earnings_dates(tuple(self.tickers), self.year, self.limit)
+        portfolio_tickers = get_tickers("FazDane Portfolio")
+        portfolio_records = pd.DataFrame()
+        portfolio_failures = []
+        if portfolio_tickers:
+            with st.spinner(f"Fetching FazDane Portfolio earnings for {len(portfolio_tickers)} tickers..."):
+                _, portfolio_records, portfolio_failures = fetch_earnings_dates(
+                    tuple(portfolio_tickers),
+                    self.year,
+                    self.limit,
+                )
 
         total_events = sum(len(tickers) for tickers in earnings_map.values())
         active_months = [m for m in range(1, 13) if month_has_data(self.year, m, earnings_map)]
@@ -278,13 +295,41 @@ class EarningsCalendarModule(FazDaneModule):
             st.warning("No earnings dates were returned for this universe and year.")
             return
 
-        months = range(1, 13) if self.month_filter == "All months" else active_months
+        if self.month_filter == "Current month":
+            months = [list(calendar.month_name).index(self.selected_month)]
+        elif self.month_filter == "All months":
+            months = range(1, 13)
+        else:
+            months = active_months
+
         for month in months:
             components.html(
                 build_month_calendar_html(self.year, month, earnings_map),
                 height=month_calendar_height(self.year, month),
                 scrolling=False,
             )
+
+        st.markdown("### FazDane Portfolio Earnings")
+        if portfolio_records.empty:
+            st.info("No FazDane Portfolio earnings dates were returned for the selected year.")
+        else:
+            portfolio_display = portfolio_records.copy()
+            portfolio_display["Portfolio"] = "FazDane Portfolio"
+            portfolio_display = portfolio_display[
+                ["Portfolio", "Date", "Ticker", "Time", "EPS Estimate", "Reported EPS", "Surprise %"]
+            ]
+            st.dataframe(portfolio_display, use_container_width=True, hide_index=True)
+            st.download_button(
+                "Download FazDane Portfolio Earnings CSV",
+                data=portfolio_display.to_csv(index=False),
+                file_name=f"fazdane_portfolio_earnings_{self.year}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+        if portfolio_failures:
+            with st.expander(f"FazDane Portfolio tickers skipped by yfinance ({len(portfolio_failures)})", expanded=False):
+                st.write(", ".join(sorted(portfolio_failures)))
 
         if self.show_table and not records.empty:
             st.markdown("### Earnings Detail")

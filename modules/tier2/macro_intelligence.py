@@ -436,7 +436,7 @@ def get_fred_api_key() -> str | None:
     return None
 
 
-def render_macro_dashboard(show_download: bool = True):
+def render_macro_dashboard(show_download: bool = True, module_tabs: list[dict] | None = None, launch_callback=None):
     fred_key = get_fred_api_key()
     with st.spinner("Loading macro intelligence dashboard..."):
         market, fred = fetch_macro_data(fred_key)
@@ -449,31 +449,36 @@ def render_macro_dashboard(show_download: bool = True):
     if not fred_key:
         st.info("FRED_API_KEY is not configured. Yahoo market proxies are live; FRED macro series display as N/A until a key is added.")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Macro Risk", f"{snapshot['macro_risk']:.0f}", risk_label(snapshot["macro_risk"]))
-    c2.metric("VIX", "N/A" if pd.isna(snapshot["vix"]) else f"{snapshot['vix']:.2f}")
-    c3.metric("US 10Y", "N/A" if pd.isna(snapshot["us10y"]) else f"{snapshot['us10y']:.2f}%")
-    c4.metric("DXY", "N/A" if pd.isna(snapshot["dxy"]) else f"{snapshot['dxy']:.2f}", "N/A" if pd.isna(snapshot["dxy_1m"]) else f"{snapshot['dxy_1m']:+.2f}% 1M")
+    tab_configs = module_tabs or []
+    tab_labels = ["Dashboard", "Asset Outlook", "Key Indicators", "Market Snapshot", "Raw Snapshot"]
+    tab_labels.extend(tab_config["label"] for tab_config in tab_configs)
+    tabs = st.tabs(tab_labels)
+    tab_dashboard, tab_assets, tab_indicators, tab_market, tab_raw = tabs[:5]
+    with tab_dashboard:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Macro Risk", f"{snapshot['macro_risk']:.0f}", risk_label(snapshot["macro_risk"]))
+        c2.metric("VIX", "N/A" if pd.isna(snapshot["vix"]) else f"{snapshot['vix']:.2f}")
+        c3.metric("US 10Y", "N/A" if pd.isna(snapshot["us10y"]) else f"{snapshot['us10y']:.2f}%")
+        c4.metric("DXY", "N/A" if pd.isna(snapshot["dxy"]) else f"{snapshot['dxy']:.2f}", "N/A" if pd.isna(snapshot["dxy_1m"]) else f"{snapshot['dxy_1m']:+.2f}% 1M")
 
-    left, right = st.columns([1, 1.35])
-    with left:
-        st.plotly_chart(gauge_figure(snapshot["macro_risk"]), use_container_width=True, key="macro_home_gauge")
-    with right:
-        st.markdown("### Macro Story")
-        st.write(
-            f"Current regime is **{snapshot['regime']}**. "
-            f"Growth risk is {snapshot['growth_score']:.0f}, inflation pressure is {snapshot['inflation_score']:.0f}, "
-            f"and volatility stress is {snapshot['vol_score']:.0f}. "
-            "Use the dashboard as a regime map, not a trading signal by itself."
-        )
+        left, right = st.columns([1, 1.35])
+        with left:
+            st.plotly_chart(gauge_figure(snapshot["macro_risk"]), use_container_width=True, key="macro_home_gauge")
+        with right:
+            st.markdown("### Macro Story")
+            st.write(
+                f"Current regime is **{snapshot['regime']}**. "
+                f"Growth risk is {snapshot['growth_score']:.0f}, inflation pressure is {snapshot['inflation_score']:.0f}, "
+                f"and volatility stress is {snapshot['vol_score']:.0f}. "
+                "Use the dashboard as a regime map, not a trading signal by itself."
+            )
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.plotly_chart(factor_bar_figure(snapshot), use_container_width=True, key="macro_home_factors")
-    with col_b:
-        st.plotly_chart(regime_map_figure(snapshot), use_container_width=True, key="macro_home_regime")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.plotly_chart(factor_bar_figure(snapshot), use_container_width=True, key="macro_home_factors")
+        with col_b:
+            st.plotly_chart(regime_map_figure(snapshot), use_container_width=True, key="macro_home_regime")
 
-    tab_assets, tab_indicators, tab_market, tab_raw = st.tabs(["Asset Outlook", "Key Indicators", "Market Snapshot", "Raw Snapshot"])
     with tab_assets:
         st.dataframe(asset_df, use_container_width=True, hide_index=True)
     with tab_indicators:
@@ -492,5 +497,21 @@ def render_macro_dashboard(show_download: bool = True):
                 mime="text/csv",
                 use_container_width=True,
             )
+
+    for tab, tab_config in zip(tabs[5:], tab_configs):
+        with tab:
+            items = tab_config.get("items", [])
+            if not items:
+                st.info("No modules configured.")
+                continue
+            columns = st.columns(2)
+            for index, item in enumerate(items):
+                with columns[index % 2]:
+                    if st.button(item["label"], key=item["key"], use_container_width=True):
+                        if launch_callback:
+                            launch_callback(item["module"], item["tier"])
+                        else:
+                            st.session_state["pending_nav"] = {"module": item["module"], "tier": item["tier"]}
+                            st.rerun()
 
     return snapshot
