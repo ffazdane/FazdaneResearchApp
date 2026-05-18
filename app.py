@@ -323,11 +323,12 @@ with st.sidebar:
             "🔥 Multi-Timeframe Money Flow",
             "🗓️ Market Structure Heatmap",
             "🧮 Correlation Matrix",
-            "🔍 Stock Ticker Screener",
+            "📺 Earnings Calendar",
+            "📄 Equity Income Statement",
+            "📅 Equity / Index Seasonality",
+            "📰 Stock Sentiment Analysis",
             "📉 Implied Volatility Analysis",
             "🏦 Index Analysis Dashboard",
-            "📅 Calendar Heatmaps",
-            "📺 Earnings Calendar",
         ]
         tier2_sel = st.radio(
             "tier2", tier2_options, key="tier2_nav", label_visibility="collapsed"
@@ -363,6 +364,10 @@ with st.sidebar:
         ("🔥 Money Flow", "🟢 Live"),
         ("🗓️ Market Structure", "🟢 Live"),
         ("🧮 Correlations", "🟢 Live"),
+        ("📺 Earnings Cal.", "🟢 Live"),
+        ("📄 Income Stmt.", "🟢 Live"),
+        ("📅 Seasonality", "🟢 Live"),
+        ("📰 Sentiment", "🟢 Live"),
     ]
     for name, status in module_statuses:
         st.markdown(
@@ -447,6 +452,30 @@ elif active_module == "🧮 Correlation Matrix":
     module.run()
     logger.info(f"User {user['username']} → Correlation Matrix")
 
+elif active_module == "📺 Earnings Calendar":
+    from modules.tier2.earnings_calendar import EarningsCalendarModule
+    module = EarningsCalendarModule()
+    module.run()
+    logger.info(f"User {user['username']} → Earnings Calendar")
+
+elif active_module == "📄 Equity Income Statement":
+    from modules.tier2.equity_income_statement import EquityIncomeStatementModule
+    module = EquityIncomeStatementModule()
+    module.run()
+    logger.info(f"User {user['username']} → Equity Income Statement")
+
+elif active_module == "📅 Equity / Index Seasonality":
+    from modules.tier2.seasonality_analysis import SeasonalityAnalysisModule
+    module = SeasonalityAnalysisModule()
+    module.run()
+    logger.info(f"User {user['username']} → Equity / Index Seasonality")
+
+elif active_module == "📰 Stock Sentiment Analysis":
+    from modules.tier2.stock_sentiment import StockSentimentModule
+    module = StockSentimentModule()
+    module.run()
+    logger.info(f"User {user['username']} → Stock Sentiment Analysis")
+
 elif active_module in tier2_options:
     st.info(f"{active_module} — Tier 2 module coming in Weeks 3–4")
 
@@ -496,7 +525,7 @@ else:
     with col1:
         st.metric("📦 Total Modules", "18+", help="Across Tier 1–4")
     with col2:
-        st.metric("🟢 Live Now", "9", help="Options Liquidity, Market Breadth, Sector Rotation, Calendar Matrix, Iron Condor, ES Pivot, Money Flow, Market Structure, Correlation Matrix")
+        st.metric("🟢 Live Now", "13", help="Options Liquidity, Market Breadth, Sector Rotation, Calendar Matrix, Iron Condor, ES Pivot, Money Flow, Market Structure, Correlation Matrix, Earnings Calendar, Equity Income Statement, Equity / Index Seasonality, Stock Sentiment Analysis")
     with col3:
         st.metric("🔄 Tier 1 Progress", "100%", help="6 of 6 Tier 1 modules complete")
     with col4:
@@ -570,11 +599,12 @@ else:
                     🟢 <span style="color:#e2e8f0;">🔥 Multi-Timeframe Money Flow</span><br>
                     🟢 <span style="color:#e2e8f0;">🗓️ Market Structure Heatmap</span><br>
                     🟢 <span style="color:#e2e8f0;">🧮 Correlation Matrix</span><br>
-                    ⚪ 🔍 Stock Ticker Screener<br>
+                    🟢 <span style="color:#e2e8f0;">📺 Earnings Calendar</span><br>
+                    🟢 <span style="color:#e2e8f0;">📄 Equity Income Statement</span><br>
+                    🟢 <span style="color:#e2e8f0;">📅 Equity / Index Seasonality</span><br>
+                    🟢 <span style="color:#e2e8f0;">📰 Stock Sentiment Analysis</span><br>
                     ⚪ 📉 Implied Volatility Analysis<br>
-                    ⚪ 🏦 Index Analysis Dashboard<br>
-                    ⚪ 📅 Calendar Heatmaps<br>
-                    ⚪ 📺 Earnings Calendar
+                    ⚪ 🏦 Index Analysis Dashboard
                 </div>
             </div>
             """,

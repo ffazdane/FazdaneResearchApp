@@ -9,6 +9,7 @@ import streamlit as st
 import pandas as pd
 import logging
 import os
+import re
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -183,7 +184,8 @@ class FazDaneModule(ABC):
         log.setLevel(logging.INFO)
         if not log.handlers:
             os.makedirs("logs", exist_ok=True)
-            handler = logging.FileHandler(f"logs/{self.MODULE_NAME.replace(' ', '_')}.log")
+            safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", self.MODULE_NAME).strip("_")
+            handler = logging.FileHandler(os.path.join("logs", f"{safe_name}.log"))
             handler.setFormatter(
                 logging.Formatter("%(asctime)s [%(levelname)s] %(name)s — %(message)s")
             )

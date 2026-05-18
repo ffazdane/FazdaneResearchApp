@@ -50,6 +50,12 @@ _DEFAULTS = {
         "description": "Major market indices",
         "module": "general",
     },
+    "Index Universe": {
+        "tickers": ["^GSPC", "^NDX", "^RUT"],
+        "benchmark": "^GSPC",
+        "description": "Core index universe: SPX, NDX, and RUT",
+        "module": "general",
+    },
     "Futures and Indexes": {
         "tickers": ["ES=F", "NQ=F", "YM=F", "RTY=F", "GC=F", "CL=F", "^VIX", "SPY", "QQQ", "IWM", "DIA"],
         "benchmark": "SPY",

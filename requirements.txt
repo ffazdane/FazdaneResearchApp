@@ -4,6 +4,9 @@ pandas
 numpy
 scipy
 yfinance
+lxml
+beautifulsoup4
+nltk
 plotly
 matplotlib
 seaborn
