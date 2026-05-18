@@ -4,6 +4,7 @@ pandas
 numpy
 scipy
 yfinance
+tzdata
 fredapi
 lxml
 beautifulsoup4

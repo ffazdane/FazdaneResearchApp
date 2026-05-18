@@ -15,11 +15,12 @@ from io import BytesIO
 from modules.base_module import FazDaneModule
 
 logger = logging.getLogger("ESPivotAnalysis")
+EASTERN_TZ = pytz.timezone("America/New_York")
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_es_data(days=12, interval="1h"):
     symbol = "ES=F"
-    end = datetime.now(pytz.timezone("US/Eastern"))
+    end = datetime.now(EASTERN_TZ)
     start = end - timedelta(days=days)
     
     raw = yf.download(symbol, start=start, end=end, interval=interval, auto_adjust=False, progress=False)
@@ -30,9 +31,9 @@ def fetch_es_data(days=12, interval="1h"):
         raw.columns = raw.columns.droplevel(-1)
         
     if raw.index.tz is None:
-        raw.index = raw.index.tz_localize("UTC").tz_convert("US/Eastern")
+        raw.index = raw.index.tz_localize("UTC").tz_convert(EASTERN_TZ)
     else:
-        raw.index = raw.index.tz_convert("US/Eastern")
+        raw.index = raw.index.tz_convert(EASTERN_TZ)
         
     # De-duplicate
     raw = raw[~raw.index.duplicated(keep="last")]
@@ -94,7 +95,7 @@ def compute_pivots(es_hourly):
     return pivot_df, today_inputs, today_pivot_levels
 
 def compute_volume_profile(es_5m, vp_days=5):
-    end = datetime.now(pytz.timezone("US/Eastern"))
+    end = datetime.now(EASTERN_TZ)
     cutoff = end - timedelta(days=vp_days)
     
     vp_rth = es_5m.between_time("09:30","16:00").dropna(subset=["Close","Volume"])

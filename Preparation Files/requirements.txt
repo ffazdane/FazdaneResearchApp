@@ -51,6 +51,7 @@ google-api-python-client==2.92.0
 # UTILITIES & HELPERS
 python-dateutil==2.8.2
 pytz==2023.3
+tzdata==2024.1
 tqdm==4.66.1
 pyyaml==6.0.1
 redis==5.0.0  # Optional: for distributed caching
