@@ -56,6 +56,7 @@ def fetch_options_data(symbols: tuple, min_volume: int, min_oi: int,
                 continue
 
             today = datetime.today().date()
+            matched_expirations = 0
 
             for exp_str in expirations:
                 exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
@@ -64,6 +65,7 @@ def fetch_options_data(symbols: tuple, min_volume: int, min_oi: int,
                     continue
 
                 chain = ticker.option_chain(exp_str)
+                exp_has_results = False
 
                 for opt_type, df_opts in [("Call", chain.calls), ("Put", chain.puts)]:
                     if opt_type not in option_types:
@@ -103,9 +105,12 @@ def fetch_options_data(symbols: tuple, min_volume: int, min_oi: int,
 
                     if not df_filtered.empty:
                         results.append(df_filtered)
+                        exp_has_results = True
 
-                # Only first matching expiration per symbol for speed
-                break
+                if exp_has_results:
+                    matched_expirations += 1
+                if matched_expirations >= 8:
+                    break
 
         except Exception as e:
             logger.warning(f"Failed to fetch {symbol}: {e}")
@@ -314,20 +319,23 @@ class OptionsLiquidityModule(FazDaneModule):
             st.divider()
 
         # ── Tabs ─────────────────────────────────────────────────────
-        tab1, tab2, tab3, tab4 = st.tabs(
-            ["🔥 Volume Heatmap", "📋 Options Chain", "📊 Analytics", "📈 IV Landscape"]
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(
+            ["Volume Heatmap", "Ticker Drilldown", "Options Chain", "Analytics", "IV Landscape"]
         )
 
         with tab1:
             self._tab_heatmap(df)
 
         with tab2:
-            self._tab_chain(df)
+            self._tab_ticker_drilldown(df)
 
         with tab3:
-            self._tab_analytics(df)
+            self._tab_chain(df)
 
         with tab4:
+            self._tab_analytics(df)
+
+        with tab5:
             self._tab_iv_landscape(df, valid_ranks)
 
     # ── IV Rank Banner ─────────────────────────────────────────────────
@@ -450,6 +458,127 @@ class OptionsLiquidityModule(FazDaneModule):
 
     # ── Tab 2: Chain Table ─────────────────────────────────────────────
 
+    def _tab_ticker_drilldown(self, df: pd.DataFrame):
+        st.markdown("### Individual Ticker Activity")
+        required = {"symbol", "expiration", "strike", "volume", "option_type"}
+        if not required.issubset(df.columns):
+            st.info("Insufficient option-chain fields for ticker drilldown.")
+            return
+
+        symbol_totals = df.groupby("symbol")["volume"].sum().sort_values(ascending=False)
+        selected_symbol = st.selectbox(
+            "Select Ticker",
+            symbol_totals.index.tolist(),
+            index=0,
+            key="ol_drill_symbol",
+        )
+
+        drill = df[df["symbol"] == selected_symbol].copy()
+        if drill.empty:
+            st.info("No contracts available for the selected ticker.")
+            return
+
+        drill["expiration"] = pd.to_datetime(drill["expiration"], errors="coerce").dt.strftime("%Y-%m-%d")
+        drill["contract"] = (
+            drill["expiration"].astype(str)
+            + " "
+            + drill["option_type"].astype(str).str[0]
+            + " "
+            + drill["strike"].map(lambda value: f"{value:g}")
+        )
+
+        total_volume = int(drill["volume"].sum())
+        call_volume = int(drill.loc[drill["option_type"] == "Call", "volume"].sum())
+        put_volume = int(drill.loc[drill["option_type"] == "Put", "volume"].sum())
+        active_expirations = drill["expiration"].nunique()
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Volume", f"{total_volume:,}")
+        m2.metric("Call Volume", f"{call_volume:,}")
+        m3.metric("Put Volume", f"{put_volume:,}")
+        m4.metric("Expirations", f"{active_expirations:,}")
+
+        st.markdown("#### Volume by Expiration and Strike")
+        agg_map = {"volume": ("volume", "sum")}
+        if "open_interest" in drill.columns:
+            agg_map["open_interest"] = ("open_interest", "sum")
+        activity = (
+            drill.groupby(["expiration", "strike", "option_type"], as_index=False)
+            .agg(**agg_map)
+            .sort_values("volume", ascending=False)
+        )
+        hover_data = {
+            "expiration": True,
+            "strike": ":.2f",
+            "volume": ":,",
+            "option_type": True,
+        }
+        if "open_interest" in activity.columns:
+            hover_data["open_interest"] = ":,"
+        fig = px.scatter(
+            activity,
+            x="expiration",
+            y="strike",
+            size="volume",
+            color="option_type",
+            size_max=42,
+            color_discrete_map={"Call": "#3ab54a", "Put": "#ef4444"},
+            hover_data=hover_data,
+            labels={"expiration": "Expiration Date", "strike": "Strike", "volume": "Volume"},
+        )
+        fig.update_layout(
+            paper_bgcolor="#0d1b2e",
+            plot_bgcolor="#152847",
+            font=dict(color="#e2e8f0", family="Inter"),
+            xaxis=dict(gridcolor="#1e3a5f", tickfont=dict(color="#e2e8f0")),
+            yaxis=dict(gridcolor="#1e3a5f", tickfont=dict(color="#e2e8f0"), title="Strike"),
+            legend=dict(
+                bgcolor="rgba(21,40,71,0.85)",
+                bordercolor="#1e3a5f",
+                borderwidth=1,
+                font=dict(color="#e2e8f0", size=12),
+            ),
+            margin=dict(l=0, r=0, t=30, b=0),
+            height=440,
+        )
+        st.plotly_chart(fig, use_container_width=True, key=f"ol_drill_scatter_{selected_symbol}")
+
+        st.markdown("#### Expiration Summary")
+        expiry_summary = (
+            drill.groupby(["expiration", "option_type"], as_index=False)["volume"]
+            .sum()
+            .sort_values(["expiration", "option_type"])
+        )
+        fig2 = px.bar(
+            expiry_summary,
+            x="expiration",
+            y="volume",
+            color="option_type",
+            barmode="stack",
+            color_discrete_map={"Call": "#3ab54a", "Put": "#ef4444"},
+            labels={"expiration": "Expiration Date", "volume": "Volume"},
+        )
+        fig2.update_layout(
+            paper_bgcolor="#0d1b2e",
+            plot_bgcolor="#152847",
+            font=dict(color="#e2e8f0", family="Inter"),
+            xaxis=dict(gridcolor="#1e3a5f", tickfont=dict(color="#e2e8f0")),
+            yaxis=dict(gridcolor="#1e3a5f", tickfont=dict(color="#e2e8f0")),
+            margin=dict(l=0, r=0, t=30, b=0),
+            height=300,
+        )
+        st.plotly_chart(fig2, use_container_width=True, key=f"ol_drill_expiry_{selected_symbol}")
+
+        st.markdown("#### Top Contracts Feeding Volume")
+        top_contracts = drill.nlargest(30, "volume")
+        display_cols = [
+            c for c in [
+                "contract", "option_type", "expiration", "dte", "strike", "volume",
+                "open_interest", "iv_%", "bid", "ask", "spread", "last_price",
+            ]
+            if c in top_contracts.columns
+        ]
+        st.dataframe(top_contracts[display_cols], use_container_width=True, hide_index=True)
+
     def _tab_chain(self, df: pd.DataFrame):
         st.markdown("### Options Chain Results")
 
@@ -541,6 +670,48 @@ class OptionsLiquidityModule(FazDaneModule):
                 )
                 st.plotly_chart(fig2, use_container_width=True)
 
+        if {"symbol", "volume", "iv_%", "option_type"}.issubset(df.columns):
+            st.markdown("### Volume Source by Ticker")
+            source = df.copy()
+            source = source[source["volume"] > 0].sort_values("volume", ascending=False).head(350)
+            hover_cols = [
+                c for c in [
+                    "symbol", "option_type", "expiration", "dte", "strike",
+                    "volume", "open_interest", "iv_%", "bid", "ask",
+                ]
+                if c in source.columns
+            ]
+            fig3 = px.scatter(
+                source,
+                x="symbol",
+                y="volume",
+                color="option_type",
+                size="volume",
+                size_max=34,
+                hover_data=hover_cols,
+                labels={"symbol": "Ticker", "volume": "Contract Volume", "iv_%": "IV %"},
+                color_discrete_map={"Call": "#3ab54a", "Put": "#ef4444"},
+            )
+            fig3.update_traces(
+                marker=dict(opacity=0.72, line=dict(width=1, color="rgba(226,232,240,0.35)"))
+            )
+            fig3.update_layout(
+                paper_bgcolor="#0d1b2e",
+                plot_bgcolor="#152847",
+                font=dict(color="#e2e8f0", family="Inter"),
+                xaxis=dict(gridcolor="#1e3a5f", tickfont=dict(color="#e2e8f0")),
+                yaxis=dict(gridcolor="#1e3a5f", tickfont=dict(color="#e2e8f0")),
+                legend=dict(
+                    bgcolor="rgba(21,40,71,0.85)",
+                    bordercolor="#1e3a5f",
+                    borderwidth=1,
+                    font=dict(color="#e2e8f0", size=12),
+                ),
+                margin=dict(l=0, r=0, t=30, b=0),
+                height=420,
+            )
+            st.plotly_chart(fig3, use_container_width=True, key="ol_analytics_ticker_source")
+
         # Top opportunities table
         st.markdown("### 🏆 Top Opportunities by Volume")
         top = df.nlargest(15, "volume") if "volume" in df.columns else df.head(15)
@@ -585,10 +756,12 @@ class OptionsLiquidityModule(FazDaneModule):
         # Call/Put volume by symbol
         if "symbol" in df.columns and "volume" in df.columns and "option_type" in df.columns:
             cp = df.groupby(["symbol", "option_type"])["volume"].sum().reset_index()
+            cp["IV Rank"] = cp["symbol"].map(iv_ranks)
             fig2 = px.bar(
                 cp, x="symbol", y="volume", color="option_type",
                 title="Call vs Put Volume by Symbol",
                 barmode="stack",
+                hover_data={"symbol": True, "option_type": True, "volume": ":,", "IV Rank": ":.1f"},
                 color_discrete_map={"Call": "#3ab54a", "Put": "#ef4444"},
             )
             fig2.update_layout(
