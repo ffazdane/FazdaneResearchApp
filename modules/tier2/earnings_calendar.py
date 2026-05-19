@@ -9,6 +9,7 @@ from datetime import date, datetime
 from html import escape
 
 import pandas as pd
+import requests
 import streamlit as st
 import streamlit.components.v1 as components
 import yfinance as yf
@@ -81,18 +82,101 @@ def calendar_fallback_rows(ticker: str, year: int) -> list[dict]:
     return rows
 
 
+def parse_eps_forecast(value):
+    if value is None:
+        return None
+    text = str(value).replace("$", "").replace(",", "").strip()
+    if text in {"", "N/A", "n/a", "--"}:
+        return None
+    try:
+        return float(text)
+    except Exception:
+        return None
+
+
+def nasdaq_time_label(value: str) -> str:
+    text = str(value or "").lower()
+    if "after" in text:
+        return "After Market Close"
+    if "pre" in text or "before" in text:
+        return "Before Market Open"
+    if "during" in text:
+        return "During Market"
+    return "TBD"
+
+
+def nasdaq_scan_window(year: int, focus_month: int | None = None) -> tuple[pd.Timestamp, pd.Timestamp]:
+    if focus_month:
+        start = pd.Timestamp(year=year, month=focus_month, day=1)
+        end = start + pd.offsets.MonthEnd(0)
+        return start, end
+
+    today = pd.Timestamp(datetime.now().date())
+    if year == today.year:
+        start = pd.Timestamp(year=year, month=today.month, day=1)
+        end = start + pd.offsets.MonthEnd(0)
+        return start, end
+    return pd.Timestamp(year=year, month=1, day=1), pd.Timestamp(year=year, month=12, day=31)
+
+
+def nasdaq_calendar_fallback_rows(tickers: tuple[str, ...], year: int, focus_month: int | None = None) -> list[dict]:
+    wanted = {ticker.upper() for ticker in tickers if ticker and not ticker.startswith("^") and "=" not in ticker}
+    if not wanted:
+        return []
+
+    start, end = nasdaq_scan_window(year, focus_month)
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://www.nasdaq.com",
+        "Referer": "https://www.nasdaq.com/market-activity/earnings",
+    }
+    rows = []
+    for day in pd.date_range(start=start, end=end, freq="D"):
+        if day.year != year:
+            continue
+        url = f"https://api.nasdaq.com/api/calendar/earnings?date={day.strftime('%Y-%m-%d')}"
+        try:
+            response = requests.get(url, headers=headers, timeout=12)
+            if response.status_code != 200:
+                continue
+            payload = response.json()
+            earnings_rows = payload.get("data", {}).get("rows") or []
+        except Exception:
+            continue
+
+        for item in earnings_rows:
+            symbol = str(item.get("symbol", "")).upper()
+            if symbol not in wanted:
+                continue
+            rows.append(
+                {
+                    "Date": day.strftime("%Y-%m-%d"),
+                    "Ticker": symbol,
+                    "Time": nasdaq_time_label(item.get("time")),
+                    "EPS Estimate": parse_eps_forecast(item.get("epsForecast")),
+                    "Reported EPS": None,
+                    "Surprise %": None,
+                    "Source": "Nasdaq earnings calendar",
+                }
+            )
+    return rows
+
+
 @st.cache_data(ttl=21600, show_spinner=False)
-def fetch_earnings_dates(tickers: tuple[str, ...], year: int, limit: int) -> tuple[dict, pd.DataFrame, list[str]]:
+def fetch_earnings_dates(tickers: tuple[str, ...], year: int, limit: int, focus_month: int | None = None) -> tuple[dict, pd.DataFrame, list[str]]:
     earnings_map = defaultdict(list)
     rows = []
     failures = []
     seen = set()
+    tickers_with_rows = set()
 
     def add_row(row: dict) -> None:
         key = (row["Date"], row["Ticker"])
         if key in seen:
             return
         seen.add(key)
+        tickers_with_rows.add(row["Ticker"])
         if row["Ticker"] not in earnings_map[row["Date"]]:
             earnings_map[row["Date"]].append(row["Ticker"])
         rows.append(row)
@@ -129,6 +213,12 @@ def fetch_earnings_dates(tickers: tuple[str, ...], year: int, limit: int) -> tup
                     add_row(row)
             else:
                 failures.append(ticker)
+
+    missing_tickers = tuple(ticker for ticker in tickers if ticker.upper() not in tickers_with_rows)
+    if missing_tickers:
+        for row in nasdaq_calendar_fallback_rows(missing_tickers, year, focus_month):
+            add_row(row)
+        failures = [ticker for ticker in failures if ticker.upper() not in tickers_with_rows]
 
     clean_map = {date: sorted(symbols) for date, symbols in sorted(earnings_map.items())}
     records = pd.DataFrame(rows)
@@ -329,6 +419,7 @@ class EarningsCalendarModule(FazDaneModule):
             index=current_month_index,
             key="earnings_selected_month",
         )
+        self.selected_month_number = list(calendar.month_name).index(self.selected_month)
         self.show_table = st.checkbox("Show detail table", value=True, key="earnings_show_table")
 
         if st.button("Refresh Earnings", use_container_width=True, type="primary", key="earnings_refresh"):
@@ -346,7 +437,12 @@ class EarningsCalendarModule(FazDaneModule):
             return
 
         with st.spinner(f"Fetching earnings dates for {len(self.tickers)} tickers..."):
-            earnings_map, records, failures = fetch_earnings_dates(tuple(self.tickers), self.year, self.limit)
+            earnings_map, records, failures = fetch_earnings_dates(
+                tuple(self.tickers),
+                self.year,
+                self.limit,
+                self.selected_month_number,
+            )
         portfolio_tickers = get_tickers("FazDane Portfolio")
         portfolio_records = pd.DataFrame()
         portfolio_failures = []
@@ -356,6 +452,7 @@ class EarningsCalendarModule(FazDaneModule):
                     tuple(portfolio_tickers),
                     self.year,
                     self.limit,
+                    self.selected_month_number,
                 )
 
         total_events = sum(len(tickers) for tickers in earnings_map.values())
