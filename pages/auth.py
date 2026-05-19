@@ -128,24 +128,25 @@ class FazDaneAuthenticator:
                 unsafe_allow_html=True,
             )
 
-            # ── Login Card ────────────────────────────────────────
             st.markdown(
                 """
                 <div style="
-                    background: rgba(21,40,71,0.85);
+                    background: rgba(13,27,46,0.55);
                     border: 1px solid #1e3a5f;
-                    border-radius: 16px;
-                    padding: 36px 32px 28px 32px;
-                    backdrop-filter: blur(12px);
-                    box-shadow: 0 8px 40px rgba(26,58,143,0.2);
-                ">
+                    border-radius: 10px;
+                    padding: 12px 14px;
+                    margin-bottom: 16px;
+                    color: #e2e8f0;
+                    font-size: 18px;
+                    font-weight: 700;
+                ">🔐 Sign In</div>
                 """,
                 unsafe_allow_html=True,
             )
 
             username = st.text_input(
-                "🔐 Sign In",
-                placeholder="Username",
+                "User Name",
+                placeholder="Enter your username",
                 key="login_username",
             )
             password = st.text_input(
@@ -179,8 +180,6 @@ class FazDaneAuthenticator:
                     st.rerun()
                 else:
                     st.error("❌ Invalid username or password.")
-
-            st.markdown("</div>", unsafe_allow_html=True)
 
             # ── Footer ────────────────────────────────────────────
             st.markdown(
