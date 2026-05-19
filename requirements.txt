@@ -4,6 +4,9 @@ pandas
 numpy
 scipy
 yfinance
+requests
+skyfield
+jplephem
 tzdata
 fredapi
 lxml

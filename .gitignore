@@ -34,3 +34,6 @@ Thumbs.db
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Skyfield ephemeris cache
+de421.bsp

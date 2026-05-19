@@ -143,14 +143,9 @@ class FazDaneAuthenticator:
                 unsafe_allow_html=True,
             )
 
-            st.markdown(
-                "<h3 style='color:#e2e8f0;margin-top:0;margin-bottom:20px;'>🔐 Sign In</h3>",
-                unsafe_allow_html=True,
-            )
-
             username = st.text_input(
-                "Username",
-                placeholder="Enter your username",
+                "🔐 Sign In",
+                placeholder="Username",
                 key="login_username",
             )
             password = st.text_input(

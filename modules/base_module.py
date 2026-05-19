@@ -84,16 +84,24 @@ class FazDaneModule(ABC):
             self.render_sidebar()
             st.divider()
 
-            # Data controls
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🔄 Refresh", use_container_width=True, help="Clear cache & reload"):
-                    st.cache_data.clear()
+            # Navigation controls
+            st.markdown(
+                "<div style='color:#64748b;font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;'>Navigation</div>",
+                unsafe_allow_html=True,
+            )
+            nav_col1, nav_col2 = st.columns(2)
+            with nav_col1:
+                if st.button(self._back_button_label(), use_container_width=True, help="Return to the module menu"):
+                    self._clear_current_tier_selection()
                     st.rerun()
-            with col2:
-                if st.button("🏠 Home", use_container_width=True, help="Return to dashboard"):
-                    st.session_state.active_module = None
+            with nav_col2:
+                if st.button("Home", use_container_width=True, help="Return to dashboard"):
+                    self._clear_all_navigation()
                     st.rerun()
+
+            if st.button("Refresh Data", use_container_width=True, help="Clear cache and reload this module"):
+                st.cache_data.clear()
+                st.rerun()
 
         # Main content
         try:
@@ -178,6 +186,23 @@ class FazDaneModule(ABC):
     # ══════════════════════════════════════════════════════════════════
     # INTERNAL HELPERS
     # ══════════════════════════════════════════════════════════════════
+
+    def _back_button_label(self) -> str:
+        labels = {
+            1: "Back to Live",
+            2: "Back to Analysis",
+            3: "Back to Forecast",
+            4: "Back to Menu",
+        }
+        return labels.get(self.TIER, "Back")
+
+    def _clear_current_tier_selection(self) -> None:
+        st.session_state["pending_nav"] = {"action": "clear_tier", "tier": self.TIER}
+        st.session_state.active_module = None
+
+    def _clear_all_navigation(self) -> None:
+        st.session_state["pending_nav"] = {"action": "home"}
+        st.session_state.active_module = None
 
     def _setup_logger(self) -> logging.Logger:
         log = logging.getLogger(self.MODULE_NAME)
