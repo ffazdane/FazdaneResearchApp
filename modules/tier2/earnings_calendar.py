@@ -5,7 +5,7 @@ Earnings Calendar
 
 import calendar
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime
 from html import escape
 
 import pandas as pd
@@ -17,38 +17,118 @@ from modules.base_module import FazDaneModule
 from utils.universe_manager import get_tickers, render_universe_manager
 
 
+def normalize_earnings_dates(value) -> list[pd.Timestamp]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set, pd.Series, pd.DatetimeIndex)):
+        raw_values = list(value)
+    else:
+        raw_values = [value]
+
+    dates = []
+    for raw in raw_values:
+        try:
+            ts = pd.Timestamp(raw)
+        except Exception:
+            continue
+        if not pd.isna(ts):
+            dates.append(ts)
+    return dates
+
+
+def calendar_fallback_rows(ticker: str, year: int) -> list[dict]:
+    try:
+        ticker_obj = yf.Ticker(ticker)
+        cal = ticker_obj.calendar
+    except Exception:
+        return []
+
+    if cal is None:
+        return []
+
+    earnings_dates = []
+    eps_estimate = None
+    if isinstance(cal, dict):
+        earnings_dates = normalize_earnings_dates(cal.get("Earnings Date"))
+        eps_estimate = cal.get("Earnings Average")
+    elif isinstance(cal, pd.DataFrame) and not cal.empty:
+        if "Earnings Date" in cal.index:
+            earnings_dates = normalize_earnings_dates(cal.loc["Earnings Date"].dropna().tolist())
+        elif "Earnings Date" in cal.columns:
+            earnings_dates = normalize_earnings_dates(cal["Earnings Date"].dropna().tolist())
+        if "Earnings Average" in cal.index:
+            eps_values = cal.loc["Earnings Average"].dropna()
+            eps_estimate = eps_values.iloc[0] if len(eps_values) else None
+        elif "Earnings Average" in cal.columns:
+            eps_values = cal["Earnings Average"].dropna()
+            eps_estimate = eps_values.iloc[0] if len(eps_values) else None
+
+    rows = []
+    for ts in earnings_dates:
+        if ts.year != year:
+            continue
+        rows.append(
+            {
+                "Date": ts.strftime("%Y-%m-%d"),
+                "Ticker": ticker,
+                "Time": "TBD" if isinstance(ts.date(), date) and ts.hour == 0 and ts.minute == 0 else ts.strftime("%I:%M %p %Z"),
+                "EPS Estimate": eps_estimate,
+                "Reported EPS": None,
+                "Surprise %": None,
+                "Source": "yfinance calendar",
+            }
+        )
+    return rows
+
+
 @st.cache_data(ttl=21600, show_spinner=False)
 def fetch_earnings_dates(tickers: tuple[str, ...], year: int, limit: int) -> tuple[dict, pd.DataFrame, list[str]]:
     earnings_map = defaultdict(list)
     rows = []
     failures = []
+    seen = set()
+
+    def add_row(row: dict) -> None:
+        key = (row["Date"], row["Ticker"])
+        if key in seen:
+            return
+        seen.add(key)
+        if row["Ticker"] not in earnings_map[row["Date"]]:
+            earnings_map[row["Date"]].append(row["Ticker"])
+        rows.append(row)
 
     for ticker in tickers:
         try:
+            ticker_rows_before = len(rows)
             data = yf.Ticker(ticker).get_earnings_dates(limit=limit)
-            if data is None or data.empty:
-                continue
+            if data is not None and not data.empty:
+                for dt, values in data.iterrows():
+                    ts = pd.Timestamp(dt)
+                    if pd.isna(ts) or ts.year != year:
+                        continue
 
-            for dt, values in data.iterrows():
-                ts = pd.Timestamp(dt)
-                if pd.isna(ts) or ts.year != year:
-                    continue
+                    add_row(
+                        {
+                            "Date": ts.strftime("%Y-%m-%d"),
+                            "Ticker": ticker,
+                            "Time": ts.strftime("%I:%M %p %Z"),
+                            "EPS Estimate": values.get("EPS Estimate", None),
+                            "Reported EPS": values.get("Reported EPS", None),
+                            "Surprise %": values.get("Surprise(%)", None),
+                            "Source": "yfinance earnings_dates",
+                        }
+                    )
 
-                date_key = ts.strftime("%Y-%m-%d")
-                if ticker not in earnings_map[date_key]:
-                    earnings_map[date_key].append(ticker)
-
-                row = {
-                    "Date": date_key,
-                    "Ticker": ticker,
-                    "Time": ts.strftime("%I:%M %p %Z"),
-                    "EPS Estimate": values.get("EPS Estimate", None),
-                    "Reported EPS": values.get("Reported EPS", None),
-                    "Surprise %": values.get("Surprise(%)", None),
-                }
-                rows.append(row)
+            if len(rows) == ticker_rows_before:
+                for row in calendar_fallback_rows(ticker, year):
+                    add_row(row)
         except Exception:
-            failures.append(ticker)
+            fallback_rows = calendar_fallback_rows(ticker, year)
+            if fallback_rows:
+                for row in fallback_rows:
+                    add_row(row)
+            else:
+                failures.append(ticker)
 
     clean_map = {date: sorted(symbols) for date, symbols in sorted(earnings_map.items())}
     records = pd.DataFrame(rows)
