@@ -4,6 +4,8 @@ pandas
 numpy
 scipy
 yfinance
+tastytrade>=12.0.0
+python-dotenv>=1.0.0
 requests
 skyfield
 jplephem

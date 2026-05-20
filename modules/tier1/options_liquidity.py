@@ -13,6 +13,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import logging
 from modules.base_module import FazDaneModule
+from utils.tastytrade_provider import TastytradeProviderError, fetch_nested_option_chain, load_config
 from utils.universe_manager import render_universe_manager
 
 logger = logging.getLogger("OptionsLiquidity")
@@ -36,18 +37,167 @@ def fetch_options_data(symbols: tuple, min_volume: int, min_oi: int,
                        option_types: tuple, exp_pref: str) -> pd.DataFrame:
     """
     Scan options chains for each symbol and return filtered results.
+    Tastytrade is preferred for option-chain metadata; yfinance remains the
+    fallback and quote/liquidity enrichment source when needed.
     Cached for 5 minutes.
     """
+    tasty_df = _fetch_tastytrade_options_data(symbols, min_volume, min_oi, option_types, exp_pref)
+    if not tasty_df.empty:
+        return tasty_df
+
+    logger.info("Tastytrade option scan unavailable or empty; falling back to yfinance.")
+    fallback_df = _fetch_yfinance_options_data(symbols, min_volume, min_oi, option_types, exp_pref)
+    if fallback_df.empty:
+        fallback_df.attrs["active_data_source"] = "No matching contracts; tried Tastytrade API, then yfinance fallback"
+    return fallback_df
+
+
+def _expiration_bounds(exp_pref: str) -> tuple[int, int]:
+    exp_label = str(exp_pref).lower()
+    if "weekly" in exp_label:
+        return 0, 8
+    if "monthly" in exp_label:
+        return 9, 45
+    return 0, 365
+
+
+def _fetch_tastytrade_options_data(symbols: tuple, min_volume: int, min_oi: int,
+                                   option_types: tuple, exp_pref: str) -> pd.DataFrame:
+    config = load_config()
+    if not config.is_configured:
+        return pd.DataFrame()
+
+    min_dte, max_dte = _expiration_bounds(exp_pref)
     results = []
 
-    exp_map = {"Weekly (≤8 days)": 8, "Monthly (9–45 days)": 45, "Any": 365}
-    max_dte = exp_map.get(exp_pref, 365)
+    for symbol in symbols:
+        try:
+            tasty_chain = fetch_nested_option_chain(symbol, config=config)
+            if tasty_chain.empty:
+                continue
+
+            tasty_chain = tasty_chain[
+                (tasty_chain["dte"] >= min_dte) &
+                (tasty_chain["dte"] <= max_dte) &
+                (tasty_chain["option_type"].isin(option_types))
+            ].copy()
+            if tasty_chain.empty:
+                continue
+
+            enriched = _enrich_tasty_chain_with_yfinance_quotes(symbol, tasty_chain)
+            if enriched.empty:
+                continue
+
+            enriched["volume"] = pd.to_numeric(enriched["volume"], errors="coerce").fillna(0)
+            oi_source = "open_interest" if "open_interest" in enriched.columns else "openInterest"
+            enriched["open_interest"] = pd.to_numeric(enriched[oi_source], errors="coerce").fillna(0)
+            enriched = enriched[
+                (enriched["volume"] >= min_volume) &
+                (enriched["open_interest"] >= min_oi)
+            ]
+            if not enriched.empty:
+                results.append(enriched)
+        except TastytradeProviderError as e:
+            logger.info(f"Tastytrade not available for {symbol}: {e}")
+            return pd.DataFrame()
+        except Exception as e:
+            logger.warning(f"Tastytrade option fetch failed for {symbol}: {e}")
+            continue
+
+    if not results:
+        return pd.DataFrame()
+
+    combined = pd.concat(results, ignore_index=True)
+    return _finalize_options_frame(combined)
+
+
+def _enrich_tasty_chain_with_yfinance_quotes(symbol: str, tasty_chain: pd.DataFrame) -> pd.DataFrame:
+    ticker = yf.Ticker(symbol)
+    spot = _fetch_yfinance_spot(ticker)
+    if not spot or spot == 0:
+        return pd.DataFrame()
+
+    quote_frames = []
+    matched_expirations = 0
+    for exp_str in sorted(tasty_chain["expiration"].dropna().unique()):
+        try:
+            chain = ticker.option_chain(exp_str)
+        except Exception as e:
+            logger.warning(f"yfinance quote enrichment failed for {symbol} {exp_str}: {e}")
+            continue
+
+        exp_has_rows = False
+        for opt_type, df_opts in [("Call", chain.calls), ("Put", chain.puts)]:
+            if df_opts is None or df_opts.empty:
+                continue
+            df_opts = df_opts.copy()
+            df_opts["symbol"] = symbol
+            df_opts["option_type"] = opt_type
+            df_opts["expiration"] = exp_str
+            quote_frames.append(df_opts)
+            exp_has_rows = True
+
+        if exp_has_rows:
+            matched_expirations += 1
+        if matched_expirations >= 8:
+            break
+
+    if not quote_frames:
+        return pd.DataFrame()
+
+    quotes = pd.concat(quote_frames, ignore_index=True)
+    quotes["strike"] = pd.to_numeric(quotes["strike"], errors="coerce")
+    tasty_chain = tasty_chain.copy()
+    tasty_chain["strike"] = pd.to_numeric(tasty_chain["strike"], errors="coerce")
+
+    merged = tasty_chain.merge(
+        quotes,
+        on=["symbol", "option_type", "expiration", "strike"],
+        how="inner",
+        suffixes=("", "_yf"),
+    )
+    if merged.empty:
+        return pd.DataFrame()
+
+    merged["spot"] = round(spot, 2)
+    merged["moneyness"] = merged["strike"] / spot
+    if "impliedVolatility" in merged.columns:
+        merged["iv_pct"] = (pd.to_numeric(merged["impliedVolatility"], errors="coerce") * 100).round(1)
+    if {"ask", "bid"}.issubset(merged.columns):
+        merged["spread"] = (merged["ask"] - merged["bid"]).round(3)
+        merged["spread_pct"] = (
+            merged["spread"] / merged["ask"].replace(0, np.nan) * 100
+        ).round(1)
+    merged["data_source"] = "Tastytrade API chain + yfinance quotes"
+    return merged
+
+
+def _fetch_yfinance_spot(ticker) -> float | None:
+    spot = None
+    try:
+        info = ticker.fast_info
+        spot = getattr(info, "last_price", None) or getattr(info, "regularMarketPrice", None)
+    except Exception:
+        spot = None
+    if not spot or spot == 0:
+        try:
+            hist = ticker.history(period="5d", interval="1d")
+            if not hist.empty and "Close" in hist.columns:
+                spot = float(hist["Close"].dropna().iloc[-1])
+        except Exception:
+            spot = None
+    return spot
+
+
+def _fetch_yfinance_options_data(symbols: tuple, min_volume: int, min_oi: int,
+                                 option_types: tuple, exp_pref: str) -> pd.DataFrame:
+    results = []
+    min_dte, max_dte = _expiration_bounds(exp_pref)
 
     for symbol in symbols:
         try:
             ticker = yf.Ticker(symbol)
-            info = ticker.fast_info
-            spot = getattr(info, "last_price", None) or getattr(info, "regularMarketPrice", None)
+            spot = _fetch_yfinance_spot(ticker)
             if not spot or spot == 0:
                 continue
 
@@ -61,7 +211,7 @@ def fetch_options_data(symbols: tuple, min_volume: int, min_oi: int,
             for exp_str in expirations:
                 exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
                 dte = (exp_date - today).days
-                if dte < 0 or dte > max_dte:
+                if dte < min_dte or dte > max_dte:
                     continue
 
                 chain = ticker.option_chain(exp_str)
@@ -104,6 +254,8 @@ def fetch_options_data(symbols: tuple, min_volume: int, min_oi: int,
                     ]
 
                     if not df_filtered.empty:
+                        df_filtered = df_filtered.copy()
+                        df_filtered["data_source"] = "yfinance"
                         results.append(df_filtered)
                         exp_has_results = True
 
@@ -120,12 +272,22 @@ def fetch_options_data(symbols: tuple, min_volume: int, min_oi: int,
         return pd.DataFrame()
 
     combined = pd.concat(results, ignore_index=True)
+    return _finalize_options_frame(combined)
+
+
+def _finalize_options_frame(combined: pd.DataFrame) -> pd.DataFrame:
+    combined = combined.copy()
+    if "open_interest" in combined.columns and "openInterest" in combined.columns:
+        combined.drop(columns=["openInterest"], inplace=True)
+    if "last_price" in combined.columns and "lastPrice" in combined.columns:
+        combined.drop(columns=["lastPrice"], inplace=True)
 
     # Select & rename columns
     keep_cols = [
         "symbol", "option_type", "expiration", "dte", "spot",
         "strike", "moneyness", "iv_pct", "volume", "openInterest",
-        "bid", "ask", "spread", "spread_pct", "lastPrice",
+        "open_interest", "bid", "ask", "spread", "spread_pct", "lastPrice",
+        "last_price", "contract", "streamer_symbol", "data_source",
     ]
     available = [c for c in keep_cols if c in combined.columns]
     combined = combined[available].copy()
@@ -136,7 +298,11 @@ def fetch_options_data(symbols: tuple, min_volume: int, min_oi: int,
         "iv_pct": "iv_%",
     }, inplace=True)
 
-    return combined.sort_values("volume", ascending=False).reset_index(drop=True)
+    combined = combined.sort_values("volume", ascending=False).reset_index(drop=True)
+    if "data_source" in combined.columns:
+        sources = ", ".join(sorted(combined["data_source"].dropna().unique()))
+        combined.attrs["active_data_source"] = sources
+    return combined
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -188,7 +354,7 @@ class OptionsLiquidityModule(FazDaneModule):
     SOURCE_NOTEBOOK = "05-FazDane Options Liquidity Discovery Engine.ipynb"
     CACHE_TTL = 300
     REQUIRES_LIVE_DATA = True
-    DATA_SOURCES = ["yfinance"]
+    DATA_SOURCES = ["Tastytrade API", "yfinance fallback"]
 
     # ── Sidebar ────────────────────────────────────────────────────────
 
@@ -218,6 +384,13 @@ class OptionsLiquidityModule(FazDaneModule):
             index=1,
             key="ol_exp",
         )
+
+        st.markdown("**Data Source**")
+        config = load_config()
+        st.caption(f"Tastytrade: {'configured' if config.is_configured else 'not configured'}")
+        st.caption("Priority: Tastytrade API -> yfinance fallback")
+        active_source = st.session_state.get("ol_active_data_source", "Not scanned yet")
+        st.info(f"Active Source: {active_source}")
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         scan_clicked = st.button("🔍 Scan Options", use_container_width=True,
@@ -286,11 +459,20 @@ class OptionsLiquidityModule(FazDaneModule):
             with st.spinner(f"Scanning {len(symbols)} symbols…"):
                 df = fetch_options_data(**params)
                 st.session_state["ol_results"] = df
+                if "data_source" in df.columns and not df.empty:
+                    sources = ", ".join(sorted(df["data_source"].dropna().unique()))
+                else:
+                    sources = df.attrs.get(
+                        "active_data_source",
+                        "No matching contracts; provider returned no displayable rows",
+                    )
+                st.session_state["ol_active_data_source"] = sources
 
                 # Fetch IV ranks separately
                 with st.spinner("Calculating IV Ranks…"):
                     iv_ranks = fetch_iv_rank(symbols)
                     st.session_state["ol_iv_ranks"] = iv_ranks
+                st.rerun()
 
         df = st.session_state["ol_results"]
         iv_ranks = st.session_state.get("ol_iv_ranks", {})
@@ -309,6 +491,10 @@ class OptionsLiquidityModule(FazDaneModule):
         m3.metric("Avg Volume", f"{int(df['volume'].mean()):,}" if "volume" in df.columns else "—")
         m4.metric("Avg IV", f"{df['iv_%'].mean():.1f}%" if "iv_%" in df.columns else "—")
         m5.metric("Avg Spread", f"${df['spread'].mean():.2f}" if "spread" in df.columns else "—")
+
+        if "data_source" in df.columns:
+            sources = ", ".join(sorted(df["data_source"].dropna().unique()))
+            st.caption(f"Data source: {sources}")
 
         st.divider()
 
