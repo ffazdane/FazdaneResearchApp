@@ -42,14 +42,30 @@ def fetch_options_data(symbols: tuple, min_volume: int, min_oi: int,
     fallback and quote/liquidity enrichment source when needed.
     Cached for 5 minutes.
     """
-    tasty_df = _fetch_tastytrade_options_data(symbols, min_volume, min_oi, option_types, exp_pref)
+    fallback_notes = []
+    try:
+        tasty_df = _fetch_tastytrade_options_data(symbols, min_volume, min_oi, option_types, exp_pref)
+    except Exception as e:
+        tasty_df = pd.DataFrame()
+        tasty_df.attrs["active_data_source"] = f"Tastytrade failed before fallback: {e}"
+        fallback_notes.append(tasty_df.attrs["active_data_source"])
+
     if not tasty_df.empty:
         return tasty_df
 
-    logger.info("Tastytrade option scan unavailable or empty; falling back to yfinance.")
+    tasty_status = tasty_df.attrs.get("active_data_source", "Tastytrade unavailable or returned no matching contracts")
+    fallback_notes.append(tasty_status)
+    logger.info(f"{tasty_status}; falling back to yfinance.")
     fallback_df = _fetch_yfinance_options_data(symbols, min_volume, min_oi, option_types, exp_pref)
+    fallback_status = fallback_df.attrs.get("active_data_source")
+    if fallback_status:
+        fallback_notes.append(fallback_status)
+
     if fallback_df.empty:
-        fallback_df.attrs["active_data_source"] = "No matching contracts; tried Tastytrade API, then yfinance fallback"
+        fallback_df.attrs["active_data_source"] = "No matching contracts; " + " | ".join(fallback_notes)
+    else:
+        fallback_df.attrs["active_data_source"] = "yfinance fallback after " + tasty_status
+
     return fallback_df
 
 
@@ -66,10 +82,13 @@ def _fetch_tastytrade_options_data(symbols: tuple, min_volume: int, min_oi: int,
                                    option_types: tuple, exp_pref: str) -> pd.DataFrame:
     config = load_config()
     if not config.is_configured:
-        return pd.DataFrame()
+        empty = pd.DataFrame()
+        empty.attrs["active_data_source"] = "Tastytrade not configured"
+        return empty
 
     min_dte, max_dte = _expiration_bounds(exp_pref)
     results = []
+    errors = []
 
     for symbol in symbols:
         try:
@@ -99,14 +118,24 @@ def _fetch_tastytrade_options_data(symbols: tuple, min_volume: int, min_oi: int,
             if not enriched.empty:
                 results.append(enriched)
         except TastytradeProviderError as e:
-            logger.info(f"Tastytrade not available for {symbol}: {e}")
-            return pd.DataFrame()
+            message = f"Tastytrade not available for {symbol}: {e}"
+            logger.info(message)
+            empty = pd.DataFrame()
+            empty.attrs["active_data_source"] = message
+            return empty
         except Exception as e:
-            logger.warning(f"Tastytrade option fetch failed for {symbol}: {e}")
+            message = f"Tastytrade option fetch failed for {symbol}: {e}"
+            logger.warning(message)
+            errors.append(message)
             continue
 
     if not results:
-        return pd.DataFrame()
+        empty = pd.DataFrame()
+        if errors:
+            empty.attrs["active_data_source"] = "; ".join(errors[:3])
+        else:
+            empty.attrs["active_data_source"] = "Tastytrade returned no matching contracts"
+        return empty
 
     combined = pd.concat(results, ignore_index=True)
     return _finalize_options_frame(combined)
@@ -194,16 +223,19 @@ def _fetch_yfinance_options_data(symbols: tuple, min_volume: int, min_oi: int,
                                  option_types: tuple, exp_pref: str) -> pd.DataFrame:
     results = []
     min_dte, max_dte = _expiration_bounds(exp_pref)
+    notes = []
 
     for symbol in symbols:
         try:
             ticker = yf.Ticker(symbol)
             spot = _fetch_yfinance_spot(ticker)
             if not spot or spot == 0:
+                notes.append(f"{symbol}: no yfinance spot price")
                 continue
 
             expirations = ticker.options
             if not expirations:
+                notes.append(f"{symbol}: no yfinance option expirations")
                 continue
 
             today = datetime.today().date()
@@ -266,11 +298,18 @@ def _fetch_yfinance_options_data(symbols: tuple, min_volume: int, min_oi: int,
                     break
 
         except Exception as e:
-            logger.warning(f"Failed to fetch {symbol}: {e}")
+            message = f"yfinance failed for {symbol}: {e}"
+            logger.warning(message)
+            notes.append(message)
             continue
 
     if not results:
-        return pd.DataFrame()
+        empty = pd.DataFrame()
+        if notes:
+            empty.attrs["active_data_source"] = "yfinance fallback returned no rows: " + "; ".join(notes[:5])
+        else:
+            empty.attrs["active_data_source"] = "yfinance fallback returned no rows after filters"
+        return empty
 
     combined = pd.concat(results, ignore_index=True)
     return _finalize_options_frame(combined)
@@ -490,6 +529,9 @@ class OptionsLiquidityModule(FazDaneModule):
                 "⚠️ No options found matching your criteria. "
                 "Try lowering Min Volume / Min Open Interest or widening the expiration window."
             )
+            source_status = st.session_state.get("ol_active_data_source")
+            if source_status:
+                st.info(f"Provider status: {source_status}")
             return
 
         # ── Top Metrics Row ──────────────────────────────────────────
