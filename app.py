@@ -50,19 +50,24 @@ def render_home_module_button(label: str, module_name: str, tier: int, key: str)
 
 # ══════════════════════════════════════════════════════════════════════
 # =====================================================================
-# STREAMLIT DEFAULT DARK THEME
-# Keep app-wide styling minimal so Streamlit's native dark UI shows through.
+# THEME HELPERS
 # =====================================================================
 
-st.markdown(
-    """
-    <style>
-        .stApp { background: #0e1117; }
-        [data-testid="stSidebar"] { background: #0e1117; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+def apply_theme_mode(mode: str) -> None:
+    """Apply optional page-level theme overrides."""
+    if mode != "Dark":
+        return
+
+    st.markdown(
+        """
+        <style>
+            .stApp { background: #0e1117; }
+            [data-testid="stSidebar"] { background: #0e1117; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 # =====================================================================
 # AUTHENTICATION CHECK
 # ══════════════════════════════════════════════════════════════════════
@@ -129,6 +134,19 @@ with st.sidebar:
         )
 
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+
+    if "ui_theme_mode" not in st.session_state:
+        st.session_state["ui_theme_mode"] = "Dark"
+
+    theme_mode = st.selectbox(
+        "Theme",
+        ["Dark", "Normal"],
+        index=0,
+        key="ui_theme_mode",
+        help="Dark applies a pure dark background. Normal uses Streamlit's default theme.",
+    )
+    apply_theme_mode(theme_mode)
+    st.divider()
 
     # User badge
     role_color = "#3ab54a" if user["role"] == "admin" else "#93c5fd"
