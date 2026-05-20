@@ -14,7 +14,7 @@ import streamlit as st
 import yfinance as yf
 
 from modules.base_module import FazDaneModule
-from utils.universe_manager import render_universe_manager
+from utils.universe_manager import format_ticker_display, get_ticker_names, render_universe_manager
 
 
 GREEN = (0.18, 0.72, 0.36)
@@ -499,6 +499,7 @@ class EquityIncomeStatementModule(FazDaneModule):
             show_benchmark=False,
             label="Ticker Universe:",
         )
+        ticker_names = get_ticker_names(self.universe_name)
         self.tickers = tickers
 
         if self.tickers:
@@ -508,6 +509,7 @@ class EquityIncomeStatementModule(FazDaneModule):
                 self.tickers,
                 index=default_index,
                 key="income_stmt_ticker",
+                format_func=lambda ticker: format_ticker_display(ticker, ticker_names),
             )
         else:
             self.ticker = ""

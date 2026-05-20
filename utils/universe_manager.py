@@ -7,11 +7,91 @@ Streamlit widgets for single-universe and multi-universe workflows.
 
 import json
 import os
+import re
 
 import streamlit as st
 
 
 UNIVERSE_CONFIG_PATH = os.path.join("config", "universes.json")
+
+KNOWN_TICKER_NAMES = {
+    "^GSPC": "S&P 500 Index",
+    "^SPX": "S&P 500 Index",
+    "SPX": "S&P 500 Index",
+    "^NDX": "Nasdaq 100 Index",
+    "NDX": "Nasdaq 100 Index",
+    "^IXIC": "Nasdaq Composite Index",
+    "^DJI": "Dow Jones Industrial Average",
+    "DJI": "Dow Jones Industrial Average",
+    "^RUT": "Russell 2000 Index",
+    "RUT": "Russell 2000 Index",
+    "^NYA": "NYSE Composite Index",
+    "^VIX": "CBOE Volatility Index",
+    "VIX": "CBOE Volatility Index",
+    "SPY": "SPDR S&P 500 ETF Trust",
+    "QQQ": "Invesco QQQ Trust",
+    "IWM": "iShares Russell 2000 ETF",
+    "DIA": "SPDR Dow Jones Industrial Average ETF Trust",
+    "GLD": "SPDR Gold Shares",
+    "SLV": "iShares Silver Trust",
+    "TLT": "iShares 20+ Year Treasury Bond ETF",
+    "HYG": "iShares iBoxx High Yield Corporate Bond ETF",
+    "SMH": "VanEck Semiconductor ETF",
+    "XLC": "Communication Services Select Sector SPDR Fund",
+    "XLY": "Consumer Discretionary Select Sector SPDR Fund",
+    "XLP": "Consumer Staples Select Sector SPDR Fund",
+    "XLE": "Energy Select Sector SPDR Fund",
+    "XLF": "Financial Select Sector SPDR Fund",
+    "XLV": "Health Care Select Sector SPDR Fund",
+    "XLI": "Industrial Select Sector SPDR Fund",
+    "XLB": "Materials Select Sector SPDR Fund",
+    "XLRE": "Real Estate Select Sector SPDR Fund",
+    "XLK": "Technology Select Sector SPDR Fund",
+    "XLU": "Utilities Select Sector SPDR Fund",
+    "AAPL": "Apple Inc.",
+    "MSFT": "Microsoft Corporation",
+    "NVDA": "NVIDIA Corporation",
+    "AMZN": "Amazon.com Inc.",
+    "TSLA": "Tesla Inc.",
+    "GOOGL": "Alphabet Inc.",
+    "GOOG": "Alphabet Inc.",
+    "META": "Meta Platforms Inc.",
+    "JPM": "JPMorgan Chase & Co.",
+    "GS": "Goldman Sachs Group Inc.",
+    "AVGO": "Broadcom Inc.",
+    "AMD": "Advanced Micro Devices Inc.",
+    "NFLX": "Netflix Inc.",
+    "INTC": "Intel Corporation",
+    "QCOM": "Qualcomm Inc.",
+    "CSCO": "Cisco Systems Inc.",
+    "AMAT": "Applied Materials Inc.",
+    "COIN": "Coinbase Global Inc.",
+    "HOOD": "Robinhood Markets Inc.",
+    "PLTR": "Palantir Technologies Inc.",
+    "IBM": "International Business Machines Corporation",
+    "CRM": "Salesforce Inc.",
+    "ADBE": "Adobe Inc.",
+    "ORCL": "Oracle Corporation",
+    "CRWD": "CrowdStrike Holdings Inc.",
+    "PANW": "Palo Alto Networks Inc.",
+    "UNH": "UnitedHealth Group Inc.",
+    "LLY": "Eli Lilly and Company",
+    "COST": "Costco Wholesale Corporation",
+    "HD": "Home Depot Inc.",
+    "BA": "Boeing Company",
+    "CAT": "Caterpillar Inc.",
+    "DDOG": "Datadog Inc.",
+    "MSTR": "MicroStrategy Inc.",
+    "ES=F": "E-mini S&P 500 Futures",
+    "NQ=F": "E-mini Nasdaq 100 Futures",
+    "YM=F": "E-mini Dow Futures",
+    "RTY=F": "E-mini Russell 2000 Futures",
+    "GC=F": "Gold Futures",
+    "CL=F": "Crude Oil Futures",
+    "BTC=F": "Bitcoin Futures",
+    "DX-Y.NYB": "US Dollar Index",
+    "HG=F": "Copper Futures",
+}
 
 _DEFAULTS = {
     "Options Default Watchlist": {
@@ -107,15 +187,20 @@ def load_universes() -> dict:
             if name.startswith("__"):
                 continue
             if isinstance(val, list):
+                tickers = _clean_tickers(val)
                 upgraded[name] = {
-                    "tickers": _clean_tickers(val),
+                    "tickers": tickers,
+                    "ticker_names": _build_ticker_names(tickers),
                     "benchmark": "SPY",
                     "description": "",
                     "module": "general",
                 }
             else:
+                tickers = _clean_tickers(val.get("tickers", []))
+                names = _normalize_ticker_names(tickers, val.get("ticker_names", {}))
                 upgraded[name] = {
-                    "tickers": _clean_tickers(val.get("tickers", [])),
+                    "tickers": tickers,
+                    "ticker_names": names,
                     "benchmark": str(val.get("benchmark", "SPY")).strip().upper(),
                     "description": val.get("description", ""),
                     "module": val.get("module", "general"),
@@ -127,6 +212,7 @@ def load_universes() -> dict:
 
 
 def save_universes(universes: dict) -> None:
+    universes = _normalize_universes(universes)
     os.makedirs(os.path.dirname(UNIVERSE_CONFIG_PATH), exist_ok=True)
     with open(UNIVERSE_CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(universes, f, indent=4)
@@ -164,9 +250,9 @@ def get_universe_names(module_filter: str = None) -> list[str]:
         return sorted(
             name
             for name, data in universes.items()
-            if data.get("module") in (module_filter, "general", None)
+            if not name.startswith("__") and data.get("module") in (module_filter, "general", None)
         )
-    return sorted(universes.keys())
+    return sorted(name for name in universes.keys() if not name.startswith("__"))
 
 
 def get_universe(name: str) -> dict:
@@ -178,6 +264,19 @@ def get_universe(name: str) -> dict:
 
 def get_tickers(name: str) -> list[str]:
     return get_universe(name).get("tickers", [])
+
+
+def get_ticker_names(name: str) -> dict:
+    data = get_universe(name)
+    return _normalize_ticker_names(data.get("tickers", []), data.get("ticker_names", {}))
+
+
+def format_ticker_display(ticker: str, ticker_names: dict = None) -> str:
+    ticker = str(ticker).strip().upper()
+    name = (ticker_names or {}).get(ticker) or get_company_name(ticker)
+    if _is_index_symbol(ticker):
+        return name if name else ticker
+    return f"{name} ({ticker})" if name and name != ticker else ticker
 
 
 def get_benchmark(name: str) -> str:
@@ -200,7 +299,13 @@ def render_universe_manager(
     universe_name = st.selectbox(label, options=names, key=f"{key_prefix}_sel")
     universe_data = universes.get(universe_name, {})
     tickers = universe_data.get("tickers", [])
+    ticker_names = _normalize_ticker_names(tickers, universe_data.get("ticker_names", {}))
     benchmark = universe_data.get("benchmark", "SPY")
+
+    if tickers:
+        preview = ", ".join(format_ticker_display(ticker, ticker_names) for ticker in tickers[:8])
+        suffix = f" +{len(tickers) - 8} more" if len(tickers) > 8 else ""
+        st.caption(f"Selected: {preview}{suffix}")
 
     if show_benchmark:
         benchmark = st.text_input(
@@ -283,9 +388,11 @@ def _render_editor(
             selected_data = universes.get(edit_name, {})
             st.caption(f"Editing: **{edit_name}**")
             edit_key = _safe_key(edit_name)
+            edit_tickers = selected_data.get("tickers", [])
+            edit_names = _normalize_ticker_names(edit_tickers, selected_data.get("ticker_names", {}))
             edit_tickers_str = st.text_area(
-                "Tickers (comma or newline separated):",
-                value=", ".join(selected_data.get("tickers", [])),
+                "Tickers (one per line, optional ': Company / Index Name'):",
+                value=_format_ticker_editor_value(edit_tickers, edit_names),
                 height=140,
                 key=f"{key_prefix}_{edit_key}_edit_tickers",
             )
@@ -304,12 +411,13 @@ def _render_editor(
             )
 
             if st.button("Save Changes", key=f"{key_prefix}_save_edit", use_container_width=True):
-                parsed = _parse_tickers(edit_tickers_str)
+                parsed, parsed_names = _parse_ticker_entries(edit_tickers_str)
                 if not parsed:
                     st.error("Please enter at least one valid ticker.")
                 else:
                     universes[edit_name] = {
                         "tickers": parsed,
+                        "ticker_names": _normalize_ticker_names(parsed, parsed_names),
                         "benchmark": edit_bench,
                         "description": edit_desc,
                         "module": selected_data.get("module", module_filter or "general"),
@@ -321,10 +429,10 @@ def _render_editor(
         with tab_new:
             new_name = st.text_input("Universe Name:", key=f"{key_prefix}_new_name", placeholder="e.g. My Watch List")
             new_tickers_str = st.text_area(
-                "Tickers (comma or newline separated):",
+                "Tickers (one per line, optional ': Company / Index Name'):",
                 height=130,
                 key=f"{key_prefix}_new_tickers",
-                placeholder="AAPL, MSFT, NVDA, TSLA",
+                placeholder="AAPL\nMSFT: Microsoft Corporation\n^GSPC: S&P 500 Index",
             )
             if show_benchmark:
                 new_bench = st.text_input("Benchmark:", value="SPY", key=f"{key_prefix}_new_bench").strip().upper()
@@ -339,12 +447,13 @@ def _render_editor(
                 elif clean_name in universes:
                     st.error(f"A universe named '{clean_name}' already exists. Edit it instead.")
                 else:
-                    parsed = _parse_tickers(new_tickers_str)
+                    parsed, parsed_names = _parse_ticker_entries(new_tickers_str)
                     if not parsed:
                         st.error("Please enter at least one valid ticker.")
                     else:
                         universes[clean_name] = {
                             "tickers": parsed,
+                            "ticker_names": _normalize_ticker_names(parsed, parsed_names),
                             "benchmark": new_bench,
                             "description": new_desc,
                             "module": module_filter or "general",
@@ -369,7 +478,33 @@ def _render_editor(
 
 
 def _parse_tickers(raw: str) -> list[str]:
-    return _clean_tickers(raw.replace("\n", ",").split(","))
+    tickers, _ = _parse_ticker_entries(raw)
+    return tickers
+
+
+def _parse_ticker_entries(raw: str) -> tuple[list[str], dict]:
+    tickers = []
+    names = {}
+    entries = re.split(r"[\n,]+", raw or "")
+    for entry in entries:
+        entry = entry.strip()
+        if not entry:
+            continue
+
+        if ":" in entry:
+            ticker_part, name_part = entry.split(":", 1)
+        elif "|" in entry:
+            ticker_part, name_part = entry.split("|", 1)
+        else:
+            ticker_part, name_part = entry, ""
+
+        ticker = str(ticker_part).strip().upper()
+        name = str(name_part).strip()
+        if ticker and ticker not in tickers:
+            tickers.append(ticker)
+        if ticker and name:
+            names[ticker] = name
+    return tickers, names
 
 
 def _clean_tickers(values) -> list[str]:
@@ -379,6 +514,76 @@ def _clean_tickers(values) -> list[str]:
         if ticker and ticker not in cleaned:
             cleaned.append(ticker)
     return cleaned
+
+
+def _normalize_universes(universes: dict) -> dict:
+    normalized = {}
+    for name, data in universes.items():
+        if name.startswith("__"):
+            normalized[name] = data
+            continue
+        if isinstance(data, list):
+            tickers = _clean_tickers(data)
+            normalized[name] = {
+                "tickers": tickers,
+                "ticker_names": _build_ticker_names(tickers),
+                "benchmark": "SPY",
+                "description": "",
+                "module": "general",
+            }
+            continue
+        tickers = _clean_tickers(data.get("tickers", []))
+        normalized[name] = {
+            "tickers": tickers,
+            "ticker_names": _normalize_ticker_names(tickers, data.get("ticker_names", {})),
+            "benchmark": str(data.get("benchmark", "SPY")).strip().upper(),
+            "description": data.get("description", ""),
+            "module": data.get("module", "general"),
+        }
+    return normalized
+
+
+def _normalize_ticker_names(tickers: list[str], existing_names: dict = None) -> dict:
+    names = {}
+    existing_names = existing_names or {}
+    for ticker in _clean_tickers(tickers):
+        existing = existing_names.get(ticker) or existing_names.get(ticker.upper())
+        names[ticker] = str(existing).strip() if existing else get_company_name(ticker)
+    return names
+
+
+def _build_ticker_names(tickers: list[str]) -> dict:
+    return {ticker: get_company_name(ticker) for ticker in _clean_tickers(tickers)}
+
+
+def _format_ticker_editor_value(tickers: list[str], ticker_names: dict) -> str:
+    lines = []
+    for ticker in _clean_tickers(tickers):
+        name = ticker_names.get(ticker) or get_company_name(ticker)
+        lines.append(f"{ticker}: {name}" if name and name != ticker else ticker)
+    return "\n".join(lines)
+
+
+def _is_index_symbol(ticker: str) -> bool:
+    ticker = str(ticker).strip().upper()
+    return ticker.startswith("^") or ticker in {"SPX", "NDX", "RUT", "VIX", "DJI"}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_company_name(ticker: str) -> str:
+    ticker = str(ticker).strip().upper()
+    if not ticker:
+        return ""
+    if ticker in KNOWN_TICKER_NAMES:
+        return KNOWN_TICKER_NAMES[ticker]
+    try:
+        import yfinance as yf
+
+        info = yf.Ticker(ticker).get_info()
+        name = info.get("shortName") or info.get("longName") or info.get("displayName")
+        return str(name).strip() if name else ticker
+    except Exception:
+        return ticker
 
 
 def _safe_key(value: str) -> str:

@@ -13,7 +13,7 @@ import streamlit as st
 import yfinance as yf
 
 from modules.base_module import FazDaneModule
-from utils.universe_manager import get_universe_names, render_universe_manager
+from utils.universe_manager import format_ticker_display, get_ticker_names, get_universe_names, render_universe_manager
 
 
 TICKER_ALIASES = {
@@ -402,13 +402,21 @@ class ElliottWaveAnalysisModule(FazDaneModule):
             show_benchmark=False,
             label="Ticker Universe:",
         )
+        ticker_names = get_ticker_names(self.universe_name)
         if "^GSPC" not in tickers:
             tickers = ["^GSPC"] + tickers
+            ticker_names.setdefault("^GSPC", "S&P 500 Index")
         self.tickers = tickers
         default_idx = self.tickers.index("^GSPC") if "^GSPC" in self.tickers else 0
         if st.session_state.get("elliott_ticker") not in self.tickers:
             st.session_state["elliott_ticker"] = self.tickers[default_idx]
-        self.ticker = st.selectbox("Ticker / Index:", self.tickers, index=default_idx, key="elliott_ticker")
+        self.ticker = st.selectbox(
+            "Ticker / Index:",
+            self.tickers,
+            index=default_idx,
+            key="elliott_ticker",
+            format_func=lambda ticker: format_ticker_display(ticker, ticker_names),
+        )
 
         st.markdown("**Data Window**")
         self.period = st.selectbox("Period:", ["6mo", "1y", "2y", "5y", "10y", "max"], index=2, key="elliott_period")

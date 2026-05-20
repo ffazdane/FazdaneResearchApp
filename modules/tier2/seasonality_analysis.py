@@ -14,13 +14,15 @@ import yfinance as yf
 from pandas.tseries.holiday import USFederalHolidayCalendar
 
 from modules.base_module import FazDaneModule
-from utils.universe_manager import get_universe_names, render_universe_manager
+from utils.universe_manager import format_ticker_display, get_ticker_names, get_universe_names, render_universe_manager
 
 
 MONTH_ORDER = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 ]
+
+WEEKDAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
 TICKER_ALIASES = {
     "SPX": "^GSPC",
@@ -100,6 +102,62 @@ def event_stats(events: pd.DataFrame) -> pd.Series:
             "Worst %": returns.min() if len(returns) else 0,
         }
     )
+
+
+def grouped_return_stats(df: pd.DataFrame, group_col: str) -> pd.DataFrame:
+    stats = df.groupby(group_col, observed=False).agg(
+        Avg_ReturnPct=("DailyPctChange", "mean"),
+        Median_ReturnPct=("DailyPctChange", "median"),
+        Win_Rate=("DailyPctChange", lambda x: (x > 0).mean() * 100 if len(x) else 0),
+        Best_ReturnPct=("DailyPctChange", "max"),
+        Worst_ReturnPct=("DailyPctChange", "min"),
+        Events=("DailyPctChange", "count"),
+    ).reset_index()
+    return stats
+
+
+def election_cycle_label(year: int) -> str:
+    cycle = int(year) % 4
+    if cycle == 0:
+        return "Election Year"
+    if cycle == 1:
+        return "Post-Election Year"
+    if cycle == 2:
+        return "Midterm Year"
+    return "Pre-Election Year"
+
+
+def annual_election_cycle_stats(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    yearly = (
+        df.sort_values("Date")
+        .groupby("Year", as_index=False)
+        .agg(
+            StartDate=("Date", "first"),
+            EndDate=("Date", "last"),
+            StartClose=("Close", "first"),
+            EndClose=("Close", "last"),
+            TradingDays=("DailyPctChange", "count"),
+        )
+    )
+    if yearly.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    yearly["YearReturnPct"] = (yearly["EndClose"] / yearly["StartClose"] - 1) * 100
+    yearly["ElectionCycle"] = yearly["Year"].map(election_cycle_label)
+    yearly = yearly.sort_values("Year", ascending=False).reset_index(drop=True)
+
+    summary = yearly.groupby("ElectionCycle", as_index=False).agg(
+        Avg_YearReturnPct=("YearReturnPct", "mean"),
+        Median_YearReturnPct=("YearReturnPct", "median"),
+        Win_Rate=("YearReturnPct", lambda x: (x > 0).mean() * 100 if len(x) else 0),
+        Best_YearReturnPct=("YearReturnPct", "max"),
+        Worst_YearReturnPct=("YearReturnPct", "min"),
+        Years=("YearReturnPct", "count"),
+    )
+    order = ["Election Year", "Post-Election Year", "Midterm Year", "Pre-Election Year"]
+    summary["ElectionCycle"] = pd.Categorical(summary["ElectionCycle"], categories=order, ordered=True)
+    summary = summary.sort_values("ElectionCycle").reset_index(drop=True)
+    return yearly, summary
 
 
 def first_last_trading_days(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -296,17 +354,25 @@ class SeasonalityAnalysisModule(FazDaneModule):
             show_benchmark=False,
             label="Ticker Universe:",
         )
+        ticker_names = get_ticker_names(self.universe_name)
         self.tickers = tickers
         if self.tickers:
             default = self.tickers.index("^GSPC") if "^GSPC" in self.tickers else 0
             if st.session_state.get("seasonality_ticker") not in self.tickers:
                 st.session_state["seasonality_ticker"] = self.tickers[default]
-            self.ticker = st.selectbox("Ticker / Index:", self.tickers, index=default, key="seasonality_ticker")
+            self.ticker = st.selectbox(
+                "Ticker / Index:",
+                self.tickers,
+                index=default,
+                key="seasonality_ticker",
+                format_func=lambda ticker: format_ticker_display(ticker, ticker_names),
+            )
         else:
             self.ticker = ""
 
         self.lookback_years = int(st.slider("Lookback Years:", 3, 15, 7, key="seasonality_years"))
-        self.long_weekend_window = int(st.slider("Long Weekend Window:", 3, 10, 5, key="seasonality_lw_window"))
+        self.long_weekend_window = 5
+        st.caption("Holiday window: 5 trading days before and after")
         self.show_raw = st.checkbox("Show event detail tables", value=True, key="seasonality_raw")
 
         if st.button("Refresh Seasonality", use_container_width=True, type="primary", key="seasonality_refresh"):
@@ -336,7 +402,10 @@ class SeasonalityAnalysisModule(FazDaneModule):
         edge_monthly = first_last_monthly_stats(first_days, last_days)
         long_weekends = detect_long_weekends(df)
         lw_rows, lw_summary = long_weekend_windows(df, long_weekends, self.long_weekend_window)
-        memorial = lw_summary[lw_summary["Holiday"].str.contains("Memorial", case=False, na=False)] if not lw_summary.empty else pd.DataFrame()
+        if not lw_summary.empty:
+            lw_summary = lw_summary.sort_values("Before Date", ascending=False).reset_index(drop=True)
+        if not lw_rows.empty:
+            lw_rows = lw_rows.sort_values(["AnchorDate", "TradingDayOffset"], ascending=[False, True]).reset_index(drop=True)
 
         best_month = stats.loc[stats["Avg_DailyPctChange"].idxmax()]
         worst_month = stats.loc[stats["Avg_DailyPctChange"].idxmin()]
@@ -347,8 +416,8 @@ class SeasonalityAnalysisModule(FazDaneModule):
         c3.metric("Best Month", f"{best_month['Month']}", f"{best_month['Avg_DailyPctChange']:.2f}% avg")
         c4.metric("Worst Month", f"{worst_month['Month']}", f"{worst_month['Avg_DailyPctChange']:.2f}% avg")
 
-        tab_month, tab_edge, tab_weekend, tab_memorial, tab_data = st.tabs(
-            ["Monthly", "First/Last Day", "Long Weekends", "Memorial Day", "Data"]
+        tab_month, tab_cycles, tab_edge, tab_weekend, tab_data = st.tabs(
+            ["Monthly", "Calendar Cycles", "First/Last Day", "Long Weekends", "Data"]
         )
 
         with tab_month:
@@ -369,6 +438,139 @@ class SeasonalityAnalysisModule(FazDaneModule):
                 st.plotly_chart(fig_box, use_container_width=True)
             st.plotly_chart(plot_pos_neg(stats), use_container_width=True)
             st.dataframe(stats.round(2), use_container_width=True, hide_index=True)
+
+        with tab_cycles:
+            cycle_df = df.copy()
+            cycle_df["Weekday"] = pd.Categorical(cycle_df["DayName"], categories=WEEKDAY_ORDER, ordered=True)
+            cycle_df["ISOWeek"] = cycle_df["Date"].dt.isocalendar().week.astype(int)
+            cycle_df["Quarter"] = "Q" + cycle_df["Date"].dt.quarter.astype(str)
+
+            weekday_stats = grouped_return_stats(cycle_df, "Weekday").sort_values("Weekday")
+            current_week = int(pd.Timestamp.today().isocalendar().week)
+            weekly_stats = grouped_return_stats(cycle_df[cycle_df["ISOWeek"] <= 52], "ISOWeek").sort_values("ISOWeek")
+            weekly_stats["Current"] = np.where(weekly_stats["ISOWeek"] == current_week, "Current Week", "Other Weeks")
+
+            monthly_perf = stats[[
+                "Month", "Avg_DailyPctChange", "Median_DailyPctChange", "Pct_Positive",
+                "Max_DailyPctChange", "Min_DailyPctChange", "Total_Days",
+            ]].copy()
+            monthly_perf.rename(
+                columns={
+                    "Avg_DailyPctChange": "Avg_ReturnPct",
+                    "Median_DailyPctChange": "Median_ReturnPct",
+                    "Pct_Positive": "Win_Rate",
+                    "Max_DailyPctChange": "Best_ReturnPct",
+                    "Min_DailyPctChange": "Worst_ReturnPct",
+                    "Total_Days": "Events",
+                },
+                inplace=True,
+            )
+
+            yearly_cycle, cycle_summary = annual_election_cycle_stats(cycle_df)
+            quarter_stats = grouped_return_stats(cycle_df, "Quarter").sort_values("Quarter")
+
+            st.markdown("### Average Day Performance")
+            fig_weekday = px.bar(
+                weekday_stats,
+                x="Weekday",
+                y="Avg_ReturnPct",
+                color="Avg_ReturnPct",
+                color_continuous_scale=["#ef4444", "#facc15", "#22c55e"],
+                category_orders={"Weekday": WEEKDAY_ORDER},
+                hover_data={"Median_ReturnPct": ":.2f", "Win_Rate": ":.1f", "Events": True},
+                title="Average Daily Return by Weekday",
+            )
+            fig_weekday.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
+            fig_weekday.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=380)
+            st.plotly_chart(fig_weekday, use_container_width=True)
+            st.dataframe(weekday_stats.round(2), use_container_width=True, hide_index=True)
+
+            st.markdown("### Average Week Performance")
+            fig_week = px.bar(
+                weekly_stats,
+                x="ISOWeek",
+                y="Avg_ReturnPct",
+                color="Current",
+                color_discrete_map={"Current Week": "#38bdf8", "Other Weeks": "#64748b"},
+                hover_data={"Median_ReturnPct": ":.2f", "Win_Rate": ":.1f", "Events": True},
+                title=f"Average Daily Return by ISO Week (Current Week: {current_week})",
+            )
+            if current_week <= 52:
+                fig_week.add_vline(x=current_week, line_dash="dash", line_color="#38bdf8")
+            fig_week.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
+            fig_week.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=440)
+            st.plotly_chart(fig_week, use_container_width=True)
+            st.dataframe(weekly_stats.drop(columns=["Current"]).round(2), use_container_width=True, hide_index=True)
+
+            st.markdown("### Average Month Performance")
+            fig_month_perf = px.bar(
+                monthly_perf,
+                x="Month",
+                y="Avg_ReturnPct",
+                color="Avg_ReturnPct",
+                color_continuous_scale=["#ef4444", "#facc15", "#22c55e"],
+                category_orders={"Month": MONTH_ORDER},
+                hover_data={"Median_ReturnPct": ":.2f", "Win_Rate": ":.1f", "Events": True},
+                title="Average Daily Return by Month",
+            )
+            fig_month_perf.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
+            fig_month_perf.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=420)
+            st.plotly_chart(fig_month_perf, use_container_width=True)
+            st.dataframe(monthly_perf.round(2), use_container_width=True, hide_index=True)
+
+            st.markdown("### Yearly Analysis by Election Cycle")
+            if cycle_summary.empty:
+                st.info("Not enough yearly data to calculate election-cycle analysis.")
+            else:
+                fig_cycle = px.bar(
+                    cycle_summary,
+                    x="ElectionCycle",
+                    y="Avg_YearReturnPct",
+                    color="Avg_YearReturnPct",
+                    color_continuous_scale=["#ef4444", "#facc15", "#22c55e"],
+                    hover_data={"Median_YearReturnPct": ":.2f", "Win_Rate": ":.1f", "Years": True},
+                    title="Average Annual Return by US Presidential Election Cycle",
+                )
+                fig_cycle.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
+                fig_cycle.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=420)
+                st.plotly_chart(fig_cycle, use_container_width=True)
+                st.dataframe(cycle_summary.round(2), use_container_width=True, hide_index=True)
+                st.markdown("#### Year-by-Year Returns")
+                st.dataframe(
+                    yearly_cycle[["Year", "ElectionCycle", "YearReturnPct", "TradingDays", "StartDate", "EndDate"]].round(2),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            st.markdown("### Additional Useful Seasonality Reads")
+            extra_left, extra_right = st.columns(2)
+            with extra_left:
+                st.markdown("#### Quarter Performance")
+                fig_quarter = px.bar(
+                    quarter_stats,
+                    x="Quarter",
+                    y="Avg_ReturnPct",
+                    color="Avg_ReturnPct",
+                    color_continuous_scale=["#ef4444", "#facc15", "#22c55e"],
+                    hover_data={"Median_ReturnPct": ":.2f", "Win_Rate": ":.1f", "Events": True},
+                    title="Average Daily Return by Quarter",
+                )
+                fig_quarter.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
+                fig_quarter.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=360)
+                st.plotly_chart(fig_quarter, use_container_width=True)
+            with extra_right:
+                st.markdown("#### Strongest / Weakest Calendar Buckets")
+                leaders = pd.DataFrame(
+                    [
+                        {"Bucket": "Best Weekday", "Value": str(weekday_stats.sort_values("Avg_ReturnPct", ascending=False).iloc[0]["Weekday"]), "Avg %": weekday_stats["Avg_ReturnPct"].max()},
+                        {"Bucket": "Worst Weekday", "Value": str(weekday_stats.sort_values("Avg_ReturnPct", ascending=True).iloc[0]["Weekday"]), "Avg %": weekday_stats["Avg_ReturnPct"].min()},
+                        {"Bucket": "Best ISO Week", "Value": int(weekly_stats.sort_values("Avg_ReturnPct", ascending=False).iloc[0]["ISOWeek"]), "Avg %": weekly_stats["Avg_ReturnPct"].max()},
+                        {"Bucket": "Worst ISO Week", "Value": int(weekly_stats.sort_values("Avg_ReturnPct", ascending=True).iloc[0]["ISOWeek"]), "Avg %": weekly_stats["Avg_ReturnPct"].min()},
+                        {"Bucket": "Best Month", "Value": str(monthly_perf.sort_values("Avg_ReturnPct", ascending=False).iloc[0]["Month"]), "Avg %": monthly_perf["Avg_ReturnPct"].max()},
+                        {"Bucket": "Worst Month", "Value": str(monthly_perf.sort_values("Avg_ReturnPct", ascending=True).iloc[0]["Month"]), "Avg %": monthly_perf["Avg_ReturnPct"].min()},
+                    ]
+                )
+                st.dataframe(leaders.round(2), use_container_width=True, hide_index=True)
 
         with tab_edge:
             edge_summary = pd.DataFrame(
@@ -438,44 +640,51 @@ class SeasonalityAnalysisModule(FazDaneModule):
             if lw_rows.empty:
                 st.info("No long-weekend gaps were detected in the selected data.")
             else:
-                avg_by_offset = lw_rows.groupby("TradingDayOffset", as_index=False)["ReturnPct"].mean()
+                holiday_counts = (
+                    lw_summary.groupby("Holiday", as_index=False)
+                    .agg(
+                        Events=("Holiday", "size"),
+                        Latest_Before_Date=("Before Date", "max"),
+                    )
+                    .sort_values(["Latest_Before_Date", "Holiday"], ascending=[False, True])
+                    .rename(columns={"Latest_Before_Date": "Latest Before Date"})
+                )
+
+                holiday_options = ["All Holidays"] + holiday_counts["Holiday"].tolist()
+                if st.session_state.get("seasonality_holiday_filter") not in holiday_options:
+                    st.session_state["seasonality_holiday_filter"] = "All Holidays"
+                selected_holiday = st.selectbox(
+                    "Holiday",
+                    holiday_options,
+                    key="seasonality_holiday_filter",
+                    help="Filter the average 5-trading-day before/after chart by holiday.",
+                )
+
+                chart_rows = lw_rows.copy()
+                chart_summary = lw_summary.copy()
+                title_holiday = "All Long Weekends"
+                if selected_holiday != "All Holidays":
+                    chart_rows = chart_rows[chart_rows["Holiday"] == selected_holiday]
+                    chart_summary = chart_summary[chart_summary["Holiday"] == selected_holiday]
+                    title_holiday = selected_holiday
+
+                avg_by_offset = chart_rows.groupby("TradingDayOffset", as_index=False).agg(
+                    ReturnPct=("ReturnPct", "mean"),
+                    Events=("ReturnPct", "count"),
+                )
                 fig_lw = px.bar(
                     avg_by_offset,
                     x="TradingDayOffset",
                     y="ReturnPct",
                     color="ReturnPct",
                     color_continuous_scale=["#ef4444", "#facc15", "#22c55e"],
-                    title=f"Average Daily Return {self.long_weekend_window} Trading Days Before/After Long Weekends",
+                    hover_data={"Events": True, "ReturnPct": ":.2f"},
+                    title=f"Average Daily Return 5 Trading Days Before/After - {title_holiday}",
                 )
                 fig_lw.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
                 fig_lw.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=480)
                 st.plotly_chart(fig_lw, use_container_width=True)
-                st.dataframe(lw_summary.round(2), use_container_width=True, hide_index=True)
-
-        with tab_memorial:
-            if memorial.empty:
-                st.info("No Memorial Day long-weekend events were detected in the selected data.")
-            else:
-                before_col = f"{self.long_weekend_window}D Before Return %"
-                after_col = f"{self.long_weekend_window}D After Return %"
-                mem_melt = memorial.melt(
-                    id_vars=["Holiday", "Before Date", "After Date"],
-                    value_vars=[before_col, after_col],
-                    var_name="Window",
-                    value_name="ReturnPct",
-                )
-                fig_mem = px.bar(
-                    mem_melt,
-                    x="Before Date",
-                    y="ReturnPct",
-                    color="Window",
-                    barmode="group",
-                    title="Memorial Day Anomaly: Before vs After Window Returns",
-                )
-                fig_mem.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
-                fig_mem.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=480)
-                st.plotly_chart(fig_mem, use_container_width=True)
-                st.dataframe(memorial.round(2), use_container_width=True, hide_index=True)
+                st.dataframe(chart_summary.round(2), use_container_width=True, hide_index=True)
 
         with tab_data:
             if self.show_raw:

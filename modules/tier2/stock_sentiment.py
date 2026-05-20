@@ -16,7 +16,7 @@ import yfinance as yf
 from bs4 import BeautifulSoup
 
 from modules.base_module import FazDaneModule
-from utils.universe_manager import render_universe_manager
+from utils.universe_manager import format_ticker_display, get_ticker_names, render_universe_manager
 
 
 FINVIZ_URL = "https://finviz.com/quote.ashx?t={ticker}"
@@ -421,13 +421,20 @@ class StockSentimentModule(FazDaneModule):
             show_benchmark=False,
             label="Ticker Universe:",
         )
+        ticker_names = get_ticker_names(self.universe_name)
         self.tickers = [ticker for ticker in tickers if not ticker.startswith("^") and "=" not in ticker]
 
         if self.tickers:
             default_index = self.tickers.index("NVDA") if "NVDA" in self.tickers else 0
             if st.session_state.get("sentiment_ticker") not in self.tickers:
                 st.session_state["sentiment_ticker"] = self.tickers[default_index]
-            self.ticker = st.selectbox("Select Ticker:", self.tickers, index=default_index, key="sentiment_ticker")
+            self.ticker = st.selectbox(
+                "Select Ticker:",
+                self.tickers,
+                index=default_index,
+                key="sentiment_ticker",
+                format_func=lambda ticker: format_ticker_display(ticker, ticker_names),
+            )
         else:
             self.ticker = ""
 

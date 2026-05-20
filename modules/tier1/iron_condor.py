@@ -12,7 +12,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import logging
 from modules.base_module import FazDaneModule
-from utils.universe_manager import render_universe_manager
+from utils.universe_manager import format_ticker_display, get_ticker_names, render_universe_manager
 
 logger = logging.getLogger("IronCondor")
 
@@ -128,13 +128,14 @@ class IronCondorModule(FazDaneModule):
             show_benchmark=False,
             label="Ticker Universe:",
         )
+        ticker_names = get_ticker_names(universe_name)
         ticker_map = {_label_for_ticker(ticker): ticker for ticker in tickers_list if ticker != "^VIX"}
         if not ticker_map:
             ticker_map = {label: ticker for label, ticker in ALL_MAP.items() if ticker != "^VIX"}
         st.session_state["ic_ticker_map"] = ticker_map
         st.caption(f"{len(ticker_map)} instruments selected from {universe_name}.")
 
-        tradeable = sorted([(f"{label} ({t})", t) for label, t in ticker_map.items()])
+        tradeable = sorted([(format_ticker_display(t, ticker_names), t) for _, t in ticker_map.items()])
         ticker = st.selectbox("Instrument:", options=[t for _, t in tradeable], format_func=lambda x: [l for l, t in tradeable if t == x][0], index=0, key="ic_ticker")
         
         bias = st.selectbox("Market Bias:", ["Neutral", "Bullish", "Bearish"], index=0, key="ic_bias").lower()

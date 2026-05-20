@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 import logging
 from modules.base_module import FazDaneModule
-from utils.universe_manager import render_universe_manager
+from utils.universe_manager import format_ticker_display, get_ticker_names, render_universe_manager
 
 logger = logging.getLogger("MarketStructure")
 
@@ -112,16 +112,22 @@ class MarketStructureModule(FazDaneModule):
         current_year = datetime.now().year
 
         st.markdown("**Ticker Universe**")
-        _, tickers_list, _ = render_universe_manager(
+        universe_name, tickers_list, _ = render_universe_manager(
             key_prefix="ms",
             show_benchmark=False,
             label="Asset List:"
         )
+        ticker_names = get_ticker_names(universe_name)
 
         # Single asset selector from the universe
         if tickers_list:
-            self.symbol = st.selectbox("Select Asset:", options=tickers_list, index=0)
-            self.asset_label = self.symbol
+            self.symbol = st.selectbox(
+                "Select Asset:",
+                options=tickers_list,
+                index=0,
+                format_func=lambda ticker: format_ticker_display(ticker, ticker_names),
+            )
+            self.asset_label = format_ticker_display(self.symbol, ticker_names)
         else:
             self.symbol = st.text_input("Enter Ticker Symbol:", value="SPY").strip().upper()
             self.asset_label = self.symbol
