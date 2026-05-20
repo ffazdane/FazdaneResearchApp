@@ -13,9 +13,18 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import logging
 from modules.base_module import FazDaneModule
-from utils.tastytrade_provider import TastytradeProviderError, fetch_nested_option_chain, load_config
+from utils.tastytrade_provider import (
+    TastytradeProviderError,
+    fetch_market_data_by_type,
+    fetch_nested_option_chain,
+    load_config,
+)
 from utils.universe_manager import render_universe_manager
-from utils.options_liquidity_store import get_recent_snapshots, save_options_snapshot
+from utils.options_liquidity_store import (
+    get_latest_contract_snapshot,
+    get_recent_snapshots,
+    save_options_snapshot,
+)
 
 logger = logging.getLogger("OptionsLiquidity")
 
@@ -62,6 +71,12 @@ def fetch_options_data(symbols: tuple, min_volume: int, min_oi: int,
         fallback_notes.append(fallback_status)
 
     if fallback_df.empty:
+        snapshot_df = get_latest_contract_snapshot(symbols, min_volume, min_oi, option_types, exp_pref)
+        if not snapshot_df.empty:
+            snapshot_status = snapshot_df.attrs.get("active_data_source", "Local snapshot fallback")
+            snapshot_df.attrs["active_data_source"] = snapshot_status + " after " + " | ".join(fallback_notes)
+            return snapshot_df
+
         fallback_df.attrs["active_data_source"] = "No matching contracts; " + " | ".join(fallback_notes)
     else:
         fallback_df.attrs["active_data_source"] = "yfinance fallback after " + tasty_status
@@ -104,7 +119,7 @@ def _fetch_tastytrade_options_data(symbols: tuple, min_volume: int, min_oi: int,
             if tasty_chain.empty:
                 continue
 
-            enriched = _enrich_tasty_chain_with_yfinance_quotes(symbol, tasty_chain)
+            enriched = _enrich_tasty_chain_with_tastytrade_quotes(symbol, tasty_chain, config)
             if enriched.empty:
                 continue
 
@@ -139,6 +154,81 @@ def _fetch_tastytrade_options_data(symbols: tuple, min_volume: int, min_oi: int,
 
     combined = pd.concat(results, ignore_index=True)
     return _finalize_options_frame(combined)
+
+
+def _enrich_tasty_chain_with_tastytrade_quotes(symbol: str, tasty_chain: pd.DataFrame, config) -> pd.DataFrame:
+    spot = _fetch_tastytrade_spot(symbol, config)
+    if not spot or spot == 0:
+        logger.info(f"Tastytrade market data returned no spot price for {symbol}")
+        return pd.DataFrame()
+
+    candidates = tasty_chain.copy()
+    candidates["spot"] = round(spot, 2)
+    candidates["moneyness"] = candidates["strike"] / spot
+    candidates["moneyness_distance"] = (candidates["moneyness"] - 1).abs()
+    candidates = (
+        candidates.sort_values(["moneyness_distance", "dte", "option_type", "strike"])
+        .head(100)
+        .copy()
+    )
+
+    quote_symbols = candidates["contract"].dropna().astype(str).unique().tolist()
+    if not quote_symbols:
+        return pd.DataFrame()
+
+    market_data = fetch_market_data_by_type(options=quote_symbols, config=config)
+    if market_data.empty:
+        return pd.DataFrame()
+
+    merged = candidates.merge(
+        market_data,
+        left_on="contract",
+        right_on="market_symbol",
+        how="inner",
+        suffixes=("", "_market"),
+    )
+    if merged.empty:
+        return pd.DataFrame()
+
+    for col in ["volume", "open_interest", "bid", "ask", "last_price", "mark"]:
+        if col in merged.columns:
+            merged[col] = pd.to_numeric(merged[col], errors="coerce")
+
+    if "last_price" in merged.columns:
+        merged["last_price"] = merged["last_price"].fillna(merged.get("mark"))
+    if {"ask", "bid"}.issubset(merged.columns):
+        merged["spread"] = (merged["ask"] - merged["bid"]).round(3)
+        merged["spread_pct"] = (
+            merged["spread"] / merged["ask"].replace(0, np.nan) * 100
+        ).round(1)
+
+    merged.drop(columns=["moneyness_distance"], inplace=True, errors="ignore")
+    merged["data_source"] = "Tastytrade API chain + Tastytrade market data"
+    return merged
+
+
+def _fetch_tastytrade_spot(symbol: str, config) -> float | None:
+    try:
+        market_data = fetch_market_data_by_type(equities=[symbol], config=config)
+    except Exception as e:
+        logger.warning(f"Tastytrade spot fetch failed for {symbol}: {e}")
+        return None
+
+    if market_data.empty:
+        return None
+
+    row = market_data.iloc[0]
+    for col in ["last_price", "mark", "close"]:
+        value = pd.to_numeric(row.get(col), errors="coerce")
+        if pd.notna(value) and float(value) > 0:
+            return float(value)
+
+    bid = pd.to_numeric(row.get("bid"), errors="coerce")
+    ask = pd.to_numeric(row.get("ask"), errors="coerce")
+    if pd.notna(bid) and pd.notna(ask) and bid > 0 and ask > 0:
+        return float((bid + ask) / 2)
+
+    return None
 
 
 def _enrich_tasty_chain_with_yfinance_quotes(symbol: str, tasty_chain: pd.DataFrame) -> pd.DataFrame:
@@ -301,6 +391,9 @@ def _fetch_yfinance_options_data(symbols: tuple, min_volume: int, min_oi: int,
             message = f"yfinance failed for {symbol}: {e}"
             logger.warning(message)
             notes.append(message)
+            if _is_yfinance_rate_limited(e):
+                notes.append("Yahoo/yfinance rate limit detected; stopped fallback scan early")
+                break
             continue
 
     if not results:
@@ -313,6 +406,11 @@ def _fetch_yfinance_options_data(symbols: tuple, min_volume: int, min_oi: int,
 
     combined = pd.concat(results, ignore_index=True)
     return _finalize_options_frame(combined)
+
+
+def _is_yfinance_rate_limited(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "too many requests" in text or "rate limited" in text or "yfratelimiterror" in text
 
 
 def _finalize_options_frame(combined: pd.DataFrame) -> pd.DataFrame:
@@ -515,10 +613,15 @@ class OptionsLiquidityModule(FazDaneModule):
                     logger.warning(f"Failed to save options liquidity snapshot: {e}")
                     st.session_state["ol_snapshot_error"] = str(e)
 
-                # Fetch IV ranks separately
-                with st.spinner("Calculating IV Ranks…"):
-                    iv_ranks = fetch_iv_rank(symbols)
-                    st.session_state["ol_iv_ranks"] = iv_ranks
+                # Fetch IV ranks only after a successful scan to avoid adding
+                # extra Yahoo requests when providers are already throttled.
+                if not df.empty:
+                    rank_symbols = tuple(sorted(df["symbol"].dropna().unique())) if "symbol" in df.columns else symbols
+                    with st.spinner("Calculating IV Ranks..."):
+                        iv_ranks = fetch_iv_rank(rank_symbols)
+                        st.session_state["ol_iv_ranks"] = iv_ranks
+                else:
+                    st.session_state["ol_iv_ranks"] = {}
                 st.rerun()
 
         df = st.session_state["ol_results"]
@@ -828,10 +931,15 @@ class OptionsLiquidityModule(FazDaneModule):
 
     def _tab_chain(self, df: pd.DataFrame):
         st.markdown("### Options Chain Results")
+        if df.empty:
+            st.info("No contracts are available for the current scan. Run a scan or lower the sidebar filters.")
+            return
 
         fc1, fc2, fc3 = st.columns(3)
+        symbol_options = sorted(df["symbol"].dropna().unique()) if "symbol" in df.columns else []
+        sort_options = [c for c in ["volume", "open_interest", "iv_%", "spread"] if c in df.columns]
         sym_filter = fc1.multiselect(
-            "Filter Symbol", sorted(df["symbol"].unique()),
+            "Filter Symbol", symbol_options,
             key="chain_sym"
         )
         type_filter = fc2.multiselect(
@@ -839,20 +947,23 @@ class OptionsLiquidityModule(FazDaneModule):
             default=["Call", "Put"],
             key="chain_type"
         )
-        sort_col = fc3.selectbox(
-            "Sort By",
-            [c for c in ["volume", "open_interest", "iv_%", "spread"] if c in df.columns],
-            key="chain_sort"
-        )
+        sort_col = fc3.selectbox("Sort By", sort_options, key="chain_sort") if sort_options else None
 
         display = df.copy()
-        if sym_filter:
+        if sym_filter and "symbol" in display.columns:
             display = display[display["symbol"].isin(sym_filter)]
-        if type_filter:
+        if type_filter and "option_type" in display.columns:
             display = display[display["option_type"].isin(type_filter)]
-        display = display.sort_values(sort_col, ascending=False)
+        if sort_col:
+            display = display.sort_values(sort_col, ascending=False)
 
         st.markdown(f"*Showing {len(display):,} contracts*")
+        if display.empty:
+            source_status = df.attrs.get("active_data_source") or st.session_state.get("ol_active_data_source")
+            st.warning("No contracts match the table filters. Clear the symbol/type filters or widen the scan filters in the sidebar.")
+            if source_status:
+                st.caption(f"Source status: {source_status}")
+            return
 
         # Column config
         col_cfg = {}

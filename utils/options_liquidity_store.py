@@ -130,6 +130,83 @@ def get_recent_snapshots(limit: int = 10, db_path: Path = DB_PATH) -> pd.DataFra
         )
 
 
+def get_latest_contract_snapshot(
+    symbols: list[str] | tuple[str, ...],
+    min_volume: int = 0,
+    min_oi: int = 0,
+    option_types: list[str] | tuple[str, ...] | None = None,
+    exp_pref: str = "Any",
+    db_path: Path = DB_PATH,
+) -> pd.DataFrame:
+    """Return the newest saved contract rows that match the current scan filters."""
+    if not db_path.exists() or not symbols:
+        return pd.DataFrame()
+
+    symbol_list = [str(symbol).upper() for symbol in symbols if str(symbol).strip()]
+    if not symbol_list:
+        return pd.DataFrame()
+
+    placeholders = ",".join("?" for _ in symbol_list)
+    min_dte, max_dte = _expiration_bounds(exp_pref)
+    type_list = list(option_types or [])
+    type_clause = ""
+    type_params: list[str] = []
+    if type_list:
+        type_clause = f" AND option_type IN ({','.join('?' for _ in type_list)})"
+        type_params = [str(option_type) for option_type in type_list]
+
+    with sqlite3.connect(db_path) as conn:
+        latest_run = conn.execute(
+            f"""
+            SELECT run_id
+            FROM ol_contract_snapshots
+            WHERE symbol IN ({placeholders})
+            ORDER BY scan_ts DESC
+            LIMIT 1
+            """,
+            symbol_list,
+        ).fetchone()
+
+        if not latest_run:
+            return pd.DataFrame()
+
+        params = [
+            latest_run[0],
+            *symbol_list,
+            min_dte,
+            max_dte,
+            int(min_volume),
+            int(min_oi),
+            *type_params,
+        ]
+        df = pd.read_sql_query(
+            f"""
+            SELECT
+                symbol, option_type, expiration, dte, spot, strike, moneyness,
+                iv_pct, volume, open_interest, bid, ask, spread, spread_pct,
+                last_price, contract, streamer_symbol, data_source
+            FROM ol_contract_snapshots
+            WHERE run_id = ?
+              AND symbol IN ({placeholders})
+              AND dte BETWEEN ? AND ?
+              AND COALESCE(volume, 0) >= ?
+              AND COALESCE(open_interest, 0) >= ?
+              {type_clause}
+            ORDER BY volume DESC
+            """,
+            conn,
+            params=params,
+        )
+
+    if df.empty:
+        return df
+
+    df.rename(columns={"iv_pct": "iv_%"}, inplace=True)
+    df["data_source"] = "Local snapshot fallback"
+    df.attrs["active_data_source"] = f"Local snapshot fallback from {latest_run[0]}"
+    return df
+
+
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -193,6 +270,15 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             ON ol_symbol_snapshot_summary(trade_date, symbol);
         """
     )
+
+
+def _expiration_bounds(exp_pref: str) -> tuple[int, int]:
+    exp_label = str(exp_pref).lower()
+    if "weekly" in exp_label:
+        return 0, 8
+    if "monthly" in exp_label:
+        return 9, 45
+    return 0, 365
 
 
 def _prepare_contract_rows(

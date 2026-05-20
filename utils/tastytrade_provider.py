@@ -12,11 +12,11 @@ production versus sandbox endpoints.
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 import json
 import os
-from typing import Any
+from typing import Any, Iterable
 
 import pandas as pd
 import requests
@@ -83,14 +83,14 @@ class _DirectSession:
 
 
 def load_config() -> TastytradeConfig:
-    environment = os.getenv("TASTYTRADE_ENVIRONMENT", os.getenv("tastytrade_environment", "production")).strip()
+    environment = _secret("TASTYTRADE_ENVIRONMENT", "tastytrade_environment", default="production").strip()
     is_test = environment.lower() == "sandbox"
     default_base_url = SANDBOX_BASE_URL if is_test else PRODUCTION_BASE_URL
-    base_url = os.getenv("TASTYTRADE_API_BASE_URL", default_base_url).rstrip("/")
+    base_url = _secret("TASTYTRADE_API_BASE_URL", default=default_base_url).rstrip("/")
 
-    client_id = os.getenv("TT_CLIENT_ID", "").strip() or None
-    client_secret = os.getenv("TT_SECRET", "").strip() or None
-    refresh_token = os.getenv("TT_REFRESH", "").strip() or None
+    client_id = _secret("TT_CLIENT_ID").strip() or None
+    client_secret = _secret("TT_SECRET").strip() or None
+    refresh_token = _secret("TT_REFRESH").strip() or None
 
     if not client_id and refresh_token and "." in refresh_token:
         client_id = _client_id_from_refresh_token(refresh_token)
@@ -100,14 +100,14 @@ def load_config() -> TastytradeConfig:
     return TastytradeConfig(
         base_url=base_url,
         environment=environment,
-        token=os.getenv("TASTYTRADE_ACCESS_TOKEN", "").strip()
-        or os.getenv("TASTYTRADE_SESSION_TOKEN", "").strip()
+        token=_secret("TASTYTRADE_ACCESS_TOKEN").strip()
+        or _secret("TASTYTRADE_SESSION_TOKEN").strip()
         or None,
         client_id=client_id,
         client_secret=client_secret,
         refresh_token=refresh_token,
-        username=os.getenv("TASTYTRADE_USERNAME", "").strip() or None,
-        password=os.getenv("TASTYTRADE_PASSWORD", "").strip() or None,
+        username=_secret("TASTYTRADE_USERNAME").strip() or None,
+        password=_secret("TASTYTRADE_PASSWORD").strip() or None,
     )
 
 
@@ -151,12 +151,116 @@ def get_tastytrade_session(config: TastytradeConfig | None = None) -> tuple[_Dir
 def fetch_nested_option_chain(symbol: str, config: TastytradeConfig | None = None) -> pd.DataFrame:
     """Fetch equity option-chain metadata from Tastytrade."""
     config = config or load_config()
+    payload = _session_get_with_retry(config, f"/option-chains/{symbol.upper()}/nested")
+    return _nested_chain_payload_to_frame(payload, symbol)
+
+
+def fetch_market_data_by_type(
+    equities: Iterable[str] | None = None,
+    options: Iterable[str] | None = None,
+    config: TastytradeConfig | None = None,
+) -> pd.DataFrame:
+    """Fetch equity and equity-option market data from Tastytrade."""
+    config = config or load_config()
+    frames = []
+
+    for equity_chunk, option_chunk in _market_data_chunks(equities, options, limit=100):
+        params: dict[str, list[str]] = {}
+        if equity_chunk:
+            params["equity"] = equity_chunk
+        if option_chunk:
+            params["equity-option"] = option_chunk
+        if not params:
+            continue
+
+        payload = _session_get_with_retry(config, "/market-data/by-type", params=params)
+        data = payload.get("data", payload)
+        items = data.get("items", [])
+        if items:
+            frames.append(pd.DataFrame([_normalize_market_data_item(item) for item in items]))
+
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def _session_get_with_retry(
+    config: TastytradeConfig,
+    endpoint: str,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     session, error = get_tastytrade_session(config)
     if error or session is None:
         raise TastytradeProviderError(error or "Unable to create Tastytrade session.")
 
-    payload = session.get(f"/option-chains/{symbol.upper()}/nested")
-    return _nested_chain_payload_to_frame(payload, symbol)
+    try:
+        return session.get(endpoint, params=params)
+    except TastytradeProviderError as exc:
+        if _is_unauthorized(exc) and config.token and (config.client_secret or config.username):
+            clear_session_cache()
+            retry_config = replace(config, token=None)
+            session, error = get_tastytrade_session(retry_config)
+            if error or session is None:
+                raise TastytradeProviderError(
+                    f"Tastytrade token unauthorized; credential fallback failed: "
+                    f"{error or 'Unable to create Tastytrade session.'}"
+                ) from exc
+            return session.get(endpoint, params=params)
+        raise
+
+
+def _market_data_chunks(
+    equities: Iterable[str] | None,
+    options: Iterable[str] | None,
+    limit: int,
+) -> Iterable[tuple[list[str], list[str]]]:
+    equity_list = [str(symbol).upper() for symbol in equities or [] if str(symbol).strip()]
+    option_list = [str(symbol) for symbol in options or [] if str(symbol).strip()]
+
+    if equity_list:
+        yield equity_list[:limit], []
+
+    for start in range(0, len(option_list), limit):
+        yield [], option_list[start:start + limit]
+
+
+def _normalize_market_data_item(item: dict[str, Any]) -> dict[str, Any]:
+    instrument = item.get("instrument") or {}
+    return {
+        "market_symbol": item.get("symbol"),
+        "instrument_type": item.get("instrument-type") or item.get("instrument_type"),
+        "underlying_symbol": item.get("underlying-instrument") or instrument.get("underlying-instrument"),
+        "bid": _to_float(item.get("bid")),
+        "ask": _to_float(item.get("ask")),
+        "mark": _to_float(item.get("mark")),
+        "last_price": _to_float(item.get("last")),
+        "close": _to_float(item.get("close") or item.get("prev-close")),
+        "volume": _to_float(item.get("volume")),
+        "open_interest": _to_float(item.get("open-interest") or item.get("open_interest")),
+        "updated_at": item.get("updated-at") or item.get("updated_at"),
+    }
+
+
+def _secret(*names: str, default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+
+    try:
+        import streamlit as st
+
+        for name in names:
+            value = st.secrets.get(name)
+            if value:
+                return str(value)
+    except Exception:
+        pass
+
+    return default
+
+
+def _is_unauthorized(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "api error (401)" in text or "unauthorized" in text
 
 
 def _oauth_session(config: TastytradeConfig) -> tuple[_DirectSession | None, str | None]:

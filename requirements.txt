@@ -17,3 +17,4 @@ nltk
 plotly
 matplotlib
 seaborn
+openpyxl

@@ -48,6 +48,37 @@ def render_home_module_button(label: str, module_name: str, tier: int, key: str)
     if st.button(label, key=key, use_container_width=True):
         launch_module(module_name, tier)
 
+
+def refresh_live_data() -> None:
+    """Clear cached data and common module result state, then reload."""
+    st.cache_data.clear()
+    for key in [
+        "ol_results",
+        "ol_iv_ranks",
+        "ol_last_snapshot",
+        "ol_snapshot_error",
+        "ol_active_data_source",
+    ]:
+        st.session_state.pop(key, None)
+    st.rerun()
+
+
+def back_to_current_menu() -> None:
+    """Return from the active module to the matching module menu."""
+    tier1_default = "⚪ Select Live Trading Module..."
+    tier2_default = "⚪ Select Analysis Module..."
+    tier3_default = "⚪ Select Forecasting Module..."
+
+    if st.session_state.get("tier1_module_nav") and st.session_state.get("tier1_module_nav") != tier1_default:
+        st.session_state["pending_nav"] = {"action": "clear_tier", "tier": 1}
+    elif st.session_state.get("tier2_nav") and st.session_state.get("tier2_nav") != tier2_default:
+        st.session_state["pending_nav"] = {"action": "clear_tier", "tier": 2}
+    elif st.session_state.get("tier3_nav") and st.session_state.get("tier3_nav") != tier3_default:
+        st.session_state["pending_nav"] = {"action": "clear_tier", "tier": 3}
+    else:
+        st.session_state["active_menu_tier"] = st.session_state.get("active_menu_tier", 1)
+    st.rerun()
+
 # ══════════════════════════════════════════════════════════════════════
 # GLOBAL CSS — FazDane Analytics Brand
 # Colors: navy #0d1b2e, blue #1a3a8f, green #3ab54a
@@ -153,6 +184,13 @@ st.markdown(
             font-weight: 600 !important;
             line-height: 1.25 !important;
         }
+        [data-testid="stSidebar"] [data-testid="column"] .stButton > button {
+            min-height: 34px;
+            padding: 6px 4px !important;
+            font-size: 12px !important;
+            line-height: 1.15 !important;
+            white-space: nowrap;
+        }
         [data-testid="stSidebar"] [data-testid="stExpander"] summary {
             min-height: 34px;
             padding: 7px 8px !important;
@@ -176,6 +214,16 @@ st.markdown(
         }
         [data-testid="stSidebar"] .stRadio label:hover { background: rgba(58,181,74,0.12) !important; }
         [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p { color: #94a3b8 !important; }
+        [data-testid="stSidebar"] [data-testid="stExpander"] {
+            background: rgba(13,27,46,0.24);
+            border: 1px solid rgba(30,58,95,0.72);
+            border-radius: 10px;
+            margin-bottom: 8px;
+            overflow: hidden;
+        }
+        [data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
+            background: rgba(26,58,143,0.18) !important;
+        }
 
         /* Main content */
         .stMainBlockContainer { background: #0d1b2e !important; padding-top: 0.75rem; }
@@ -226,9 +274,66 @@ st.markdown(
         .stTabs [data-baseweb="tab"][aria-selected="true"] p { color: #3ab54a !important; }
 
         /* Dataframe */
-        [data-testid="stDataFrameContainer"] { border: 1px solid #1e3a5f; border-radius: 10px; }
-        [data-testid="stDataFrameContainer"] th { background: #152847 !important; color: #94a3b8 !important; }
-        [data-testid="stDataFrameContainer"] td { color: #e2e8f0 !important; }
+        [data-testid="stDataFrameContainer"] {
+            background: #0b1628 !important;
+            border: 1px solid #1e3a5f;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        [data-testid="stDataFrameContainer"] *,
+        [data-testid="stDataFrame"] *,
+        .stDataFrame *,
+        .stTable * {
+            color: #e2e8f0 !important;
+        }
+        [data-testid="stDataFrameContainer"] > div,
+        [data-testid="stDataFrameContainer"] section,
+        [data-testid="stDataFrame"] > div,
+        .stDataFrame > div {
+            background-color: #0b1628 !important;
+        }
+        [data-testid="stDataFrameContainer"] canvas {
+            background-color: transparent !important;
+        }
+        [data-testid="stDataFrameContainer"] th,
+        [data-testid="stDataFrameContainer"] thead tr,
+        [data-testid="stDataFrame"] th,
+        .stDataFrame th,
+        .stTable th {
+            background: #152847 !important;
+            color: #94a3b8 !important;
+        }
+        [data-testid="stDataFrameContainer"] td,
+        [data-testid="stDataFrame"] td,
+        .stDataFrame td,
+        .stTable td {
+            background: #0b1628 !important;
+            color: #e2e8f0 !important;
+            border-color: #1e3a5f !important;
+        }
+        [data-testid="stDataFrameContainer"] tbody tr:nth-child(even) td,
+        [data-testid="stDataFrame"] tbody tr:nth-child(even) td,
+        .stDataFrame tbody tr:nth-child(even) td,
+        .stTable tbody tr:nth-child(even) td {
+            background: #0d1b2e !important;
+        }
+
+        /* Pandas Styler / markdown tables */
+        table {
+            background: #0b1628 !important;
+            color: #e2e8f0 !important;
+            border-color: #1e3a5f !important;
+        }
+        table th {
+            background: #152847 !important;
+            color: #94a3b8 !important;
+            border-color: #1e3a5f !important;
+        }
+        table td {
+            background: #0b1628 !important;
+            color: #e2e8f0 !important;
+            border-color: #1e3a5f !important;
+        }
 
         /* Misc */
         .stMarkdown em, .stCaption { color: #94a3b8 !important; }
@@ -347,7 +452,26 @@ with st.sidebar:
 
     st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
-    # User badge
+    st.markdown(
+        """
+        <div style="color:#94a3b8;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;margin:2px 0 8px 0;">
+            Workspace
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    top_nav_col1, top_nav_col2, top_nav_col3 = st.columns(3)
+    with top_nav_col1:
+        if st.button("Home", use_container_width=True, key="home_dashboard_top_nav"):
+            st.session_state["pending_nav"] = {"action": "home"}
+            st.rerun()
+    with top_nav_col2:
+        if st.button("Menu", use_container_width=True, key="back_to_menu_top_nav"):
+            back_to_current_menu()
+    with top_nav_col3:
+        if st.button("Refresh", use_container_width=True, key="refresh_data_nav"):
+            refresh_live_data()
+
     role_color = "#3ab54a" if user["role"] == "admin" else "#93c5fd"
     st.markdown(
         f"""
@@ -356,9 +480,9 @@ with st.sidebar:
             border:1px solid #1e3a5f;
             border-radius:8px;
             padding:10px 14px;
-            margin-bottom:12px;
+            margin:10px 0 12px 0;
         ">
-            <div style="color:#e2e8f0;font-weight:600;font-size:14px;">👤 {user['display_name']}</div>
+            <div style="color:#e2e8f0;font-weight:600;font-size:14px;">{user['display_name']}</div>
             <div style="color:{role_color};font-size:11px;text-transform:uppercase;letter-spacing:1px;">{user['role']}</div>
             <div style="color:#475569;font-size:11px;margin-top:2px;">Since {user['login_time']}</div>
         </div>
@@ -368,12 +492,15 @@ with st.sidebar:
 
     st.divider()
 
-    # ── Tier 1: Live Trading ──────────────────────────────────────────
-    if st.button("🏠 Home Dashboard", use_container_width=True, key="home_dashboard_nav"):
-        st.session_state["pending_nav"] = {"action": "home"}
-        st.rerun()
-
-    with st.expander("🔥 Live Trading", expanded=False):
+    st.markdown(
+        """
+        <div style="color:#3ab54a;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;margin:2px 0 8px 0;">
+            Modules
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.expander("🔥 Live Trading", expanded=True):
         st.markdown(
         "<div style='color:#3ab54a;font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;'>🔥 Live Trading</div>",
         unsafe_allow_html=True,

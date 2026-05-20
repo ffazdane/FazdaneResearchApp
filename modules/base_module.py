@@ -84,25 +84,6 @@ class FazDaneModule(ABC):
             self.render_sidebar()
             st.divider()
 
-            # Navigation controls
-            st.markdown(
-                "<div style='color:#64748b;font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;'>Navigation</div>",
-                unsafe_allow_html=True,
-            )
-            nav_col1, nav_col2 = st.columns(2)
-            with nav_col1:
-                if st.button(self._back_button_label(), use_container_width=True, help="Return to the module menu"):
-                    self._clear_current_tier_selection()
-                    st.rerun()
-            with nav_col2:
-                if st.button("Home", use_container_width=True, help="Return to dashboard"):
-                    self._clear_all_navigation()
-                    st.rerun()
-
-            if st.button("Refresh Data", use_container_width=True, help="Clear cache and reload this module"):
-                st.cache_data.clear()
-                st.rerun()
-
         # Main content
         try:
             self.render_main()
