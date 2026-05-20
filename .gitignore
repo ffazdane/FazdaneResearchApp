@@ -23,6 +23,11 @@ env/
 # Logs
 logs/*.log
 
+# Local research data repositories
+data/options_liquidity/*.sqlite
+data/options_liquidity/*.sqlite-*
+data/options_liquidity/exports/
+
 # IDE
 .vscode/
 .idea/

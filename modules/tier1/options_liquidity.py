@@ -15,6 +15,7 @@ import logging
 from modules.base_module import FazDaneModule
 from utils.tastytrade_provider import TastytradeProviderError, fetch_nested_option_chain, load_config
 from utils.universe_manager import render_universe_manager
+from utils.options_liquidity_store import get_recent_snapshots, save_options_snapshot
 
 logger = logging.getLogger("OptionsLiquidity")
 
@@ -467,6 +468,13 @@ class OptionsLiquidityModule(FazDaneModule):
                         "No matching contracts; provider returned no displayable rows",
                     )
                 st.session_state["ol_active_data_source"] = sources
+                try:
+                    snapshot = save_options_snapshot(df, params, sources)
+                    st.session_state["ol_last_snapshot"] = snapshot
+                    st.session_state.pop("ol_snapshot_error", None)
+                except Exception as e:
+                    logger.warning(f"Failed to save options liquidity snapshot: {e}")
+                    st.session_state["ol_snapshot_error"] = str(e)
 
                 # Fetch IV ranks separately
                 with st.spinner("Calculating IV Ranks…"):
@@ -495,6 +503,14 @@ class OptionsLiquidityModule(FazDaneModule):
         if "data_source" in df.columns:
             sources = ", ".join(sorted(df["data_source"].dropna().unique()))
             st.caption(f"Data source: {sources}")
+        snapshot = st.session_state.get("ol_last_snapshot")
+        if snapshot:
+            st.caption(
+                f"Saved local snapshot {snapshot['run_id']} "
+                f"({snapshot['row_count']:,} rows) to {snapshot['db_path']}"
+            )
+        elif st.session_state.get("ol_snapshot_error"):
+            st.warning(f"Snapshot save failed: {st.session_state['ol_snapshot_error']}")
 
         st.divider()
 
@@ -505,8 +521,8 @@ class OptionsLiquidityModule(FazDaneModule):
             st.divider()
 
         # ── Tabs ─────────────────────────────────────────────────────
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(
-            ["Volume Heatmap", "Ticker Drilldown", "Options Chain", "Analytics", "IV Landscape"]
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+            ["Volume Heatmap", "Ticker Drilldown", "Options Chain", "Analytics", "IV Landscape", "Snapshots"]
         )
 
         with tab1:
@@ -523,6 +539,9 @@ class OptionsLiquidityModule(FazDaneModule):
 
         with tab5:
             self._tab_iv_landscape(df, valid_ranks)
+
+        with tab6:
+            self._tab_snapshots()
 
     # ── IV Rank Banner ─────────────────────────────────────────────────
 
@@ -967,6 +986,32 @@ class OptionsLiquidityModule(FazDaneModule):
             st.plotly_chart(fig2, use_container_width=True)
 
     # ── Welcome state ──────────────────────────────────────────────────
+
+    def _tab_snapshots(self):
+        st.markdown("### Local Snapshot Repository")
+        recent = get_recent_snapshots(limit=25)
+        if recent.empty:
+            st.info("No local snapshots have been saved yet.")
+            return
+
+        latest = recent.iloc[0]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Saved Runs", f"{len(recent):,}")
+        c2.metric("Latest Rows", f"{int(latest['row_count']):,}")
+        c3.metric("Latest Date", str(latest["trade_date"]))
+
+        st.dataframe(
+            recent,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "run_id": st.column_config.TextColumn("Run ID"),
+                "scan_ts": st.column_config.TextColumn("Scan Time"),
+                "trade_date": st.column_config.TextColumn("Trade Date"),
+                "row_count": st.column_config.NumberColumn("Rows", format="%d"),
+                "data_source": st.column_config.TextColumn("Data Source"),
+            },
+        )
 
     def _render_welcome(self):
         st.markdown(
