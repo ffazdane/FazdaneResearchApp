@@ -54,6 +54,10 @@ def week_of_month(date):
     if d <= 28: return "Week4"
     return "Week5"
 
+def calendar_week_of_month(date):
+    first_day = date.replace(day=1)
+    return f"Week{((date.day + first_day.weekday() - 1) // 7) + 1}"
+
 def compounded(series):
     s = series.dropna()
     if len(s) == 0: return np.nan
@@ -260,25 +264,43 @@ class MarketStructureModule(FazDaneModule):
         drilldown["ReturnPct"] = drilldown["Return"] * 100
         drilldown["DayOfMonth"] = drilldown["Date"].dt.day
         drilldown["DateLabel"] = drilldown["Date"].dt.strftime("%b %d")
+        drilldown["CalendarWeek"] = drilldown["Date"].apply(calendar_week_of_month)
         drilldown = drilldown.sort_values("Date")
 
-        date_labels = drilldown["DateLabel"].tolist()
+        calendar_week_order = [f"Week{i}" for i in range(1, 7)]
+        active_weeks = [week for week in calendar_week_order if week in drilldown["CalendarWeek"].unique()]
         daily_matrix = (
-            drilldown.pivot_table(index="DateLabel", columns="Day", values="ReturnPct", aggfunc="first")
-            .reindex(index=date_labels, columns=DOW_ORDER)
+            drilldown.pivot_table(index="CalendarWeek", columns="Day", values="ReturnPct", aggfunc="first")
+            .reindex(index=active_weeks, columns=DOW_ORDER)
+        )
+        date_matrix = (
+            drilldown.pivot_table(index="CalendarWeek", columns="Day", values="DateLabel", aggfunc="first")
+            .reindex(index=active_weeks, columns=DOW_ORDER)
         )
         daily_matrix["Total %"] = (
-            drilldown.groupby("DateLabel")["ReturnPct"]
-            .first()
-            .reindex(date_labels)
+            drilldown.groupby("CalendarWeek")["Return"]
+            .apply(compounded)
+            .mul(100)
+            .reindex(active_weeks)
         )
         weekday_summary = matrix if seg_order == DOW_ORDER else build_matrix(df, "Day", DOW_ORDER, self.view)
         total_row = weekday_summary.reindex(index=[selected_month], columns=DOW_ORDER).iloc[0]
         total_row["Total %"] = m_total.reindex([selected_month]).iloc[0]
         daily_matrix.loc["Total %"] = total_row
-        daily_text = daily_matrix.apply(
-            lambda column: column.map(lambda value: f"{value:.2f}{value_suffix}" if np.isfinite(value) else "")
-        )
+        row_labels = [week.replace("Week", "Week ") for week in active_weeks] + ["Total %"]
+        daily_matrix.index = row_labels
+        date_matrix.index = row_labels[:-1]
+        daily_text = daily_matrix.copy().astype(object)
+        for row_label in row_labels:
+            for column_label in daily_matrix.columns:
+                value = daily_matrix.loc[row_label, column_label]
+                if not np.isfinite(value):
+                    daily_text.loc[row_label, column_label] = ""
+                elif row_label == "Total %" or column_label == "Total %":
+                    daily_text.loc[row_label, column_label] = f"Total {value:.2f}{value_suffix}"
+                else:
+                    date_label = date_matrix.loc[row_label, column_label]
+                    daily_text.loc[row_label, column_label] = f"{date_label} {value:+.2f}%"
 
         drilldown_fig = go.Figure(
             data=go.Heatmap(
@@ -309,17 +331,85 @@ class MarketStructureModule(FazDaneModule):
                     font=dict(size=16, color="#111827", family="Arial Black"),
                 )
         drilldown_fig.update_layout(
-            title=f"{self.asset_label} - Daily Return Heatmap by Weekday - {selected_month} {self.year}",
+            title=f"{self.asset_label} - Monthly Drill Down by Weekday - {selected_month} {self.year}",
             title_font=dict(size=20, color="#3ab54a", family="Arial Black"),
             paper_bgcolor="#0d1b2e",
             plot_bgcolor="#0d1b2e",
             font=dict(color="#e2e8f0", size=16, family="Arial Black"),
-            height=max(520, 32 * (len(daily_matrix.index) + 1)),
+            height=max(520, 72 * (len(daily_matrix.index) + 1)),
             margin=dict(l=0, r=0, t=135, b=80),
             xaxis=dict(side="top", tickangle=0, gridcolor="#1e3a5f", tickfont=dict(size=15, color="#e2e8f0", family="Arial Black")),
             yaxis=dict(autorange="reversed", gridcolor="#1e3a5f", tickfont=dict(size=15, color="#94a3b8", family="Arial Black")),
         )
-        drilldown_fig.add_hline(y=len(daily_matrix.index) - 1.5, line_width=2, line_color="#cbd5e1")
-        drilldown_fig.add_vline(x=len(DOW_ORDER) - 0.5, line_width=2, line_color="#cbd5e1")
+        drilldown_fig.add_hline(y=len(daily_matrix.index) - 1.5, line_width=4, line_color="#000000")
+        drilldown_fig.add_vline(x=len(DOW_ORDER) - 0.5, line_width=4, line_color="#000000")
 
         st.plotly_chart(drilldown_fig, use_container_width=True)
+
+        month_total_value = m_total.reindex([selected_month]).iloc[0]
+        best_day = drilldown.loc[drilldown["ReturnPct"].idxmax()]
+        worst_day = drilldown.loc[drilldown["ReturnPct"].idxmin()]
+        positive_days = int((drilldown["ReturnPct"] > 0).sum())
+        negative_days = int((drilldown["ReturnPct"] < 0).sum())
+        best_week = (
+            drilldown.groupby("CalendarWeek")["Return"]
+            .apply(compounded)
+            .mul(100)
+            .idxmax()
+        )
+        best_day_label = f"{best_day['Date'].strftime('%b')} {best_day['Date'].day}"
+        worst_day_label = f"{worst_day['Date'].strftime('%b')} {worst_day['Date'].day}"
+        best_week_date = drilldown.loc[drilldown["CalendarWeek"] == best_week, "Date"].min()
+        best_week_start = f"{best_week_date.strftime('%b')} {best_week_date.day}"
+        total_color = "#86efac" if month_total_value >= 0 else "#fb7185"
+
+        st.markdown(
+            f"""
+            <div style="
+                display: grid;
+                grid-template-columns: 1.35fr repeat(5, minmax(120px, 1fr));
+                gap: 14px;
+                margin-top: 18px;
+                padding: 14px;
+                border: 1px solid #1e3a5f;
+                border-radius: 10px;
+                background: #071426;
+            ">
+                <div style="
+                    min-height: 124px;
+                    padding: 22px;
+                    border: 2px solid #22c55e;
+                    border-radius: 9px;
+                    background: #052317;
+                    color: #e2e8f0;
+                    box-shadow: inset 0 0 24px rgba(34, 197, 94, 0.14);
+                ">
+                    <div style="font-size: 20px; font-weight: 800;">{self.symbol} {selected_month} {self.year}</div>
+                    <div style="font-size: 52px; line-height: 1.1; font-weight: 900; color: {total_color};">{month_total_value:+.2f}%</div>
+                </div>
+                <div style="min-height: 124px; padding: 18px; border: 1px solid #263f63; border-radius: 9px; background: #0a1b2f; color: #e2e8f0;">
+                    <div style="font-size: 17px; font-weight: 800;">Best Day</div>
+                    <div style="font-size: 28px; font-weight: 900; color: #86efac;">{best_day_label}</div>
+                    <div style="font-size: 25px; font-weight: 900; color: #86efac;">{best_day["ReturnPct"]:+.2f}%</div>
+                </div>
+                <div style="min-height: 124px; padding: 18px; border: 1px solid #263f63; border-radius: 9px; background: #0a1b2f; color: #e2e8f0;">
+                    <div style="font-size: 17px; font-weight: 800;">Worst Day</div>
+                    <div style="font-size: 28px; font-weight: 900; color: #fb7185;">{worst_day_label}</div>
+                    <div style="font-size: 25px; font-weight: 900; color: #fb7185;">{worst_day["ReturnPct"]:+.2f}%</div>
+                </div>
+                <div style="min-height: 124px; padding: 18px; border: 1px solid #263f63; border-radius: 9px; background: #0a1b2f; color: #e2e8f0;">
+                    <div style="font-size: 17px; font-weight: 800;">Positive Days</div>
+                    <div style="font-size: 54px; line-height: 1.15; font-weight: 900; color: #86efac;">{positive_days}</div>
+                </div>
+                <div style="min-height: 124px; padding: 18px; border: 1px solid #263f63; border-radius: 9px; background: #0a1b2f; color: #e2e8f0;">
+                    <div style="font-size: 17px; font-weight: 800;">Negative Days</div>
+                    <div style="font-size: 54px; line-height: 1.15; font-weight: 900; color: #fb7185;">{negative_days}</div>
+                </div>
+                <div style="min-height: 124px; padding: 18px; border: 1px solid #263f63; border-radius: 9px; background: #0a1b2f; color: #e2e8f0;">
+                    <div style="font-size: 17px; font-weight: 800;">Best Week</div>
+                    <div style="font-size: 25px; line-height: 1.25; font-weight: 900; color: #38bdf8;">Week of<br>{best_week_start}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
