@@ -250,6 +250,7 @@ class OptionSearchModule(FazDaneModule):
         if summary.empty:
             st.info("No ticker summary is available.")
             return
+        self._render_summary_visuals(summary)
         st.dataframe(
             summary,
             use_container_width=True,
@@ -263,6 +264,117 @@ class OptionSearchModule(FazDaneModule):
                 "median_spread": st.column_config.NumberColumn("Median Spread $", format="$%.2f"),
             },
         )
+
+    def _render_summary_visuals(self, summary: pd.DataFrame):
+        required = {"symbol", "top_strike", "total_volume", "median_spread_pct", "top_type"}
+        if not required.issubset(summary.columns):
+            return
+
+        plot_df = summary.copy()
+        numeric_cols = [
+            "spot",
+            "top_strike",
+            "total_volume",
+            "max_contract_volume",
+            "median_spread_pct",
+            "call_volume",
+            "put_volume",
+        ]
+        for col in numeric_cols:
+            if col in plot_df.columns:
+                plot_df[col] = pd.to_numeric(plot_df[col], errors="coerce")
+
+        plot_df = (
+            plot_df.dropna(subset=["symbol", "top_strike", "total_volume"])
+            .sort_values(["total_volume", "median_spread_pct"], ascending=[False, True])
+            .head(25)
+        )
+        if plot_df.empty:
+            return
+
+        st.markdown("#### Strike Volume Signal Board")
+        left, right = st.columns([2, 1])
+
+        hover_cols = [
+            col
+            for col in [
+                "symbol",
+                "spot",
+                "top_type",
+                "top_expiration",
+                "top_strike",
+                "total_volume",
+                "max_contract_volume",
+                "median_spread_pct",
+                "call_volume",
+                "put_volume",
+            ]
+            if col in plot_df.columns
+        ]
+        with left:
+            st.caption("Most active strike by ticker. Bubble size is total option volume; color shows spread quality.")
+            fig = px.scatter(
+                plot_df,
+                x="symbol",
+                y="top_strike",
+                size="total_volume",
+                color="median_spread_pct",
+                symbol="top_type",
+                color_continuous_scale=["#3ab54a", "#f59e0b", "#ef4444"],
+                hover_data=hover_cols,
+                labels={
+                    "symbol": "Ticker",
+                    "top_strike": "Top Strike",
+                    "total_volume": "Total Volume",
+                    "median_spread_pct": "Spread %",
+                    "top_type": "Top Side",
+                },
+            )
+            fig.update_traces(marker=dict(line=dict(width=1, color="#e2e8f0"), opacity=0.84))
+            fig.update_layout(
+                paper_bgcolor="#0d1b2e",
+                plot_bgcolor="#152847",
+                font=dict(color="#e2e8f0", family="Inter"),
+                xaxis=dict(gridcolor="#1e3a5f", title=dict(text="Ticker", standoff=14), tickangle=-35),
+                yaxis=dict(gridcolor="#1e3a5f", title=dict(text="Most Active Strike", standoff=18)),
+                margin=dict(l=72, r=18, t=12, b=86),
+                height=430,
+                legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="left", x=0),
+                coloraxis_colorbar=dict(title=dict(text="Spread %"), len=0.78, y=0.58),
+            )
+            st.plotly_chart(fig, use_container_width=True, key="os_summary_strike_volume_board")
+
+        with right:
+            if {"symbol", "call_volume", "put_volume"}.issubset(plot_df.columns):
+                st.caption("Call versus put volume for the same top tickers.")
+                balance = plot_df[["symbol", "call_volume", "put_volume"]].melt(
+                    id_vars="symbol",
+                    value_vars=["call_volume", "put_volume"],
+                    var_name="side",
+                    value_name="volume",
+                )
+                balance["side"] = balance["side"].map({"call_volume": "Call", "put_volume": "Put"})
+                fig2 = px.bar(
+                    balance,
+                    x="volume",
+                    y="symbol",
+                    color="side",
+                    orientation="h",
+                    barmode="stack",
+                    color_discrete_map={"Call": "#3ab54a", "Put": "#ef4444"},
+                    labels={"symbol": "Ticker", "volume": "Volume", "side": "Side"},
+                )
+                fig2.update_layout(
+                    paper_bgcolor="#0d1b2e",
+                    plot_bgcolor="#152847",
+                    font=dict(color="#e2e8f0", family="Inter"),
+                    xaxis=dict(gridcolor="#1e3a5f", title=dict(text="Volume", standoff=12)),
+                    yaxis=dict(gridcolor="#1e3a5f", title=""),
+                    margin=dict(l=58, r=8, t=12, b=82),
+                    height=430,
+                    legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="left", x=0),
+                )
+                st.plotly_chart(fig2, use_container_width=True, key="os_summary_call_put_balance")
 
     def _render_contracts(self, df: pd.DataFrame):
         st.markdown("### Matching Contracts")

@@ -37,11 +37,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger("FazDaneApp")
 
+TIER1_DEFAULT = "Select Live Trading Module..."
+TIER2_DEFAULT = "Select Analysis Module..."
+TIER3_DEFAULT = "Select Forecasting Module..."
+
 
 def launch_module(module_name: str, tier: int) -> None:
     st.session_state.pop("active_menu_tier", None)
     st.session_state["pending_nav"] = {"module": module_name, "tier": tier}
     st.rerun()
+
+
+def select_sidebar_tier(tier: int) -> None:
+    """Keep sidebar radios mutually exclusive so every module link opens."""
+    if tier == 1 and st.session_state.get("tier1_module_nav") != TIER1_DEFAULT:
+        st.session_state["tier2_nav"] = TIER2_DEFAULT
+        st.session_state["tier3_nav"] = TIER3_DEFAULT
+        st.session_state.pop("active_menu_tier", None)
+    elif tier == 2 and st.session_state.get("tier2_nav") != TIER2_DEFAULT:
+        st.session_state["tier1_module_nav"] = TIER1_DEFAULT
+        st.session_state["tier3_nav"] = TIER3_DEFAULT
+        st.session_state.pop("active_menu_tier", None)
+    elif tier == 3 and st.session_state.get("tier3_nav") != TIER3_DEFAULT:
+        st.session_state["tier1_module_nav"] = TIER1_DEFAULT
+        st.session_state["tier2_nav"] = TIER2_DEFAULT
+        st.session_state.pop("active_menu_tier", None)
 
 
 def render_home_module_button(label: str, module_name: str, tier: int, key: str) -> None:
@@ -65,15 +85,11 @@ def refresh_live_data() -> None:
 
 def back_to_current_menu() -> None:
     """Return from the active module to the matching module menu."""
-    tier1_default = "Select Live Trading Module..."
-    tier2_default = "Select Analysis Module..."
-    tier3_default = "Select Forecasting Module..."
-
-    if st.session_state.get("tier1_module_nav") and st.session_state.get("tier1_module_nav") != tier1_default:
+    if st.session_state.get("tier1_module_nav") and st.session_state.get("tier1_module_nav") != TIER1_DEFAULT:
         st.session_state["pending_nav"] = {"action": "clear_tier", "tier": 1}
-    elif st.session_state.get("tier2_nav") and st.session_state.get("tier2_nav") != tier2_default:
+    elif st.session_state.get("tier2_nav") and st.session_state.get("tier2_nav") != TIER2_DEFAULT:
         st.session_state["pending_nav"] = {"action": "clear_tier", "tier": 2}
-    elif st.session_state.get("tier3_nav") and st.session_state.get("tier3_nav") != tier3_default:
+    elif st.session_state.get("tier3_nav") and st.session_state.get("tier3_nav") != TIER3_DEFAULT:
         st.session_state["pending_nav"] = {"action": "clear_tier", "tier": 3}
     else:
         st.session_state["active_menu_tier"] = st.session_state.get("active_menu_tier", 1)
@@ -411,33 +427,33 @@ if pending_nav:
     module_name = pending_nav.get("module")
     tier = pending_nav.get("tier")
     if action == "home":
-        st.session_state["tier1_module_nav"] = "Select Live Trading Module..."
-        st.session_state["tier2_nav"] = "Select Analysis Module..."
-        st.session_state["tier3_nav"] = "Select Forecasting Module..."
+        st.session_state["tier1_module_nav"] = TIER1_DEFAULT
+        st.session_state["tier2_nav"] = TIER2_DEFAULT
+        st.session_state["tier3_nav"] = TIER3_DEFAULT
         st.session_state.pop("active_menu_tier", None)
     elif action == "clear_tier" and tier == 1:
-        st.session_state["tier1_module_nav"] = "Select Live Trading Module..."
+        st.session_state["tier1_module_nav"] = TIER1_DEFAULT
         st.session_state["active_menu_tier"] = 1
     elif action == "clear_tier" and tier == 2:
-        st.session_state["tier2_nav"] = "Select Analysis Module..."
+        st.session_state["tier2_nav"] = TIER2_DEFAULT
         st.session_state["active_menu_tier"] = 2
     elif action == "clear_tier" and tier == 3:
-        st.session_state["tier3_nav"] = "Select Forecasting Module..."
+        st.session_state["tier3_nav"] = TIER3_DEFAULT
         st.session_state["active_menu_tier"] = 3
     elif tier == 1:
         st.session_state.pop("active_menu_tier", None)
         st.session_state["tier1_module_nav"] = module_name
-        st.session_state["tier2_nav"] = "Select Analysis Module..."
-        st.session_state["tier3_nav"] = "Select Forecasting Module..."
+        st.session_state["tier2_nav"] = TIER2_DEFAULT
+        st.session_state["tier3_nav"] = TIER3_DEFAULT
     elif tier == 2:
         st.session_state.pop("active_menu_tier", None)
-        st.session_state["tier1_module_nav"] = "Select Live Trading Module..."
+        st.session_state["tier1_module_nav"] = TIER1_DEFAULT
         st.session_state["tier2_nav"] = module_name
-        st.session_state["tier3_nav"] = "Select Forecasting Module..."
+        st.session_state["tier3_nav"] = TIER3_DEFAULT
     elif tier == 3:
         st.session_state.pop("active_menu_tier", None)
-        st.session_state["tier1_module_nav"] = "Select Live Trading Module..."
-        st.session_state["tier2_nav"] = "Select Analysis Module..."
+        st.session_state["tier1_module_nav"] = TIER1_DEFAULT
+        st.session_state["tier2_nav"] = TIER2_DEFAULT
         st.session_state["tier3_nav"] = module_name
 
 with st.sidebar:
@@ -507,7 +523,7 @@ with st.sidebar:
         )
 
         tier1_options = [
-        "Select Live Trading Module...",
+        TIER1_DEFAULT,
         "Options Liquidity Discovery",
         "Market Breadth Dashboard",
         "Calendar Strategy Matrix",
@@ -519,7 +535,12 @@ with st.sidebar:
             tier1_options.insert(1, "Option Search: High Volume Low Spread")
 
         tier1_sel = st.radio(
-            "tier1", tier1_options, key="tier1_module_nav", label_visibility="collapsed"
+            "tier1",
+            tier1_options,
+            key="tier1_module_nav",
+            label_visibility="collapsed",
+            on_change=select_sidebar_tier,
+            args=(1,),
         )
 
     st.divider()
@@ -527,7 +548,7 @@ with st.sidebar:
     #  Tier 2: Analysis
     with st.expander("Analysis & Intelligence", expanded=False):
         tier2_options = [
-            "Select Analysis Module...",
+            TIER2_DEFAULT,
             "Multi-Timeframe Money Flow",
             "Market Structure Heatmap",
             "Correlation Matrix",
@@ -535,20 +556,31 @@ with st.sidebar:
             "Equity Income Statement",
             "Equity / Index Seasonality",
             "Stock Sentiment Analysis",
+            "Social Stock Stories",
         ]
         tier2_sel = st.radio(
-            "tier2", tier2_options, key="tier2_nav", label_visibility="collapsed"
+            "tier2",
+            tier2_options,
+            key="tier2_nav",
+            label_visibility="collapsed",
+            on_change=select_sidebar_tier,
+            args=(2,),
         )
 
     #  Tier 3: Forecasting
     with st.expander("Forecasting & Cycles", expanded=False):
         tier3_options = [
-            "Select Forecasting Module...",
+            TIER3_DEFAULT,
             "Bradley Siderograph",
             "Elliott Wave Analysis",
         ]
         tier3_sel = st.radio(
-            "tier3", tier3_options, key="tier3_nav", label_visibility="collapsed"
+            "tier3",
+            tier3_options,
+            key="tier3_nav",
+            label_visibility="collapsed",
+            on_change=select_sidebar_tier,
+            args=(3,),
         )
 
     st.divider()
@@ -563,7 +595,7 @@ with st.sidebar:
 #
 
 # Determine which module is active  tier1 takes precedence
-if tier1_sel and tier1_sel != "Select Live Trading Module...":
+if tier1_sel and tier1_sel != TIER1_DEFAULT:
     active_module = tier1_sel
 elif st.session_state.get("tier2_nav") and st.session_state.get("tier2_nav") != tier2_options[0]:
     active_module = st.session_state.get("tier2_nav")
@@ -707,6 +739,12 @@ elif active_module == "Stock Sentiment Analysis":
     module.run()
     logger.info(f"Stock Sentiment Analysis")
 
+elif active_module == "Social Stock Stories":
+    from modules.tier2.social_stock_stories import SocialStockStoriesModule
+    module = SocialStockStoriesModule()
+    module.run()
+    logger.info("Social Stock Stories")
+
 elif "Bradley Siderograph" in active_module:
     from modules.tier3.bradley_siderograph import BradleySiderographModule
     module = BradleySiderographModule()
@@ -786,6 +824,7 @@ else:
                 {"label": "Equity Income Statement", "module": "Equity Income Statement", "tier": 2, "key": "macro_income_statement"},
                 {"label": "Equity / Index Seasonality", "module": "Equity / Index Seasonality", "tier": 2, "key": "macro_seasonality"},
                 {"label": "Stock Sentiment Analysis", "module": "Stock Sentiment Analysis", "tier": 2, "key": "macro_sentiment"},
+                {"label": "Social Stock Stories", "module": "Social Stock Stories", "tier": 2, "key": "macro_social_stories"},
             ],
         },
         {
