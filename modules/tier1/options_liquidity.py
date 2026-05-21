@@ -47,41 +47,53 @@ def fetch_options_data(symbols: tuple, min_volume: int, min_oi: int,
                        option_types: tuple, exp_pref: str) -> pd.DataFrame:
     """
     Scan options chains for each symbol and return filtered results.
-    Tastytrade is preferred for option-chain metadata; yfinance remains the
-    fallback and quote/liquidity enrichment source when needed.
+    Tastytrade and yfinance are evaluated for data completeness at scan time.
+    The source with the better usable field coverage is selected for display.
     Cached for 5 minutes.
     """
-    fallback_notes = []
+    source_notes = []
     try:
         tasty_df = _fetch_tastytrade_options_data(symbols, min_volume, min_oi, option_types, exp_pref)
     except Exception as e:
         tasty_df = pd.DataFrame()
-        tasty_df.attrs["active_data_source"] = f"Tastytrade failed before fallback: {e}"
-        fallback_notes.append(tasty_df.attrs["active_data_source"])
+        tasty_df.attrs["active_data_source"] = f"Tastytrade failed: {e}"
 
-    if not tasty_df.empty:
-        return tasty_df
+    tasty_status = tasty_df.attrs.get("active_data_source", "Tastytrade unavailable")
+    source_notes.append(tasty_status)
+    tasty_quality = _score_options_source(tasty_df)
+    should_check_yahoo = tasty_df.empty or not tasty_quality["has_iv"] or tasty_quality["score"] < 8
 
-    tasty_status = tasty_df.attrs.get("active_data_source", "Tastytrade unavailable or returned no matching contracts")
-    fallback_notes.append(tasty_status)
-    logger.info(f"{tasty_status}; falling back to yfinance.")
-    fallback_df = _fetch_yfinance_options_data(symbols, min_volume, min_oi, option_types, exp_pref)
-    fallback_status = fallback_df.attrs.get("active_data_source")
-    if fallback_status:
-        fallback_notes.append(fallback_status)
+    yahoo_df = pd.DataFrame()
+    if should_check_yahoo:
+        logger.info(f"{tasty_status}; checking yfinance data quality.")
+        yahoo_df = _fetch_yfinance_options_data(symbols, min_volume, min_oi, option_types, exp_pref)
+        yahoo_status = yahoo_df.attrs.get("active_data_source", "yfinance unavailable")
+        source_notes.append(yahoo_status)
 
-    if fallback_df.empty:
+    selected_df, selected_source = _select_best_options_source(
+        {"Tastytrade": tasty_df, "yfinance": yahoo_df}
+    )
+
+    if not selected_df.empty:
+        selected_quality = _score_options_source(selected_df)
+        selected_df.attrs["active_data_source"] = (
+            f"{selected_source} selected "
+            f"(score {selected_quality['score']}, IV coverage {selected_quality['iv_coverage']:.0%})"
+            + " after checking "
+            + " | ".join(source_notes)
+        )
+        return selected_df
+
+    if selected_df.empty:
         snapshot_df = get_latest_contract_snapshot(symbols, min_volume, min_oi, option_types, exp_pref)
         if not snapshot_df.empty:
             snapshot_status = snapshot_df.attrs.get("active_data_source", "Local snapshot fallback")
-            snapshot_df.attrs["active_data_source"] = snapshot_status + " after " + " | ".join(fallback_notes)
+            snapshot_df.attrs["active_data_source"] = snapshot_status + " after " + " | ".join(source_notes)
             return snapshot_df
 
-        fallback_df.attrs["active_data_source"] = "No matching contracts; " + " | ".join(fallback_notes)
-    else:
-        fallback_df.attrs["active_data_source"] = "yfinance fallback after " + tasty_status
-
-    return fallback_df
+        empty = pd.DataFrame()
+        empty.attrs["active_data_source"] = "No matching contracts; " + " | ".join(source_notes)
+        return empty
 
 
 def _expiration_bounds(exp_pref: str) -> tuple[int, int]:
@@ -453,6 +465,52 @@ def _numeric_mean(df: pd.DataFrame, column: str) -> float:
     return float(pd.to_numeric(df[column], errors="coerce").mean())
 
 
+def _field_coverage(df: pd.DataFrame, column: str) -> float:
+    if df.empty or column not in df.columns:
+        return 0.0
+    values = pd.to_numeric(df[column], errors="coerce")
+    return float(values.notna().mean())
+
+
+def _score_options_source(df: pd.DataFrame) -> dict:
+    if df.empty:
+        return {
+            "score": 0,
+            "rows": 0,
+            "has_iv": False,
+            "iv_coverage": 0.0,
+        }
+
+    weights = {
+        "iv_%": 5,
+        "bid": 1,
+        "ask": 1,
+        "volume": 1,
+        "open_interest": 1,
+        "spread": 1,
+        "spot": 1,
+    }
+    coverages = {column: _field_coverage(df, column) for column in weights}
+    score = sum(weight for column, weight in weights.items() if coverages[column] > 0)
+    row_bonus = min(int(len(df) / 25), 3)
+    return {
+        "score": score + row_bonus,
+        "rows": int(len(df)),
+        "has_iv": coverages["iv_%"] > 0,
+        "iv_coverage": coverages["iv_%"],
+    }
+
+
+def _select_best_options_source(sources: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, str]:
+    candidates = []
+    for name, df in sources.items():
+        quality = _score_options_source(df)
+        candidates.append((quality["score"], quality["iv_coverage"], quality["rows"], name, df))
+
+    _, _, _, selected_name, selected_df = max(candidates, key=lambda item: (item[0], item[1], item[2]))
+    return selected_df, selected_name
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_iv_rank(symbols: tuple) -> dict:
     """
@@ -728,7 +786,9 @@ class OptionsLiquidityModule(FazDaneModule):
             with st.spinner(f"Scanning {len(symbols)} symbols"):
                 df = fetch_options_data(**params)
                 st.session_state["ol_results"] = df
-                if "data_source" in df.columns and not df.empty:
+                if df.attrs.get("active_data_source"):
+                    sources = df.attrs["active_data_source"]
+                elif "data_source" in df.columns and not df.empty:
                     sources = ", ".join(sorted(df["data_source"].dropna().unique()))
                 else:
                     sources = df.attrs.get(
