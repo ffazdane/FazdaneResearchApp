@@ -196,6 +196,8 @@ def _enrich_tasty_chain_with_tastytrade_quotes(symbol: str, tasty_chain: pd.Data
 
     if "last_price" in merged.columns:
         merged["last_price"] = merged["last_price"].fillna(merged.get("mark"))
+    if "implied_volatility" in merged.columns:
+        merged["iv_pct"] = (pd.to_numeric(merged["implied_volatility"], errors="coerce") * 100).round(1)
     if {"ask", "bid"}.issubset(merged.columns):
         merged["spread"] = (merged["ask"] - merged["bid"]).round(3)
         merged["spread_pct"] = (
@@ -441,6 +443,14 @@ def _finalize_options_frame(combined: pd.DataFrame) -> pd.DataFrame:
         sources = ", ".join(sorted(combined["data_source"].dropna().unique()))
         combined.attrs["active_data_source"] = sources
     return combined
+
+
+def _has_numeric_values(df: pd.DataFrame, column: str) -> bool:
+    return column in df.columns and pd.to_numeric(df[column], errors="coerce").notna().any()
+
+
+def _numeric_mean(df: pd.DataFrame, column: str) -> float:
+    return float(pd.to_numeric(df[column], errors="coerce").mean())
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -694,8 +704,8 @@ class OptionsLiquidityModule(FazDaneModule):
                 st.metric("Results", f"{len(df):,}")
                 if "volume" in df.columns:
                     st.metric("Avg Volume", f"{int(df['volume'].mean()):,}")
-                if "iv_%" in df.columns:
-                    st.metric("Avg IV", f"{df['iv_%'].mean():.1f}%")
+                if _has_numeric_values(df, "iv_%"):
+                    st.metric("Avg IV", f"{_numeric_mean(df, 'iv_%'):.1f}%")
 
     #  Main
 
@@ -763,7 +773,7 @@ class OptionsLiquidityModule(FazDaneModule):
         m1.metric("Total Results", f"{len(df):,}")
         m2.metric("Symbols Hit", df["symbol"].nunique())
         m3.metric("Avg Volume", f"{int(df['volume'].mean()):,}" if "volume" in df.columns else "")
-        m4.metric("Avg IV", f"{df['iv_%'].mean():.1f}%" if "iv_%" in df.columns else "")
+        m4.metric("Avg IV", f"{_numeric_mean(df, 'iv_%'):.1f}%" if _has_numeric_values(df, "iv_%") else "")
         m5.metric("Avg Spread", f"${df['spread'].mean():.2f}" if "spread" in df.columns else "")
 
         if "data_source" in df.columns:
@@ -1351,8 +1361,11 @@ class OptionsLiquidityModule(FazDaneModule):
                 margin=dict(l=0, r=0, t=50, b=0), height=380,
             )
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("IV Rank is unavailable. Production needs Yahoo/yfinance historical price access for this chart.")
+
         # Scatter: Volume vs IV
-        if "iv_%" in df.columns:
+        if _has_numeric_values(df, "iv_%"):
             st.markdown("### Volume vs IV - Opportunity Scatter")
             fig3 = px.scatter(
                 df.head(200),
@@ -1382,7 +1395,10 @@ class OptionsLiquidityModule(FazDaneModule):
                 height=360,
             )
             st.plotly_chart(fig3, use_container_width=True, key="ol_iv_volume_scatter")
-
+        else:
+            st.info(
+                "Volume vs IV is unavailable because the active provider did not return implied volatility values."
+            )
 
         # Call/Put volume by symbol
         if "symbol" in df.columns and "volume" in df.columns and "option_type" in df.columns:
