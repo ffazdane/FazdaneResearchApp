@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
+from pandas.io.formats.style import Styler
 
 from modules.base_module import FazDaneModule
 from utils.universe_manager import get_universe_names, render_universe_manager
@@ -56,6 +57,36 @@ def fetch_close_prices(tickers: tuple[str, ...], start_date, end_date) -> pd.Dat
 def compute_correlation(prices: pd.DataFrame, method: str) -> pd.DataFrame:
     returns = prices.ffill().pct_change().dropna(how="all")
     return returns.corr(method=method)
+
+
+def format_correlation_table(corr: pd.DataFrame) -> Styler:
+    table = corr.copy()
+    table.index.name = "Symbol"
+    return (
+        table.style.format("{:.0%}")
+        .set_properties(
+            **{
+                "color": "#ffffff",
+                "font-size": "15px",
+                "font-weight": "700",
+                "text-align": "center",
+            }
+        )
+        .set_table_styles(
+            [
+                {
+                    "selector": "th",
+                    "props": [
+                        ("background-color", "#1f6f8b"),
+                        ("color", "#ffffff"),
+                        ("font-size", "15px"),
+                        ("font-weight", "700"),
+                        ("text-align", "center"),
+                    ],
+                }
+            ]
+        )
+    )
 
 
 class CorrelationMatrixModule(FazDaneModule):
@@ -143,13 +174,16 @@ class CorrelationMatrixModule(FazDaneModule):
                 hovertemplate="<b>%{y} vs %{x}</b><br>Correlation: %{customdata:.1f}%<extra></extra>",
                 customdata=(corr * 100).values,
                 colorbar=dict(title="Corr"),
+                xgap=1,
+                ygap=1,
             )
         )
+        fig.update_traces(textfont=dict(size=16, color="#111827", family="Arial Black"))
         fig.update_layout(
             height=max(520, 42 * len(corr.index)),
             paper_bgcolor="#0d1b2e",
             plot_bgcolor="#0d1b2e",
-            font=dict(color="#e2e8f0", size=10),
+            font=dict(color="#e2e8f0", size=16, family="Arial Black"),
             margin=dict(l=140, r=20, t=80, b=20),
             xaxis=dict(
                 side="top",
@@ -157,21 +191,25 @@ class CorrelationMatrixModule(FazDaneModule):
                 tickvals=asset_labels,
                 ticktext=asset_labels,
                 tickangle=-35,
-                tickfont=dict(size=10),
+                tickfont=dict(size=15, family="Arial Black"),
                 automargin=True,
             ),
             yaxis=dict(
                 tickmode="array",
                 tickvals=asset_labels,
                 ticktext=asset_labels,
-                tickfont=dict(size=10),
+                tickfont=dict(size=15, family="Arial Black"),
                 automargin=True,
             ),
         )
         st.plotly_chart(fig, use_container_width=True, theme=None)
 
         st.markdown("### Correlation Table")
-        st.dataframe(corr.round(3), use_container_width=True)
+        st.dataframe(
+            format_correlation_table(corr),
+            use_container_width=True,
+            height=min(760, 38 * (len(corr.index) + 1)),
+        )
 
         st.download_button(
             "Download Correlations CSV",
