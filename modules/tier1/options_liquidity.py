@@ -1,5 +1,5 @@
 """
-FazDane Analytics — Tier 1
+FazDane Analytics  Tier 1
 Options Liquidity Discovery Engine
 Source: 05-FazDane Options Liquidity Discovery Engine.ipynb
 """
@@ -28,9 +28,9 @@ from utils.options_liquidity_store import (
 
 logger = logging.getLogger("OptionsLiquidity")
 
-# ══════════════════════════════════════════════════════════════════════
+#
 # DEFAULT WATCHLIST
-# ══════════════════════════════════════════════════════════════════════
+#
 
 DEFAULT_SYMBOLS = [
     "SPY", "QQQ", "IWM", "GLD", "TLT",
@@ -38,9 +38,9 @@ DEFAULT_SYMBOLS = [
     "GOOGL", "META", "JPM", "XLK", "XLF",
 ]
 
-# ══════════════════════════════════════════════════════════════════════
+#
 # DATA ENGINE
-# ══════════════════════════════════════════════════════════════════════
+#
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_options_data(symbols: tuple, min_volume: int, min_oi: int,
@@ -480,13 +480,134 @@ def fetch_iv_rank(symbols: tuple) -> dict:
     return ranks
 
 
-# ══════════════════════════════════════════════════════════════════════
+#
 # MODULE CLASS
-# ══════════════════════════════════════════════════════════════════════
+#
+
+def _ema(series: pd.Series, span: int) -> pd.Series:
+    return series.ewm(span=span, adjust=False).mean()
+
+
+def _tema(series: pd.Series, period: int) -> pd.Series:
+    ema1 = _ema(series, period)
+    ema2 = _ema(ema1, period)
+    ema3 = _ema(ema2, period)
+    return 3 * ema1 - 3 * ema2 + ema3
+
+
+def _calculate_trade_signal(symbol: str, hist: pd.DataFrame, period: int = 20) -> dict | None:
+    required = {"Open", "High", "Low", "Close"}
+    if hist.empty or not required.issubset(hist.columns):
+        return None
+
+    data = hist[["Open", "High", "Low", "Close"]].dropna().copy()
+    if len(data) < max(60, period * 3):
+        return None
+
+    price = (data["High"] + data["Low"] + data["Close"]) / 3
+    tma1 = _tema(price, period)
+    tma2 = _tema(tma1, period)
+    typical_tema = tma1 + (tma1 - tma2)
+
+    raw_ha_close = (data["Open"] + data["High"] + data["Low"] + data["Close"]) / 4
+    ha_open = pd.Series(index=data.index, dtype="float64")
+    ha_open.iloc[0] = (data["High"].iloc[0] + data["Low"].iloc[0]) / 2
+    for i in range(1, len(data)):
+        ha_open.iloc[i] = (raw_ha_close.iloc[i - 1] + ha_open.iloc[i - 1]) / 2
+
+    ha_close = (
+        raw_ha_close
+        + ha_open
+        + pd.concat([data["High"], ha_open], axis=1).max(axis=1)
+        + pd.concat([data["Low"], ha_open], axis=1).min(axis=1)
+    ) / 4
+
+    ha_tma1 = _tema(ha_close, period)
+    ha_tma2 = _tema(ha_tma1, period)
+    ha_tema = ha_tma1 + (ha_tma1 - ha_tma2)
+    fdts_dev = typical_tema - ha_tema
+
+    macd_long = _ema(data["Close"], 3) - _ema(data["Close"], 10)
+    macd_long_dev = macd_long - _ema(macd_long, 16)
+    macd_short = _ema(data["Close"], 12) - _ema(data["Close"], 26)
+    macd_short_dev = macd_short - _ema(macd_short, 9)
+
+    state = pd.Series(0, index=data.index, dtype="int64")
+    state[(fdts_dev > 0) & (macd_long_dev > 0)] = 1
+    state[(fdts_dev < 0) & (macd_short_dev < 0)] = -1
+
+    valid = pd.DataFrame({"close": data["Close"], "state": state}).dropna()
+    if valid.empty:
+        return None
+
+    current_state = int(valid["state"].iloc[-1])
+    changed = valid["state"].ne(valid["state"].shift(1))
+    start_idx = valid.index[changed].tolist()[-1]
+    start_loc = valid.index.get_loc(start_idx)
+    previous_state = int(valid["state"].iloc[start_loc - 1]) if start_loc > 0 else current_state
+    current_close = float(valid["close"].iloc[-1])
+    trigger_price = float(valid.loc[start_idx, "close"])
+    delta = (
+        current_close - trigger_price
+        if current_state == 1
+        else trigger_price - current_close
+        if current_state == -1
+        else 0.0
+    )
+
+    return {
+        "Ticker": symbol,
+        "Previous": "Buy" if previous_state == 1 else "Sell" if previous_state == -1 else "No Trade",
+        "Signal": "Buy" if current_state == 1 else "Sell" if current_state == -1 else "No Trade",
+        "Start": pd.Timestamp(start_idx).strftime("%Y-%m-%d"),
+        "Days": int(len(valid) - start_loc),
+        "Entry": round(trigger_price, 2),
+        "Last": round(current_close, 2),
+        "Delta": round(delta, 2),
+    }
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_trade_signal_buckets(symbols: tuple, period: int = 20) -> pd.DataFrame:
+    symbols = tuple(dict.fromkeys(str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()))
+    if not symbols:
+        return pd.DataFrame()
+
+    rows = []
+    for symbol in symbols:
+        try:
+            hist = yf.download(
+                symbol,
+                period="1y",
+                interval="1d",
+                progress=False,
+                auto_adjust=False,
+            )
+            if isinstance(hist.columns, pd.MultiIndex):
+                ticker_level = hist.columns.get_level_values(-1)
+                if symbol in ticker_level:
+                    hist = hist.xs(symbol, axis=1, level=-1, drop_level=True)
+                elif ticker_level.nunique() == 1:
+                    hist = hist.droplevel(-1, axis=1)
+            signal = _calculate_trade_signal(symbol, hist, period=period)
+            if signal:
+                rows.append(signal)
+        except Exception as e:
+            logger.warning(f"Trade signal failed for {symbol}: {e}")
+
+    if not rows:
+        return pd.DataFrame()
+
+    result = pd.DataFrame(rows)
+    signal_order = pd.CategoricalDtype(["Buy", "No Trade", "Sell"], ordered=True)
+    result["Signal"] = result["Signal"].astype(signal_order)
+    result["Previous"] = result["Previous"].astype(signal_order)
+    return result.sort_values(["Signal", "Days", "Ticker"], ascending=[True, False, True]).reset_index(drop=True)
+
 
 class OptionsLiquidityModule(FazDaneModule):
     MODULE_NAME = "Options Liquidity Discovery"
-    MODULE_ICON = "💧"
+    MODULE_ICON = "OL"
     MODULE_DESCRIPTION = "Scan for high-liquidity options with elevated IV"
     TIER = 1
     SOURCE_NOTEBOOK = "05-FazDane Options Liquidity Discovery Engine.ipynb"
@@ -494,7 +615,7 @@ class OptionsLiquidityModule(FazDaneModule):
     REQUIRES_LIVE_DATA = True
     DATA_SOURCES = ["Tastytrade API", "yfinance fallback"]
 
-    # ── Sidebar ────────────────────────────────────────────────────────
+    #  Sidebar
 
     def render_sidebar(self):
         st.markdown("**Watchlist**")
@@ -518,7 +639,7 @@ class OptionsLiquidityModule(FazDaneModule):
 
         exp_pref = st.selectbox(
             "Expiration Window",
-            ["Weekly (≤8 days)", "Monthly (9–45 days)", "Any"],
+            ["Weekly (<=8 days)", "Monthly (9-45 days)", "Any"],
             index=1,
             key="ol_exp",
         )
@@ -531,9 +652,9 @@ class OptionsLiquidityModule(FazDaneModule):
         st.info(f"Active Source: {active_source}")
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        scan_clicked = st.button("🔍 Scan Options", use_container_width=True,
+        scan_clicked = st.button("Scan Options", use_container_width=True,
                                  type="primary", key="ol_scan")
-        export_clicked = st.button("📥 Export CSV", use_container_width=True,
+        export_clicked = st.button("Export CSV", use_container_width=True,
                                    key="ol_export")
 
         if scan_clicked:
@@ -557,7 +678,7 @@ class OptionsLiquidityModule(FazDaneModule):
             if not df.empty:
                 csv = df.to_csv(index=False)
                 st.download_button(
-                    "⬇️ Download Now",
+                    "Download Now",
                     data=csv,
                     file_name=f"options_scan_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     mime="text/csv",
@@ -576,11 +697,11 @@ class OptionsLiquidityModule(FazDaneModule):
                 if "iv_%" in df.columns:
                     st.metric("Avg IV", f"{df['iv_%'].mean():.1f}%")
 
-    # ── Main ───────────────────────────────────────────────────────────
+    #  Main
 
     def render_main(self):
         self.render_section_header(
-            "💧 Options Liquidity Discovery",
+            "Options Liquidity Discovery",
             "Real-time scan for high-liquidity options opportunities"
         )
 
@@ -594,7 +715,7 @@ class OptionsLiquidityModule(FazDaneModule):
 
         # Run scan (cached)
         if "ol_results" not in st.session_state:
-            with st.spinner(f"Scanning {len(symbols)} symbols…"):
+            with st.spinner(f"Scanning {len(symbols)} symbols"):
                 df = fetch_options_data(**params)
                 st.session_state["ol_results"] = df
                 if "data_source" in df.columns and not df.empty:
@@ -629,7 +750,7 @@ class OptionsLiquidityModule(FazDaneModule):
 
         if df.empty:
             st.warning(
-                "⚠️ No options found matching your criteria. "
+                " No options found matching your criteria. "
                 "Try lowering Min Volume / Min Open Interest or widening the expiration window."
             )
             source_status = st.session_state.get("ol_active_data_source")
@@ -637,13 +758,13 @@ class OptionsLiquidityModule(FazDaneModule):
                 st.info(f"Provider status: {source_status}")
             return
 
-        # ── Top Metrics Row ──────────────────────────────────────────
+        #  Top Metrics Row
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Total Results", f"{len(df):,}")
         m2.metric("Symbols Hit", df["symbol"].nunique())
-        m3.metric("Avg Volume", f"{int(df['volume'].mean()):,}" if "volume" in df.columns else "—")
-        m4.metric("Avg IV", f"{df['iv_%'].mean():.1f}%" if "iv_%" in df.columns else "—")
-        m5.metric("Avg Spread", f"${df['spread'].mean():.2f}" if "spread" in df.columns else "—")
+        m3.metric("Avg Volume", f"{int(df['volume'].mean()):,}" if "volume" in df.columns else "")
+        m4.metric("Avg IV", f"{df['iv_%'].mean():.1f}%" if "iv_%" in df.columns else "")
+        m5.metric("Avg Spread", f"${df['spread'].mean():.2f}" if "spread" in df.columns else "")
 
         if "data_source" in df.columns:
             sources = ", ".join(sorted(df["data_source"].dropna().unique()))
@@ -659,13 +780,13 @@ class OptionsLiquidityModule(FazDaneModule):
 
         st.divider()
 
-        # ── IV Rank Banner (if available) ────────────────────────────
+        #  IV Rank Banner (if available)
         valid_ranks = {k: v for k, v in iv_ranks.items() if v is not None}
         if valid_ranks:
             self._render_iv_rank_bar(valid_ranks)
             st.divider()
 
-        # ── Tabs ─────────────────────────────────────────────────────
+        #  Tabs
         tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
             ["Volume Heatmap", "Ticker Drilldown", "Options Chain", "Analytics", "IV Landscape", "Snapshots"]
         )
@@ -688,11 +809,11 @@ class OptionsLiquidityModule(FazDaneModule):
         with tab6:
             self._tab_snapshots()
 
-    # ── IV Rank Banner ─────────────────────────────────────────────────
+    #  IV Rank Banner
 
     def _render_iv_rank_bar(self, iv_ranks: dict):
         st.markdown(
-            "<div style='color:#64748b;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;'>📡 IV Rank by Symbol (Historical Volatility Percentile)</div>",
+            "<div style='color:#64748b;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;'> IV Rank by Symbol (Historical Volatility Percentile)</div>",
             unsafe_allow_html=True,
         )
         cols = st.columns(min(len(iv_ranks), 8))
@@ -717,7 +838,155 @@ class OptionsLiquidityModule(FazDaneModule):
                     unsafe_allow_html=True,
                 )
 
-    # ── Tab 1: Heatmap ─────────────────────────────────────────────────
+    #  Tab 1: Heatmap
+
+    def _render_trade_signal_buckets(self, symbols: list[str]):
+        st.markdown("### FDTS + MACD Trade Signal Buckets")
+        with st.spinner("Calculating daily FDTS + MACD regimes..."):
+            signals = fetch_trade_signal_buckets(tuple(symbols))
+
+        if signals.empty:
+            st.info("No trade signal data available for the current symbols.")
+            return
+
+        bucket_defs = [
+            ("Buy", "#3ab54a"),
+            ("No Trade", "#f59e0b"),
+            ("Sell", "#ef4444"),
+        ]
+        cols = st.columns(3)
+        for col, (bucket, color) in zip(cols, bucket_defs):
+            bucket_df = signals[signals["Signal"].astype(str) == bucket].copy()
+            with col:
+                st.markdown(
+                    f"""
+                    <div style="
+                        color:{color};
+                        font-size:13px;
+                        font-weight:800;
+                        text-transform:uppercase;
+                        letter-spacing:0.5px;
+                        margin:4px 0 8px;
+                    ">{bucket} ({len(bucket_df)})</div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                if bucket_df.empty:
+                    st.caption("No symbols in this bucket.")
+                    continue
+
+                st.dataframe(
+                    bucket_df[["Ticker", "Previous", "Start", "Days", "Entry", "Last", "Delta"]],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Ticker": st.column_config.TextColumn("Ticker"),
+                        "Previous": st.column_config.TextColumn("From"),
+                        "Start": st.column_config.TextColumn("Start"),
+                        "Days": st.column_config.NumberColumn("Days", format="%d"),
+                        "Entry": st.column_config.NumberColumn("Entry", format="%.2f"),
+                        "Last": st.column_config.NumberColumn("Last", format="%.2f"),
+                        "Delta": st.column_config.NumberColumn("Delta", format="%.2f"),
+                    },
+                )
+
+        self._render_trade_signal_rotation(signals)
+
+    def _render_trade_signal_rotation(self, signals: pd.DataFrame):
+        st.markdown("### Ticker Signal Rotation")
+        if signals.empty or not {"Previous", "Signal", "Ticker"}.issubset(signals.columns):
+            st.info("No signal rotation data available.")
+            return
+
+        bucket_x = {"Buy": -1, "No Trade": 0, "Sell": 1}
+        bucket_color = {"Sell": "#ef4444", "No Trade": "#f59e0b", "Buy": "#3ab54a"}
+        plot_df = signals.copy()
+        plot_df["PreviousText"] = plot_df["Previous"].astype(str)
+        plot_df["SignalText"] = plot_df["Signal"].astype(str)
+        plot_df["Changed"] = plot_df["PreviousText"] != plot_df["SignalText"]
+        plot_df = plot_df.sort_values(["Changed", "SignalText", "Ticker"], ascending=[False, True, True])
+        plot_df["Lane"] = list(range(len(plot_df), 0, -1))
+
+        fig = go.Figure()
+        for bucket, x in bucket_x.items():
+            fig.add_vrect(
+                x0=x - 0.33,
+                x1=x + 0.33,
+                fillcolor=bucket_color[bucket],
+                opacity=0.08,
+                line_width=0,
+            )
+
+        for _, row in plot_df.iterrows():
+            previous = row["PreviousText"]
+            current = row["SignalText"]
+            color = bucket_color.get(current, "#94a3b8")
+            fig.add_trace(go.Scatter(
+                x=[bucket_x.get(previous, 0), bucket_x.get(current, 0)],
+                y=[row["Lane"], row["Lane"]],
+                mode="lines+markers+text",
+                line=dict(color=color, width=3 if row["Changed"] else 1.5, dash="dot"),
+                marker=dict(size=[8, 11], color=[bucket_color.get(previous, "#94a3b8"), color]),
+                text=["", row["Ticker"]],
+                textposition="middle right",
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "From: %{customdata[1]}<br>"
+                    "Now: %{customdata[2]}<br>"
+                    "Start: %{customdata[3]}<br>"
+                    "Days: %{customdata[4]}<br>"
+                    "Delta: %{customdata[5]:.2f}<extra></extra>"
+                ),
+                customdata=[[row["Ticker"], previous, current, row["Start"], row["Days"], row["Delta"]]] * 2,
+                showlegend=False,
+            ))
+
+        transition_counts = (
+            plot_df.groupby(["PreviousText", "SignalText"], observed=False)
+            .size()
+            .reset_index(name="Count")
+            .sort_values("Count", ascending=False)
+        )
+        subtitles = [
+            f"{row.PreviousText} -> {row.SignalText}: {row.Count}"
+            for row in transition_counts.itertuples(index=False)
+            if row.Count > 0
+        ]
+        summary = " | ".join(subtitles[:6]) if subtitles else "No rotations detected"
+        st.markdown(
+            f"""
+            <div style="
+                color:#94a3b8;
+                font-size:13px;
+                font-weight:600;
+                margin:-4px 0 10px;
+            ">{summary}</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        fig.update_layout(
+            paper_bgcolor="#0d1b2e",
+            plot_bgcolor="#0d1b2e",
+            font=dict(color="#e2e8f0", family="Inter"),
+            xaxis=dict(
+                tickmode="array",
+                tickvals=[-1, 0, 1],
+                ticktext=["Buy", "No Trade", "Sell"],
+                range=[-1.45, 1.75],
+                gridcolor="#1e3a5f",
+                zeroline=False,
+            ),
+            yaxis=dict(
+                showticklabels=False,
+                showgrid=False,
+                zeroline=False,
+                range=[0, max(len(plot_df) + 1, 2)],
+            ),
+            margin=dict(l=10, r=10, t=10, b=20),
+            height=max(320, min(720, 120 + 28 * len(plot_df))),
+        )
+        st.plotly_chart(fig, use_container_width=True, key="ol_trade_signal_rotation")
 
     def _tab_heatmap(self, df: pd.DataFrame):
         st.markdown("### Volume Heatmap by Symbol & Option Type")
@@ -774,39 +1043,11 @@ class OptionsLiquidityModule(FazDaneModule):
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # Scatter: Volume vs IV
-        if "iv_%" in df.columns:
-            st.markdown("### Volume vs IV — Opportunity Scatter")
-            fig2 = px.scatter(
-                df.head(200),
-                x="iv_%",
-                y="volume",
-                color="symbol",
-                size="volume",
-                size_max=28,
-                hover_data=["symbol", "strike", "option_type", "dte", "bid", "ask"],
-                labels={"iv_%": "Implied Volatility (%)", "volume": "Volume"},
-                color_discrete_sequence=px.colors.qualitative.Bold,
-            )
-            fig2.update_layout(
-                paper_bgcolor="#0d1b2e",
-                plot_bgcolor="#152847",
-                font=dict(color="#e2e8f0", family="Inter"),
-                xaxis=dict(gridcolor="#1e3a5f", tickfont=dict(color="#e2e8f0")),
-                yaxis=dict(gridcolor="#1e3a5f", tickfont=dict(color="#e2e8f0")),
-                legend=dict(
-                    bgcolor="rgba(21,40,71,0.85)",
-                    bordercolor="#1e3a5f",
-                    borderwidth=1,
-                    font=dict(color="#e2e8f0", size=12),
-                    title=dict(font=dict(color="#94a3b8", size=11)),
-                ),
-                margin=dict(l=0, r=0, t=30, b=0),
-                height=360,
-            )
-            st.plotly_chart(fig2, use_container_width=True)
+        signal_symbols = sorted(df["symbol"].dropna().astype(str).str.upper().unique())
+        self._render_trade_signal_buckets(signal_symbols)
 
-    # ── Tab 2: Chain Table ─────────────────────────────────────────────
+
+    #  Tab 2: Chain Table
 
     def _tab_ticker_drilldown(self, df: pd.DataFrame):
         st.markdown("### Individual Ticker Activity")
@@ -989,7 +1230,7 @@ class OptionsLiquidityModule(FazDaneModule):
             column_config=col_cfg,
         )
 
-    # ── Tab 3: Analytics ───────────────────────────────────────────────
+    #  Tab 3: Analytics
 
     def _tab_analytics(self, df: pd.DataFrame):
         st.markdown("### Distribution Analytics")
@@ -1071,13 +1312,13 @@ class OptionsLiquidityModule(FazDaneModule):
             st.plotly_chart(fig3, use_container_width=True, key="ol_analytics_ticker_source")
 
         # Top opportunities table
-        st.markdown("### 🏆 Top Opportunities by Volume")
+        st.markdown("###  Top Opportunities by Volume")
         top = df.nlargest(15, "volume") if "volume" in df.columns else df.head(15)
         display_cols = [c for c in ["symbol", "option_type", "strike", "expiration",
                                      "dte", "volume", "open_interest", "iv_%", "bid", "ask"] if c in top.columns]
         st.dataframe(top[display_cols], use_container_width=True, hide_index=True)
 
-    # ── Tab 4: IV Landscape ────────────────────────────────────────────
+    #  Tab 4: IV Landscape
 
     def _tab_iv_landscape(self, df: pd.DataFrame, iv_ranks: dict):
         st.markdown("### IV Landscape")
@@ -1102,7 +1343,7 @@ class OptionsLiquidityModule(FazDaneModule):
             fig.add_hline(y=50, line_dash="dash", line_color="#f59e0b",
                           annotation_text="Mid IV (50)", annotation_position="top right")
             fig.update_layout(
-                title=dict(text="IV Rank by Symbol (🟢 Low | 🟡 Mid | 🔴 High)", font=dict(color="#e2e8f0")),
+                title=dict(text="IV Rank by Symbol (Low | Mid | High)", font=dict(color="#e2e8f0")),
                 paper_bgcolor="#0d1b2e", plot_bgcolor="#152847",
                 font=dict(color="#e2e8f0", family="Inter"),
                 xaxis=dict(gridcolor="#1e3a5f", tickfont=dict(color="#e2e8f0")),
@@ -1110,6 +1351,38 @@ class OptionsLiquidityModule(FazDaneModule):
                 margin=dict(l=0, r=0, t=50, b=0), height=380,
             )
             st.plotly_chart(fig, use_container_width=True)
+        # Scatter: Volume vs IV
+        if "iv_%" in df.columns:
+            st.markdown("### Volume vs IV - Opportunity Scatter")
+            fig3 = px.scatter(
+                df.head(200),
+                x="iv_%",
+                y="volume",
+                color="symbol",
+                size="volume",
+                size_max=28,
+                hover_data=["symbol", "strike", "option_type", "dte", "bid", "ask"],
+                labels={"iv_%": "Implied Volatility (%)", "volume": "Volume"},
+                color_discrete_sequence=px.colors.qualitative.Bold,
+            )
+            fig3.update_layout(
+                paper_bgcolor="#0d1b2e",
+                plot_bgcolor="#152847",
+                font=dict(color="#e2e8f0", family="Inter"),
+                xaxis=dict(gridcolor="#1e3a5f", tickfont=dict(color="#e2e8f0")),
+                yaxis=dict(gridcolor="#1e3a5f", tickfont=dict(color="#e2e8f0")),
+                legend=dict(
+                    bgcolor="rgba(21,40,71,0.85)",
+                    bordercolor="#1e3a5f",
+                    borderwidth=1,
+                    font=dict(color="#e2e8f0", size=12),
+                    title=dict(font=dict(color="#94a3b8", size=11)),
+                ),
+                margin=dict(l=0, r=0, t=30, b=0),
+                height=360,
+            )
+            st.plotly_chart(fig3, use_container_width=True, key="ol_iv_volume_scatter")
+
 
         # Call/Put volume by symbol
         if "symbol" in df.columns and "volume" in df.columns and "option_type" in df.columns:
@@ -1138,7 +1411,7 @@ class OptionsLiquidityModule(FazDaneModule):
             )
             st.plotly_chart(fig2, use_container_width=True)
 
-    # ── Welcome state ──────────────────────────────────────────────────
+    #  Welcome state
 
     def _tab_snapshots(self):
         st.markdown("### Local Snapshot Repository")
@@ -1177,20 +1450,20 @@ class OptionsLiquidityModule(FazDaneModule):
                 padding: 28px 32px;
                 margin: 20px 0;
             ">
-                <div style="font-size:32px;margin-bottom:12px;">💧</div>
+                <div style="font-size:20px;margin-bottom:12px;color:#3ab54a;font-weight:700;">Options Liquidity</div>
                 <div style="color:#3ab54a;font-size:20px;font-weight:700;margin-bottom:8px;">
-                    Options Liquidity Discovery Engine
+                  Options Liquidity Discovery Engine
                 </div>
                 <div style="color:#94a3b8;font-size:14px;line-height:1.8;">
                     Scan your options watchlist for the highest-liquidity contracts with elevated Implied Volatility.<br><br>
                     <strong style="color:#e2e8f0;">What you get:</strong><br>
-                    📊 Volume & Open Interest heatmaps<br>
-                    📈 IV Rank percentile for each symbol<br>
-                    🔥 Top contracts ranked by liquidity<br>
-                    📥 Export results to CSV
+                     Volume & Open Interest heatmaps<br>
+                     IV Rank percentile for each symbol<br>
+                     Top contracts ranked by liquidity<br>
+                     Export results to CSV
                 </div>
                 <div style="margin-top:20px;color:#64748b;font-size:13px;">
-                    ← Configure your watchlist and filters in the sidebar, then click <strong>🔍 Scan Options</strong>
+                     Configure your watchlist and filters in the sidebar, then click <strong> Scan Options</strong>
                 </div>
             </div>
             """,
