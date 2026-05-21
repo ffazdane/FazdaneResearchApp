@@ -197,13 +197,14 @@ class MarketStructureModule(FazDaneModule):
         z_vals = pivot.values.astype(float)
         
         # Create text array
+        value_suffix = "" if self.view == "T-Stat" else "%"
         text_array = []
         for i in range(pivot.shape[0]):
             row_texts = []
             for j in range(pivot.shape[1]):
                 val = z_vals[i, j]
                 if np.isfinite(val):
-                    row_texts.append(f"{val:.2f}")
+                    row_texts.append(f"{val:.2f}{value_suffix}")
                 else:
                     row_texts.append("")
             text_array.append(row_texts)
@@ -219,21 +220,24 @@ class MarketStructureModule(FazDaneModule):
             showscale=True,
             colorbar=dict(title=self.view, thickness=15),
             hoverinfo="x+y+z",
-            hovertemplate="<b>%{y} - %{x}</b><br>Value: %{text}<extra></extra>"
+            hovertemplate="<b>%{y} - %{x}</b><br>Value: %{text}<extra></extra>",
+            xgap=1,
+            ygap=1,
         ))
+        fig.update_traces(textfont=dict(size=16, color="#111827", family="Arial Black"))
         
         calc_height = max(500, (len(pivot) + 1) * 45)
         
         fig.update_layout(
             title=f"{self.asset_label} – {self.view} (Month × {self.segment_mode}) – {self.year}",
-            title_font=dict(size=18, color="#3ab54a"),
+            title_font=dict(size=20, color="#3ab54a", family="Arial Black"),
             paper_bgcolor="#0d1b2e",
             plot_bgcolor="#0d1b2e",
-            font=dict(color="#e2e8f0"),
+            font=dict(color="#e2e8f0", size=16, family="Arial Black"),
             height=calc_height,
-            margin=dict(l=0, r=0, t=60, b=40),
-            xaxis=dict(side="top", gridcolor="#1e3a5f", tickfont=dict(size=12, color="#e2e8f0")),
-            yaxis=dict(autorange="reversed", gridcolor="#1e3a5f", tickfont=dict(size=12, color="#94a3b8"))
+            margin=dict(l=0, r=0, t=110, b=40),
+            xaxis=dict(side="top", gridcolor="#1e3a5f", tickfont=dict(size=15, color="#e2e8f0", family="Arial Black")),
+            yaxis=dict(autorange="reversed", gridcolor="#1e3a5f", tickfont=dict(size=15, color="#94a3b8", family="Arial Black"))
         )
         
         # Add separating lines
@@ -241,3 +245,81 @@ class MarketStructureModule(FazDaneModule):
         fig.add_vline(x=len(seg_order) - 0.5, line_width=2, line_color="#cbd5e1")
         
         st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("### Monthly Drill Down")
+        available_months = [month for month in MONTH_ORDER if month in df["MonthName"].unique()]
+        default_month_index = max(len(available_months) - 1, 0)
+        selected_month = st.selectbox(
+            "Month:",
+            options=available_months,
+            index=default_month_index,
+            key=f"market_structure_drilldown_month_{self.symbol}_{self.year}",
+        )
+
+        drilldown = df[df["MonthName"] == selected_month].copy()
+        drilldown["ReturnPct"] = drilldown["Return"] * 100
+        drilldown["DayOfMonth"] = drilldown["Date"].dt.day
+        drilldown["DateLabel"] = drilldown["Date"].dt.strftime("%b %d")
+        drilldown = drilldown.sort_values("Date")
+
+        date_labels = drilldown["DateLabel"].tolist()
+        daily_matrix = (
+            drilldown.pivot_table(index="DateLabel", columns="Day", values="ReturnPct", aggfunc="first")
+            .reindex(index=date_labels, columns=DOW_ORDER)
+        )
+        daily_matrix["Total %"] = (
+            drilldown.groupby("DateLabel")["ReturnPct"]
+            .first()
+            .reindex(date_labels)
+        )
+        weekday_summary = matrix if seg_order == DOW_ORDER else build_matrix(df, "Day", DOW_ORDER, self.view)
+        total_row = weekday_summary.reindex(index=[selected_month], columns=DOW_ORDER).iloc[0]
+        total_row["Total %"] = m_total.reindex([selected_month]).iloc[0]
+        daily_matrix.loc["Total %"] = total_row
+        daily_text = daily_matrix.apply(
+            lambda column: column.map(lambda value: f"{value:.2f}{value_suffix}" if np.isfinite(value) else "")
+        )
+
+        drilldown_fig = go.Figure(
+            data=go.Heatmap(
+                z=daily_matrix.values,
+                x=daily_matrix.columns.tolist(),
+                y=daily_matrix.index.tolist(),
+                text=daily_text.values,
+                texttemplate="",
+                colorscale="RdYlGn",
+                zmid=0,
+                showscale=True,
+                colorbar=dict(title="Daily Return %", thickness=15),
+                hovertemplate="<b>%{y} - %{x}</b><br>Return: %{text}<extra></extra>",
+                xgap=1,
+                ygap=1,
+            )
+        )
+        for row_label in daily_matrix.index:
+            for column_label in daily_matrix.columns:
+                value = daily_matrix.loc[row_label, column_label]
+                if not np.isfinite(value):
+                    continue
+                drilldown_fig.add_annotation(
+                    x=column_label,
+                    y=row_label,
+                    text=daily_text.loc[row_label, column_label],
+                    showarrow=False,
+                    font=dict(size=16, color="#111827", family="Arial Black"),
+                )
+        drilldown_fig.update_layout(
+            title=f"{self.asset_label} - Daily Return Heatmap by Weekday - {selected_month} {self.year}",
+            title_font=dict(size=20, color="#3ab54a", family="Arial Black"),
+            paper_bgcolor="#0d1b2e",
+            plot_bgcolor="#0d1b2e",
+            font=dict(color="#e2e8f0", size=16, family="Arial Black"),
+            height=max(520, 32 * (len(daily_matrix.index) + 1)),
+            margin=dict(l=0, r=0, t=135, b=80),
+            xaxis=dict(side="top", tickangle=0, gridcolor="#1e3a5f", tickfont=dict(size=15, color="#e2e8f0", family="Arial Black")),
+            yaxis=dict(autorange="reversed", gridcolor="#1e3a5f", tickfont=dict(size=15, color="#94a3b8", family="Arial Black")),
+        )
+        drilldown_fig.add_hline(y=len(daily_matrix.index) - 1.5, line_width=2, line_color="#cbd5e1")
+        drilldown_fig.add_vline(x=len(DOW_ORDER) - 0.5, line_width=2, line_color="#cbd5e1")
+
+        st.plotly_chart(drilldown_fig, use_container_width=True)
