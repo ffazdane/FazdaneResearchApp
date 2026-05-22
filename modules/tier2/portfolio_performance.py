@@ -1,0 +1,545 @@
+"""
+FazDane Analytics - Tier 2
+Portfolio Performance
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+
+from modules.base_module import FazDaneModule
+from utils.portfolio_performance_store import (
+    get_latest_portfolio_positions,
+    get_portfolio_history,
+    get_recent_portfolio_snapshots,
+    parse_schwab_positions_csv,
+    save_portfolio_snapshot,
+    summarize_positions,
+)
+
+
+BRAND = {
+    "bg": "#0d1b2e",
+    "panel": "#152847",
+    "grid": "#1e3a5f",
+    "text": "#e2e8f0",
+    "muted": "#94a3b8",
+    "green": "#3ab54a",
+    "red": "#ef4444",
+    "blue": "#93c5fd",
+    "yellow": "#facc15",
+    "purple": "#a78bfa",
+}
+
+
+def fmt_money(value: float) -> str:
+    sign = "+" if value >= 0 else "-"
+    return f"{sign}${abs(value):,.2f}"
+
+
+def fmt_num(value: float) -> str:
+    sign = "+" if value >= 0 else "-"
+    return f"{sign}{abs(value):,.2f}"
+
+
+def style_figure(fig: go.Figure, height: int = 380) -> go.Figure:
+    fig.update_layout(
+        height=height,
+        paper_bgcolor=BRAND["bg"],
+        plot_bgcolor=BRAND["panel"],
+        font=dict(color=BRAND["text"], family="Inter"),
+        margin=dict(l=24, r=24, t=56, b=64),
+        legend=dict(
+            bgcolor="rgba(21,40,71,0.82)",
+            bordercolor=BRAND["grid"],
+            borderwidth=1,
+            font=dict(color=BRAND["text"]),
+        ),
+        xaxis=dict(
+            gridcolor=BRAND["grid"],
+            zerolinecolor=BRAND["muted"],
+            tickfont=dict(color=BRAND["text"]),
+            automargin=True,
+        ),
+        yaxis=dict(
+            gridcolor=BRAND["grid"],
+            zerolinecolor=BRAND["muted"],
+            tickfont=dict(color=BRAND["text"]),
+            automargin=True,
+        ),
+    )
+    return fig
+
+
+def metric_delta(value: float, suffix: str = "") -> str:
+    return f"{value:+,.2f}{suffix}"
+
+
+class PortfolioPerformanceModule(FazDaneModule):
+    MODULE_NAME = "Portfolio Performance"
+    MODULE_ICON = "PF"
+    MODULE_DESCRIPTION = "Schwab position snapshots, risk exposure, and saved daily portfolio progress"
+    TIER = 2
+    SOURCE_NOTEBOOK = "FazDane Analytics Portfolio Dashboard Generator"
+    CACHE_TTL = 300
+    REQUIRES_LIVE_DATA = False
+    DATA_SOURCES = ["Schwab Position Statement CSV", "Local SQLite"]
+
+    def render_sidebar(self):
+        st.markdown("**Snapshot Source**")
+        self.uploaded_file = st.file_uploader(
+            "Schwab Position Statement CSV",
+            type=["csv"],
+            key="pp_csv_upload",
+        )
+        self.load_latest_saved = st.checkbox(
+            "Use latest saved snapshot when no file is uploaded",
+            value=True,
+            key="pp_use_latest",
+        )
+        self.auto_save = st.checkbox(
+            "Save parsed upload to daily database",
+            value=True,
+            key="pp_auto_save",
+        )
+
+        st.markdown("**View Settings**")
+        self.top_n = st.slider("Rows per leaderboard", min_value=3, max_value=15, value=7, key="pp_top_n")
+        self.history_days = st.selectbox("History Window", [30, 60, 90, 180, 365], index=2, key="pp_hist_days")
+        self.delta_caution = st.number_input(
+            "High Delta Caution Level",
+            min_value=0.0,
+            max_value=500.0,
+            value=50.0,
+            step=5.0,
+            key="pp_delta_caution",
+        )
+
+        if st.button("Refresh Portfolio View", use_container_width=True, type="primary", key="pp_refresh"):
+            st.session_state.pop("pp_last_saved_hash", None)
+            st.rerun()
+
+    def render_main(self):
+        self.render_section_header(
+            "Portfolio Performance",
+            "Upload Schwab positions, save daily snapshots, and monitor P/L, theta, and delta concentration.",
+        )
+
+        positions, metadata, source_label = self._load_active_snapshot()
+        if positions.empty:
+            self._render_welcome()
+            self._render_history()
+            return
+
+        saved_info = None
+        if self.uploaded_file is not None and self.auto_save:
+            saved_info = self._save_uploaded_snapshot_once(positions, metadata)
+
+        totals = summarize_positions(positions)
+        self._render_source_banner(metadata, source_label, saved_info)
+        self._render_metrics(totals, positions)
+
+        tab_overview, tab_risk, tab_history, tab_data = st.tabs(
+            ["Overview", "Risk Map", "Daily History", "Position Data"]
+        )
+        with tab_overview:
+            self._render_overview(positions, totals)
+        with tab_risk:
+            self._render_risk_map(positions)
+        with tab_history:
+            self._render_history()
+        with tab_data:
+            self._render_data_tab(positions, metadata)
+
+    def _load_active_snapshot(self) -> tuple[pd.DataFrame, dict, str]:
+        if self.uploaded_file is not None:
+            content = self.uploaded_file.getvalue()
+            positions, metadata = parse_schwab_positions_csv(content, self.uploaded_file.name)
+            return positions, metadata, "Uploaded Schwab CSV"
+
+        if self.load_latest_saved:
+            latest_positions, latest_metadata = get_latest_portfolio_positions()
+            if latest_metadata:
+                return latest_positions, latest_metadata, "Latest saved snapshot"
+
+        return pd.DataFrame(), {}, "No snapshot"
+
+    def _save_uploaded_snapshot_once(self, positions: pd.DataFrame, metadata: dict) -> dict | None:
+        file_hash = metadata.get("file_sha256")
+        last_hash = st.session_state.get("pp_last_saved_hash")
+        if file_hash and last_hash == file_hash:
+            return st.session_state.get("pp_last_save_info")
+
+        try:
+            saved = save_portfolio_snapshot(positions, metadata)
+            st.session_state["pp_last_saved_hash"] = file_hash
+            st.session_state["pp_last_save_info"] = saved
+            return saved
+        except Exception as exc:
+            st.warning(f"Snapshot parsed, but database save failed: {exc}")
+            return None
+
+    def _render_source_banner(self, metadata: dict, source_label: str, saved_info: dict | None):
+        source_file = metadata.get("source_file", "Unknown file")
+        snapshot_ts = metadata.get("snapshot_ts", "")
+        saved_text = ""
+        if saved_info:
+            saved_text = f"<div style='color:{BRAND['green']};font-size:12px;margin-top:6px;'>Saved run {saved_info['run_id']}</div>"
+
+        st.markdown(
+            f"""
+            <div style="
+                background:linear-gradient(135deg, rgba(26,58,143,0.28), rgba(58,181,74,0.08));
+                border:1px solid {BRAND['grid']};
+                border-left:4px solid {BRAND['green']};
+                border-radius:10px;
+                padding:14px 18px;
+                margin:8px 0 16px 0;
+            ">
+                <div style="color:{BRAND['green']};font-size:15px;font-weight:700;">{source_label}</div>
+                <div style="color:{BRAND['text']};font-size:13px;margin-top:4px;">{source_file}</div>
+                <div style="color:{BRAND['muted']};font-size:12px;margin-top:3px;">Snapshot time: {snapshot_ts}</div>
+                {saved_text}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    def _render_metrics(self, totals: dict[str, float], positions: pd.DataFrame):
+        winners = int((positions["pl_day"] > 0).sum())
+        losers = int((positions["pl_day"] < 0).sum())
+        win_rate = winners / max(winners + losers, 1) * 100
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("P/L Open", fmt_money(totals["total_pl_open"]), fmt_money(totals["positive_open"]))
+        m2.metric("P/L Day", fmt_money(totals["total_pl_day"]), f"{win_rate:.0f}% day win rate")
+        m3.metric("Theta", fmt_num(totals["total_theta"]), metric_delta(totals["total_theta"]))
+        m4.metric("Delta", fmt_num(totals["total_delta"]), "Net exposure")
+        m5.metric("Tickers", f"{len(positions):,}", f"{winners} up / {losers} down")
+
+    def _render_overview(self, positions: pd.DataFrame, totals: dict[str, float]):
+        left, right = st.columns([1.35, 1.0])
+        with left:
+            st.markdown("### P/L by Ticker")
+            value_col = st.radio(
+                "Performance Field",
+                ["pl_open", "pl_day"],
+                horizontal=True,
+                format_func=lambda value: "P/L Open" if value == "pl_open" else "P/L Day",
+                key="pp_perf_field",
+                label_visibility="collapsed",
+            )
+            chart_df = positions.sort_values(value_col, ascending=True).copy()
+            chart_df["color"] = chart_df[value_col].map(lambda value: "Gain" if value >= 0 else "Loss")
+            fig = px.bar(
+                chart_df,
+                x=value_col,
+                y="ticker",
+                orientation="h",
+                color="color",
+                color_discrete_map={"Gain": BRAND["green"], "Loss": BRAND["red"]},
+                hover_data=["theta", "delta", "market_value", "account_group"],
+                labels={value_col: "Dollars", "ticker": "Ticker"},
+            )
+            fig.add_vline(x=0, line_width=1, line_color=BRAND["muted"])
+            fig.update_traces(texttemplate="%{x:,.0f}", textposition="outside", cliponaxis=False)
+            style_figure(fig, height=max(380, 28 * len(chart_df) + 80))
+            st.plotly_chart(fig, use_container_width=True, theme=None)
+
+        with right:
+            self._render_insights(positions, totals)
+
+        st.markdown("### Exposure Leaders")
+        c1, c2 = st.columns(2)
+        with c1:
+            theta_df = positions.sort_values("theta", ascending=False).head(self.top_n)
+            fig = px.bar(
+                theta_df,
+                x="ticker",
+                y="theta",
+                color="theta",
+                color_continuous_scale=[[0, BRAND["red"]], [0.5, BRAND["yellow"]], [1, BRAND["green"]]],
+                labels={"theta": "Theta", "ticker": "Ticker"},
+                title="Theta Generators",
+            )
+            style_figure(fig, height=330)
+            st.plotly_chart(fig, use_container_width=True, theme=None)
+
+        with c2:
+            delta_df = positions.reindex(positions["delta"].abs().sort_values(ascending=False).index).head(self.top_n)
+            fig = px.bar(
+                delta_df,
+                x="ticker",
+                y="delta",
+                color="delta",
+                color_continuous_scale=[[0, BRAND["red"]], [0.5, BRAND["yellow"]], [1, BRAND["blue"]]],
+                labels={"delta": "Delta", "ticker": "Ticker"},
+                title="Largest Delta Exposures",
+            )
+            fig.add_hline(y=self.delta_caution, line_dash="dash", line_color=BRAND["yellow"])
+            style_figure(fig, height=330)
+            st.plotly_chart(fig, use_container_width=True, theme=None)
+
+    def _render_insights(self, positions: pd.DataFrame, totals: dict[str, float]):
+        top_open = positions.sort_values("pl_open", ascending=False).head(self.top_n)
+        open_drags = positions.sort_values("pl_open").head(self.top_n)
+        day_leaders = positions.sort_values("pl_day", ascending=False).head(self.top_n)
+        watch = self._build_watchlist(positions)
+
+        st.markdown("### Insights")
+        self._leaderboard("Top Open Winners", top_open, "pl_open", BRAND["green"], money=True)
+        self._leaderboard("Largest Open Drags", open_drags, "pl_open", BRAND["red"], money=True)
+        self._leaderboard("Day Leaders", day_leaders, "pl_day", BRAND["green"], money=True)
+
+        watch_text = ", ".join(watch) if watch else "No concentrated caution names in this snapshot."
+        st.markdown(
+            f"""
+            <div style="
+                background:rgba(21,40,71,0.70);
+                border:1px solid {BRAND['grid']};
+                border-radius:8px;
+                padding:14px 16px;
+                margin-top:10px;
+            ">
+                <div style="color:{BRAND['yellow']};font-weight:700;font-size:13px;">Watchlist / Caution</div>
+                <div style="color:{BRAND['muted']};font-size:13px;line-height:1.55;margin-top:6px;">
+                    {watch_text}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    def _leaderboard(self, title: str, df: pd.DataFrame, column: str, color: str, money: bool = False):
+        rows = []
+        for _, row in df.iterrows():
+            value = fmt_money(row[column]) if money else f"{row[column]:,.2f}"
+            rows.append(
+                f"<div style='display:flex;justify-content:space-between;gap:16px;margin:4px 0;'>"
+                f"<span style='color:{BRAND['text']};font-weight:600;'>{row['ticker']}</span>"
+                f"<span style='color:{color};font-weight:700;'>{value}</span>"
+                f"</div>"
+            )
+        st.markdown(
+            f"""
+            <div style="
+                background:rgba(21,40,71,0.55);
+                border:1px solid {BRAND['grid']};
+                border-radius:8px;
+                padding:12px 14px;
+                margin-bottom:10px;
+            ">
+                <div style="color:{color};font-weight:700;font-size:13px;margin-bottom:6px;">{title}</div>
+                {''.join(rows)}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    def _render_risk_map(self, positions: pd.DataFrame):
+        st.markdown("### Delta vs Theta Risk Map")
+        risk = positions.copy()
+        risk["bubble_size"] = risk["pl_open"].abs().clip(lower=25)
+        risk["quadrant"] = risk.apply(self._risk_quadrant, axis=1)
+
+        fig = px.scatter(
+            risk,
+            x="delta",
+            y="theta",
+            size="bubble_size",
+            color="quadrant",
+            text="ticker",
+            hover_data=["pl_open", "pl_day", "market_value", "account_group"],
+            color_discrete_map={
+                "Constructive": BRAND["green"],
+                "Directional": BRAND["blue"],
+                "Decay Drag": BRAND["yellow"],
+                "Pressure": BRAND["red"],
+            },
+            labels={"delta": "Delta", "theta": "Theta"},
+        )
+        fig.add_hline(y=0, line_dash="dash", line_color=BRAND["muted"])
+        fig.add_vline(x=self.delta_caution, line_dash="dash", line_color=BRAND["yellow"])
+        fig.update_traces(textposition="top center", marker=dict(opacity=0.78, line=dict(width=1, color="#e2e8f0")))
+        style_figure(fig, height=520)
+        st.plotly_chart(fig, use_container_width=True, theme=None)
+
+        st.markdown("### Caution Candidates")
+        caution = positions.loc[positions["ticker"].isin(self._build_watchlist(positions))].copy()
+        if caution.empty:
+            st.info("No names matched the current caution rules.")
+        else:
+            self._render_position_table(caution.sort_values(["delta", "theta"], ascending=[False, True]))
+
+    def _render_history(self):
+        st.markdown("### Saved Daily Progress")
+        history = get_portfolio_history(days=self.history_days)
+        recent = get_recent_portfolio_snapshots(limit=15)
+        if history.empty:
+            st.info("No saved portfolio snapshots yet. Upload a Schwab CSV and keep database save enabled to start the daily progress record.")
+            return
+
+        h1, h2, h3 = st.columns(3)
+        latest = history.iloc[-1]
+        previous = history.iloc[-2] if len(history) > 1 else None
+        h1.metric(
+            "Latest Open P/L",
+            fmt_money(latest["total_pl_open"]),
+            fmt_money(latest["total_pl_open"] - previous["total_pl_open"]) if previous is not None else None,
+        )
+        h2.metric(
+            "Latest Day P/L",
+            fmt_money(latest["total_pl_day"]),
+            fmt_money(latest["total_pl_day"] - previous["total_pl_day"]) if previous is not None else None,
+        )
+        h3.metric(
+            "Net Theta / Delta",
+            f"{latest['total_theta']:,.1f} / {latest['total_delta']:,.1f}",
+            "Saved snapshot totals",
+        )
+
+        chart = history.copy()
+        chart["snapshot_ts"] = pd.to_datetime(chart["snapshot_ts"], errors="coerce")
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=chart["snapshot_ts"],
+            y=chart["total_pl_open"],
+            mode="lines+markers",
+            name="P/L Open",
+            line=dict(color=BRAND["green"], width=3),
+        ))
+        fig.add_trace(go.Bar(
+            x=chart["snapshot_ts"],
+            y=chart["total_pl_day"],
+            name="P/L Day",
+            marker_color=chart["total_pl_day"].map(lambda value: BRAND["green"] if value >= 0 else BRAND["red"]),
+            opacity=0.58,
+            yaxis="y2",
+        ))
+        fig.update_layout(
+            title="Portfolio Progress by Saved Snapshot",
+            yaxis=dict(title="P/L Open", gridcolor=BRAND["grid"]),
+            yaxis2=dict(title="P/L Day", overlaying="y", side="right", showgrid=False),
+            barmode="overlay",
+        )
+        style_figure(fig, height=420)
+        st.plotly_chart(fig, use_container_width=True, theme=None)
+
+        if not recent.empty:
+            st.markdown("### Recent Saved Snapshots")
+            st.dataframe(
+                recent,
+                use_container_width=True,
+                hide_index=True,
+                height=460,
+                column_config={
+                    "snapshot_ts": st.column_config.TextColumn("Snapshot Time"),
+                    "snapshot_date": st.column_config.TextColumn("Date"),
+                    "source_file": st.column_config.TextColumn("Source"),
+                    "row_count": st.column_config.NumberColumn("Tickers", format="%d"),
+                    "total_pl_open": st.column_config.NumberColumn("P/L Open", format="$%.2f"),
+                    "total_pl_day": st.column_config.NumberColumn("P/L Day", format="$%.2f"),
+                    "total_theta": st.column_config.NumberColumn("Theta", format="%.2f"),
+                    "total_delta": st.column_config.NumberColumn("Delta", format="%.2f"),
+                },
+            )
+
+    def _render_data_tab(self, positions: pd.DataFrame, metadata: dict):
+        st.markdown("### Parsed Position Snapshot")
+        self._render_position_table(positions)
+        csv_bytes = positions.to_csv(index=False).encode("utf-8")
+        date_part = str(metadata.get("snapshot_date") or datetime.now().date())
+        st.download_button(
+            "Download Parsed Snapshot CSV",
+            data=csv_bytes,
+            file_name=f"portfolio_performance_{date_part}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    def _render_position_table(self, positions: pd.DataFrame):
+        display_cols = [
+            "ticker",
+            "account_group",
+            "quantity",
+            "mark_price",
+            "market_value",
+            "pl_open",
+            "pl_day",
+            "theta",
+            "delta",
+            "bp_effect",
+        ]
+        available = [column for column in display_cols if column in positions.columns]
+        st.dataframe(
+            positions[available],
+            use_container_width=True,
+            hide_index=True,
+            height=min(820, max(460, 38 * (len(positions) + 1))),
+            column_config={
+                "ticker": st.column_config.TextColumn("Ticker"),
+                "account_group": st.column_config.TextColumn("Group"),
+                "quantity": st.column_config.NumberColumn("Qty", format="%.2f"),
+                "mark_price": st.column_config.NumberColumn("Mark", format="$%.2f"),
+                "market_value": st.column_config.NumberColumn("Market Value", format="$%.2f"),
+                "pl_open": st.column_config.NumberColumn("P/L Open", format="$%.2f"),
+                "pl_day": st.column_config.NumberColumn("P/L Day", format="$%.2f"),
+                "theta": st.column_config.NumberColumn("Theta", format="%.2f"),
+                "delta": st.column_config.NumberColumn("Delta", format="%.2f"),
+                "bp_effect": st.column_config.NumberColumn("BP Effect", format="$%.2f"),
+            },
+        )
+
+    def _build_watchlist(self, positions: pd.DataFrame) -> list[str]:
+        if positions.empty:
+            return []
+        delta_threshold = max(self.delta_caution, float(positions["delta"].quantile(0.75)))
+        risk = positions.copy()
+        risk["risk_score"] = (
+            risk["pl_open"].lt(0).astype(int)
+            + risk["pl_day"].lt(0).astype(int)
+            + risk["theta"].lt(0).astype(int)
+            + risk["delta"].gt(delta_threshold).astype(int)
+        )
+        return (
+            risk[risk["risk_score"] > 0]
+            .sort_values(["risk_score", "delta"], ascending=False)
+            .head(self.top_n)["ticker"]
+            .tolist()
+        )
+
+    @staticmethod
+    def _risk_quadrant(row: pd.Series) -> str:
+        if row["pl_open"] < 0 and row["theta"] < 0:
+            return "Pressure"
+        if row["theta"] < 0:
+            return "Decay Drag"
+        if row["delta"] > 0 and row["pl_open"] >= 0:
+            return "Constructive"
+        return "Directional"
+
+    def _render_welcome(self):
+        st.markdown(
+            f"""
+            <div style="
+                background:linear-gradient(135deg, rgba(26,58,143,0.24), rgba(58,181,74,0.08));
+                border:1px solid {BRAND['grid']};
+                border-left:4px solid {BRAND['green']};
+                border-radius:10px;
+                padding:22px 24px;
+                margin:12px 0 22px 0;
+            ">
+                <div style="color:{BRAND['green']};font-size:18px;font-weight:700;margin-bottom:8px;">Portfolio Performance</div>
+                <div style="color:{BRAND['muted']};font-size:14px;line-height:1.7;">
+                    Upload a Schwab Position Statement CSV from the sidebar. The module parses ticker-level
+                    positions, builds performance and risk views, and can save each upload as a local daily snapshot.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )

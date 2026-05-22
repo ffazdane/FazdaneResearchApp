@@ -87,6 +87,8 @@ def refresh_live_data() -> None:
         "ol_last_snapshot",
         "ol_snapshot_error",
         "ol_active_data_source",
+        "pp_last_saved_hash",
+        "pp_last_save_info",
     ]:
         st.session_state.pop(key, None)
     st.rerun()
@@ -587,6 +589,7 @@ with st.sidebar:
     with st.expander("Analysis & Intelligence", expanded=False):
         tier2_options = [
             TIER2_DEFAULT,
+            "Portfolio Performance",
             "Multi-Timeframe Money Flow",
             "Market Structure Heatmap",
             "Correlation Matrix",
@@ -760,6 +763,12 @@ elif active_module == "Multi-Timeframe Money Flow":
     module.run()
     logger.info(f"User {user['username']}  Money Flow")
 
+elif active_module == "Portfolio Performance":
+    from modules.tier2.portfolio_performance import PortfolioPerformanceModule
+    module = PortfolioPerformanceModule()
+    module.run()
+    logger.info("Portfolio Performance")
+
 elif active_module == "Market Structure Heatmap":
     from modules.tier2.market_structure import MarketStructureModule
     module = MarketStructureModule()
@@ -889,6 +898,7 @@ else:
         {
             "label": "Analysis & Intelligence",
             "items": [
+                {"label": "Portfolio Performance", "module": "Portfolio Performance", "tier": 2, "key": "macro_portfolio_performance"},
                 {"label": "Multi-Timeframe Money Flow", "module": "Multi-Timeframe Money Flow", "tier": 2, "key": "macro_money_flow"},
                 {"label": "Market Structure Heatmap", "module": "Market Structure Heatmap", "tier": 2, "key": "macro_market_structure"},
                 {"label": "Correlation Matrix", "module": "Correlation Matrix", "tier": 2, "key": "macro_correlation"},
