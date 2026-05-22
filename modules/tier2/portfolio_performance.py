@@ -11,8 +11,14 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import yfinance as yf
 
 from modules.base_module import FazDaneModule
+from utils.tastytrade_provider import (
+    TastytradeProviderError,
+    fetch_market_data_by_type,
+    load_config,
+)
 from utils.portfolio_performance_store import (
     get_latest_portfolio_positions,
     get_portfolio_history,
@@ -80,6 +86,142 @@ def metric_delta(value: float, suffix: str = "") -> str:
     return f"{value:+,.2f}{suffix}"
 
 
+@st.cache_data(ttl=180, show_spinner=False)
+def fetch_daily_net_change(symbols: tuple[str, ...], source_preference: str) -> pd.DataFrame:
+    """Fetch current daily price change for portfolio tickers."""
+    clean_symbols = tuple(dict.fromkeys(str(symbol).upper() for symbol in symbols if str(symbol).strip()))
+    if not clean_symbols:
+        return pd.DataFrame()
+
+    frames = []
+    source_label = source_preference.lower()
+    use_tasty = source_label in {"tastytrade first", "tastytrade only"}
+    use_yahoo = source_label in {"tastytrade first", "yfinance only"}
+
+    if use_tasty:
+        tasty_df = _fetch_tastytrade_daily_change(clean_symbols)
+        if not tasty_df.empty:
+            frames.append(tasty_df)
+        if source_label == "tastytrade only":
+            return _dedupe_daily_change(frames)
+
+    existing = set(pd.concat(frames)["ticker"]) if frames else set()
+    missing_symbols = tuple(symbol for symbol in clean_symbols if symbol not in existing)
+    if use_yahoo and missing_symbols:
+        yahoo_df = _fetch_yfinance_daily_change(missing_symbols)
+        if not yahoo_df.empty:
+            frames.append(yahoo_df)
+
+    return _dedupe_daily_change(frames)
+
+
+def _fetch_tastytrade_daily_change(symbols: tuple[str, ...]) -> pd.DataFrame:
+    try:
+        config = load_config()
+        if not config.is_configured:
+            return pd.DataFrame()
+        quotes = fetch_market_data_by_type(equities=symbols, config=config)
+    except (TastytradeProviderError, Exception):
+        return pd.DataFrame()
+
+    if quotes.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for _, quote in quotes.iterrows():
+        ticker = str(quote.get("market_symbol") or "").upper()
+        last = _first_numeric(quote, ["last_price", "mark", "ask", "bid"])
+        previous = _first_numeric(quote, ["close"])
+        if not ticker or last is None or previous is None or previous == 0:
+            continue
+        rows.append(
+            {
+                "ticker": ticker,
+                "last_price": float(last),
+                "previous_close": float(previous),
+                "price_change": float(last - previous),
+                "pct_change": float((last / previous - 1) * 100),
+                "market_source": "Tastytrade",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _fetch_yfinance_daily_change(symbols: tuple[str, ...]) -> pd.DataFrame:
+    rows = []
+    for symbol in symbols:
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.fast_info
+            last = _first_attr_or_key(info, ["last_price", "lastPrice", "regular_market_price", "regularMarketPrice"])
+            previous = _first_attr_or_key(
+                info,
+                ["previous_close", "previousClose", "regular_market_previous_close", "regularMarketPreviousClose"],
+            )
+
+            if not last or not previous:
+                hist = ticker.history(period="5d", interval="1d", auto_adjust=False)
+                closes = hist["Close"].dropna() if not hist.empty and "Close" in hist.columns else pd.Series(dtype=float)
+                if len(closes) >= 2:
+                    last = float(closes.iloc[-1])
+                    previous = float(closes.iloc[-2])
+
+            if last is None or previous is None or float(previous) == 0:
+                continue
+
+            last_float = float(last)
+            previous_float = float(previous)
+            rows.append(
+                {
+                    "ticker": symbol,
+                    "last_price": last_float,
+                    "previous_close": previous_float,
+                    "price_change": last_float - previous_float,
+                    "pct_change": (last_float / previous_float - 1) * 100,
+                    "market_source": "yfinance",
+                }
+            )
+        except Exception:
+            continue
+    return pd.DataFrame(rows)
+
+
+def _dedupe_daily_change(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    if not frames:
+        return pd.DataFrame()
+    combined = pd.concat(frames, ignore_index=True)
+    if combined.empty:
+        return combined
+    return combined.drop_duplicates("ticker", keep="first")
+
+
+def _first_numeric(row: pd.Series, columns: list[str]) -> float | None:
+    for column in columns:
+        value = pd.to_numeric(row.get(column), errors="coerce")
+        if pd.notna(value):
+            return float(value)
+    return None
+
+
+def _first_attr_or_key(value: object, names: list[str]) -> float | None:
+    for name in names:
+        try:
+            found = getattr(value, name)
+        except Exception:
+            found = None
+        if found is None:
+            try:
+                found = value.get(name)  # type: ignore[attr-defined]
+            except Exception:
+                found = None
+        try:
+            if found is not None:
+                return float(found)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 class PortfolioPerformanceModule(FazDaneModule):
     MODULE_NAME = "Portfolio Performance"
     MODULE_ICON = "PF"
@@ -119,9 +261,20 @@ class PortfolioPerformanceModule(FazDaneModule):
             step=5.0,
             key="pp_delta_caution",
         )
+        self.market_data_source = st.selectbox(
+            "Daily Net Change Source",
+            ["Tastytrade First", "yfinance Only", "Tastytrade Only"],
+            index=0,
+            key="pp_daily_change_source",
+        )
 
-        if st.button("Refresh Portfolio View", use_container_width=True, type="primary", key="pp_refresh"):
+        if st.button("Refresh Current Pricing", use_container_width=True, type="primary", key="pp_refresh_prices"):
+            fetch_daily_net_change.clear()
+            st.rerun()
+
+        if st.button("Refresh Portfolio View", use_container_width=True, key="pp_refresh"):
             st.session_state.pop("pp_last_saved_hash", None)
+            fetch_daily_net_change.clear()
             st.rerun()
 
     def render_main(self):
@@ -250,6 +403,7 @@ class PortfolioPerformanceModule(FazDaneModule):
             fig.update_traces(texttemplate="%{x:,.0f}", textposition="outside", cliponaxis=False)
             style_figure(fig, height=max(380, 28 * len(chart_df) + 80))
             st.plotly_chart(fig, use_container_width=True, theme=None)
+            self._render_daily_net_change_chart(positions)
 
         with right:
             self._render_insights(positions, totals)
@@ -284,6 +438,68 @@ class PortfolioPerformanceModule(FazDaneModule):
             fig.add_hline(y=self.delta_caution, line_dash="dash", line_color=BRAND["yellow"])
             style_figure(fig, height=330)
             st.plotly_chart(fig, use_container_width=True, theme=None)
+
+    def _render_daily_net_change_chart(self, positions: pd.DataFrame):
+        st.markdown("### Daily Net Change by Portfolio Ticker")
+        symbols = tuple(positions["ticker"].dropna().astype(str).str.upper().unique())
+        with st.spinner("Fetching daily market change for portfolio tickers..."):
+            market = fetch_daily_net_change(symbols, self.market_data_source)
+
+        if market.empty:
+            st.info("Daily market change is unavailable from the selected source. Try Tastytrade First or yfinance Only.")
+            return
+
+        quantity = positions[["ticker", "quantity", "market_value"]].copy()
+        quantity["ticker"] = quantity["ticker"].astype(str).str.upper()
+        daily = market.merge(quantity, on="ticker", how="left")
+        daily["quantity"] = pd.to_numeric(daily["quantity"], errors="coerce").fillna(0)
+        daily["market_value"] = pd.to_numeric(daily["market_value"], errors="coerce").fillna(0)
+        daily["estimated_dollar_change"] = daily["quantity"] * daily["price_change"]
+        fallback = daily["market_value"] * daily["pct_change"] / 100
+        daily["estimated_dollar_change"] = daily["estimated_dollar_change"].where(
+            daily["estimated_dollar_change"].abs() > 0,
+            fallback,
+        )
+        daily = daily.sort_values("pct_change", ascending=True)
+        daily["direction"] = daily["pct_change"].map(lambda value: "Up" if value >= 0 else "Down")
+        daily["pct_label"] = daily["pct_change"].map(lambda value: f"{value:+.2f}%")
+
+        fig = px.bar(
+            daily,
+            x="pct_change",
+            y="ticker",
+            text="pct_label",
+            orientation="h",
+            color="direction",
+            color_discrete_map={"Up": BRAND["green"], "Down": BRAND["red"]},
+            hover_data={
+                "last_price": ":$.2f",
+                "previous_close": ":$.2f",
+                "price_change": ":$.2f",
+                "pct_change": ":.2f",
+                "pct_label": False,
+                "estimated_dollar_change": ":$.2f",
+                "market_source": True,
+                "direction": False,
+            },
+            labels={"pct_change": "Daily Change (%)", "ticker": "Ticker"},
+            title="Market-Sourced Daily Price Performance",
+        )
+        fig.add_vline(x=0, line_width=1, line_color=BRAND["muted"])
+        style_figure(fig, height=max(360, 26 * len(daily) + 96))
+        fig.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
+        fig.update_xaxes(ticksuffix="%", tickformat="+.2f")
+        st.plotly_chart(fig, use_container_width=True, theme=None)
+
+        total_estimate = daily["estimated_dollar_change"].sum()
+        source_mix = ", ".join(sorted(daily["market_source"].dropna().unique()))
+        st.caption(
+            f"Estimated net dollar move from displayed quantities: {fmt_money(total_estimate)}. "
+            f"Source: {source_mix}."
+        )
+        if st.button("Refresh Current Pricing", key="pp_inline_refresh_prices", use_container_width=True):
+            fetch_daily_net_change.clear()
+            st.rerun()
 
     def _render_insights(self, positions: pd.DataFrame, totals: dict[str, float]):
         top_open = positions.sort_values("pl_open", ascending=False).head(self.top_n)
