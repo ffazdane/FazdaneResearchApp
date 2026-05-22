@@ -40,6 +40,7 @@ logger = logging.getLogger("FazDaneApp")
 TIER1_DEFAULT = "Select Live Trading Module..."
 TIER2_DEFAULT = "Select Analysis Module..."
 TIER3_DEFAULT = "Select Forecasting Module..."
+TIER4_DEFAULT = "Select Volatility Module..."
 
 
 def launch_module(module_name: str, tier: int) -> None:
@@ -53,14 +54,22 @@ def select_sidebar_tier(tier: int) -> None:
     if tier == 1 and st.session_state.get("tier1_module_nav") != TIER1_DEFAULT:
         st.session_state["tier2_nav"] = TIER2_DEFAULT
         st.session_state["tier3_nav"] = TIER3_DEFAULT
+        st.session_state["tier4_nav"] = TIER4_DEFAULT
         st.session_state.pop("active_menu_tier", None)
     elif tier == 2 and st.session_state.get("tier2_nav") != TIER2_DEFAULT:
         st.session_state["tier1_module_nav"] = TIER1_DEFAULT
         st.session_state["tier3_nav"] = TIER3_DEFAULT
+        st.session_state["tier4_nav"] = TIER4_DEFAULT
         st.session_state.pop("active_menu_tier", None)
     elif tier == 3 and st.session_state.get("tier3_nav") != TIER3_DEFAULT:
         st.session_state["tier1_module_nav"] = TIER1_DEFAULT
         st.session_state["tier2_nav"] = TIER2_DEFAULT
+        st.session_state["tier4_nav"] = TIER4_DEFAULT
+        st.session_state.pop("active_menu_tier", None)
+    elif tier == 4 and st.session_state.get("tier4_nav") != TIER4_DEFAULT:
+        st.session_state["tier1_module_nav"] = TIER1_DEFAULT
+        st.session_state["tier2_nav"] = TIER2_DEFAULT
+        st.session_state["tier3_nav"] = TIER3_DEFAULT
         st.session_state.pop("active_menu_tier", None)
 
 
@@ -91,6 +100,8 @@ def back_to_current_menu() -> None:
         st.session_state["pending_nav"] = {"action": "clear_tier", "tier": 2}
     elif st.session_state.get("tier3_nav") and st.session_state.get("tier3_nav") != TIER3_DEFAULT:
         st.session_state["pending_nav"] = {"action": "clear_tier", "tier": 3}
+    elif st.session_state.get("tier4_nav") and st.session_state.get("tier4_nav") != TIER4_DEFAULT:
+        st.session_state["pending_nav"] = {"action": "clear_tier", "tier": 4}
     else:
         st.session_state["active_menu_tier"] = st.session_state.get("active_menu_tier", 1)
     st.rerun()
@@ -138,6 +149,20 @@ st.markdown(
         .stRadio div[role="radiogroup"] label p,
         .stRadio div[role="radiogroup"] label span,
         .stCheckbox label p { color: #e2e8f0 !important; }
+        .stRadio div[role="radiogroup"] label {
+            display: flex !important;
+            align-items: center !important;
+            gap: 8px !important;
+            min-height: 28px !important;
+        }
+        .stRadio div[role="radiogroup"] label > div:first-child {
+            margin-top: 0 !important;
+            align-self: center !important;
+        }
+        .stRadio div[role="radiogroup"] label p {
+            margin: 0 !important;
+            line-height: 1.25 !important;
+        }
 
         /* Selectbox */
         .stSelectbox [data-baseweb="select"] span,
@@ -430,6 +455,7 @@ if pending_nav:
         st.session_state["tier1_module_nav"] = TIER1_DEFAULT
         st.session_state["tier2_nav"] = TIER2_DEFAULT
         st.session_state["tier3_nav"] = TIER3_DEFAULT
+        st.session_state["tier4_nav"] = TIER4_DEFAULT
         st.session_state.pop("active_menu_tier", None)
     elif action == "clear_tier" and tier == 1:
         st.session_state["tier1_module_nav"] = TIER1_DEFAULT
@@ -440,21 +466,33 @@ if pending_nav:
     elif action == "clear_tier" and tier == 3:
         st.session_state["tier3_nav"] = TIER3_DEFAULT
         st.session_state["active_menu_tier"] = 3
+    elif action == "clear_tier" and tier == 4:
+        st.session_state["tier4_nav"] = TIER4_DEFAULT
+        st.session_state["active_menu_tier"] = 4
     elif tier == 1:
         st.session_state.pop("active_menu_tier", None)
         st.session_state["tier1_module_nav"] = module_name
         st.session_state["tier2_nav"] = TIER2_DEFAULT
         st.session_state["tier3_nav"] = TIER3_DEFAULT
+        st.session_state["tier4_nav"] = TIER4_DEFAULT
     elif tier == 2:
         st.session_state.pop("active_menu_tier", None)
         st.session_state["tier1_module_nav"] = TIER1_DEFAULT
         st.session_state["tier2_nav"] = module_name
         st.session_state["tier3_nav"] = TIER3_DEFAULT
+        st.session_state["tier4_nav"] = TIER4_DEFAULT
     elif tier == 3:
         st.session_state.pop("active_menu_tier", None)
         st.session_state["tier1_module_nav"] = TIER1_DEFAULT
         st.session_state["tier2_nav"] = TIER2_DEFAULT
         st.session_state["tier3_nav"] = module_name
+        st.session_state["tier4_nav"] = TIER4_DEFAULT
+    elif tier == 4:
+        st.session_state.pop("active_menu_tier", None)
+        st.session_state["tier1_module_nav"] = TIER1_DEFAULT
+        st.session_state["tier2_nav"] = TIER2_DEFAULT
+        st.session_state["tier3_nav"] = TIER3_DEFAULT
+        st.session_state["tier4_nav"] = module_name
 
 with st.sidebar:
     # Logo
@@ -583,6 +621,22 @@ with st.sidebar:
             args=(3,),
         )
 
+    #  Tier 4: Volatility
+    with st.expander("Volatility", expanded=False):
+        tier4_options = [
+            TIER4_DEFAULT,
+            "Volatility Strategy Engine",
+            "Gamma Flip Line Module",
+        ]
+        tier4_sel = st.radio(
+            "tier4",
+            tier4_options,
+            key="tier4_nav",
+            label_visibility="collapsed",
+            on_change=select_sidebar_tier,
+            args=(4,),
+        )
+
     st.divider()
 
     #  Logout
@@ -601,6 +655,8 @@ elif st.session_state.get("tier2_nav") and st.session_state.get("tier2_nav") != 
     active_module = st.session_state.get("tier2_nav")
 elif st.session_state.get("tier3_nav") and st.session_state.get("tier3_nav") != tier3_options[0]:
     active_module = st.session_state.get("tier3_nav")
+elif st.session_state.get("tier4_nav") and st.session_state.get("tier4_nav") != tier4_options[0]:
+    active_module = st.session_state.get("tier4_nav")
 elif st.session_state.get("active_menu_tier"):
     active_module = f"__MENU_TIER_{st.session_state.get('active_menu_tier')}__"
 else:
@@ -614,6 +670,7 @@ if active_module.startswith("__MENU_TIER_"):
         1: ("Live Trading", "Tier 1 execution tools and real-time market dashboards", tier1_options[1:]),
         2: ("Analysis & Intelligence", "Research modules for cross-market, fundamental, seasonal, and sentiment work", tier2_options[1:]),
         3: ("Forecasting & Cycles", "Cycle and forecasting modules for turning-window analysis", tier3_options[1:]),
+        4: ("Volatility", "Dealer gamma, implied-volatility, and premium-selling regime dashboards", tier4_options[1:]),
     }
 
     try:
@@ -639,7 +696,7 @@ if active_module.startswith("__MENU_TIER_"):
         unsafe_allow_html=True,
     )
 
-    switch_cols = st.columns(3)
+    switch_cols = st.columns(4)
     for tier_id, (switch_label, _, _) in menu_config.items():
         with switch_cols[tier_id - 1]:
             button_type = "primary" if menu_tier == tier_id else "secondary"
@@ -757,11 +814,26 @@ elif "Elliott Wave Analysis" in active_module:
     module.run()
     logger.info(f"Elliott Wave Analysis")
 
+elif active_module == "Volatility Strategy Engine":
+    from modules.tier4.volatility_engine import VolatilityEngineModule
+    module = VolatilityEngineModule()
+    module.run()
+    logger.info("Volatility Strategy Engine")
+
+elif active_module == "Gamma Flip Line Module":
+    from modules.tier4.gamma_flip.gamma_dashboard import GammaFlipLineModule
+    module = GammaFlipLineModule()
+    module.run()
+    logger.info("Gamma Flip Line Module")
+
 elif active_module in tier2_options:
     st.info(f"{active_module}  Analysis module coming in Weeks 34")
 
 elif active_module in tier3_options:
     st.info(f"{active_module}  Forecasting module coming in Weeks 56")
+
+elif active_module in tier4_options:
+    st.info(f"{active_module}  Volatility module coming soon")
 
 else:
     #
@@ -832,6 +904,13 @@ else:
             "items": [
                 {"label": "Bradley Siderograph", "module": "Bradley Siderograph", "tier": 3, "key": "macro_bradley"},
                 {"label": "Elliott Wave Analysis", "module": "Elliott Wave Analysis", "tier": 3, "key": "macro_elliott"},
+            ],
+        },
+        {
+            "label": "Volatility",
+            "items": [
+                {"label": "Volatility Strategy Engine", "module": "Volatility Strategy Engine", "tier": 4, "key": "macro_volatility_engine"},
+                {"label": "Gamma Flip Line Module", "module": "Gamma Flip Line Module", "tier": 4, "key": "macro_gamma_flip"},
             ],
         },
     ]
