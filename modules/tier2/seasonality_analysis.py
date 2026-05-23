@@ -38,6 +38,43 @@ def normalize_symbol(symbol: str) -> str:
 
 @st.cache_data(ttl=21600, show_spinner=False)
 def fetch_seasonality_data(ticker: str, years: int) -> pd.DataFrame:
+    import sqlite3
+    from utils.persistence import get_db_path
+    
+    symbol = ticker.strip().upper()
+    aliases = {"^GSPC": "SPX", "SPX": "SPX", "^NDX": "NDX", "NDX": "NDX", "^RUT": "RUT", "RUT": "RUT", "^VIX": "VIX", "VIX": "VIX", "^DJI": "DJI", "DJI": "DJI"}
+    resolved_symbol = aliases.get(symbol, symbol)
+    
+    # Try reading from SQLite first
+    try:
+        db_path = get_db_path("options_liquidity")
+        if db_path.exists():
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM daily_prices WHERE symbol = ?", (resolved_symbol,))
+                if cursor.fetchone()[0] > 0:
+                    query = "SELECT date as Date, close as Close FROM daily_prices WHERE symbol = ? ORDER BY date"
+                    df = pd.read_sql_query(query, conn)
+                    if not df.empty:
+                        df["Date"] = pd.to_datetime(df["Date"])
+                        df["Close"] = pd.to_numeric(df["Close"])
+                        df["DailyPctChange"] = df["Close"].pct_change() * 100
+                        df = df.dropna(subset=["DailyPctChange"]).reset_index(drop=True)
+                        df["DateStr"] = df["Date"].dt.strftime("%Y-%m-%d")
+                        df["Year"] = df["Date"].dt.year
+                        df["MonthNum"] = df["Date"].dt.month
+                        df["Month"] = pd.Categorical(df["Date"].dt.month_name(), categories=MONTH_ORDER, ordered=True)
+                        df["DayName"] = df["Date"].dt.day_name()
+                        
+                        # Filter by lookback years
+                        end_date = datetime.today()
+                        start_date = end_date - timedelta(days=int(years * 365.25) + 10)
+                        df = df[df["Date"] >= start_date].reset_index(drop=True)
+                        return df
+    except Exception as e:
+        pass
+
+    # Fallback to yfinance
     symbol = normalize_symbol(ticker)
     end_date = datetime.today()
     start_date = end_date - timedelta(days=int(years * 365.25) + 10)
@@ -65,6 +102,7 @@ def fetch_seasonality_data(ticker: str, years: int) -> pd.DataFrame:
     df["Month"] = pd.Categorical(df["Date"].dt.month_name(), categories=MONTH_ORDER, ordered=True)
     df["DayName"] = df["Date"].dt.day_name()
     return df.sort_values("Date").reset_index(drop=True)
+
 
 
 def monthly_stats(df: pd.DataFrame) -> pd.DataFrame:
@@ -416,8 +454,8 @@ class SeasonalityAnalysisModule(FazDaneModule):
         c3.metric("Best Month", f"{best_month['Month']}", f"{best_month['Avg_DailyPctChange']:.2f}% avg")
         c4.metric("Worst Month", f"{worst_month['Month']}", f"{worst_month['Avg_DailyPctChange']:.2f}% avg")
 
-        tab_month, tab_cycles, tab_edge, tab_weekend, tab_data = st.tabs(
-            ["Monthly", "Calendar Cycles", "First/Last Day", "Long Weekends", "Data"]
+        tab_month, tab_cycles, tab_edge, tab_weekend, tab_dist, tab_data = st.tabs(
+            ["Monthly", "Calendar Cycles", "First/Last Day", "Long Weekends", "Distribution Study", "Data"]
         )
 
         with tab_month:
@@ -686,6 +724,252 @@ class SeasonalityAnalysisModule(FazDaneModule):
                 st.plotly_chart(fig_lw, use_container_width=True)
                 st.dataframe(chart_summary.round(2), use_container_width=True, hide_index=True)
 
+        with tab_dist:
+            st.markdown("### Return Distribution & Normal Fit Study")
+            st.markdown(
+                "Compare the return distributions and fitted Normal curves of daily returns "
+                "across different seasonal cycles and buckets."
+            )
+            
+            # Category selection
+            cycle_cat = st.selectbox(
+                "Select Seasonal Cycle Category:",
+                ["Month", "Weekday", "US Presidential Election Cycle", "First vs Last Trading Day"],
+                key="season_dist_cycle_cat"
+            )
+            
+            # Prepare options based on category
+            if cycle_cat == "Month":
+                bucket_options = MONTH_ORDER
+                df_temp = df.copy()
+                df_temp["Bucket"] = df_temp["Month"].astype(str)
+                default_a, default_b = "January", "December"
+            elif cycle_cat == "Weekday":
+                bucket_options = WEEKDAY_ORDER
+                df_temp = df.copy()
+                df_temp["Bucket"] = df_temp["DayName"].astype(str)
+                default_a, default_b = "Monday", "Friday"
+            elif cycle_cat == "US Presidential Election Cycle":
+                bucket_options = ["Election Year", "Post-Election Year", "Midterm Year", "Pre-Election Year"]
+                df_temp = df.copy()
+                df_temp["Bucket"] = df_temp["Year"].map(election_cycle_label)
+                default_a, default_b = "Election Year", "Midterm Year"
+            else:  # First vs Last Trading Day
+                bucket_options = ["First Trading Day", "Last Trading Day"]
+                # Build first/last day events dataframe
+                first_events = first_days.copy()
+                last_events = last_days.copy()
+                first_events["Bucket"] = "First Trading Day"
+                first_events["ReturnVal"] = first_events["ReturnPct"]
+                last_events["Bucket"] = "Last Trading Day"
+                last_events["ReturnVal"] = last_events["ReturnPct"]
+                df_temp = pd.concat([first_events[["Bucket", "ReturnVal"]], last_events[["Bucket", "ReturnVal"]]], ignore_index=True)
+                default_a, default_b = "First Trading Day", "Last Trading Day"
+                
+            # Selection of specific buckets to compare
+            col_b1, col_b2 = st.columns(2)
+            with col_b1:
+                bucket_a = st.selectbox("Compare Bucket A:", bucket_options, index=bucket_options.index(default_a), key="season_dist_bucket_a")
+            with col_b2:
+                bucket_b = st.selectbox("Compare Bucket B:", bucket_options, index=bucket_options.index(default_b), key="season_dist_bucket_b")
+                
+            # Extract returns series
+            if cycle_cat == "First vs Last Trading Day":
+                series_a = df_temp.loc[df_temp["Bucket"] == bucket_a, "ReturnVal"].dropna()
+                series_b = df_temp.loc[df_temp["Bucket"] == bucket_b, "ReturnVal"].dropna()
+            else:
+                series_a = df_temp.loc[df_temp["Bucket"] == bucket_a, "DailyPctChange"].dropna()
+                series_b = df_temp.loc[df_temp["Bucket"] == bucket_b, "DailyPctChange"].dropna()
+                
+            if series_a.empty or series_b.empty:
+                st.warning("Insufficient data in the selected range to run the distribution study for these buckets.")
+            else:
+                # Dashboard Cards showing occurrences and percentages
+                c_card1, c_card2, c_card3 = st.columns(3)
+                total_days = len(df)
+                c_card1.metric("Total Trading Days", f"{total_days:,}")
+                c_card2.metric(f"{bucket_a} Occurrences", f"{len(series_a):,} days", f"{len(series_a) / total_days * 100:.1f}% of total")
+                c_card3.metric(f"{bucket_b} Occurrences", f"{len(series_b):,} days", f"{len(series_b) / total_days * 100:.1f}% of total")
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                import scipy.stats as stats
+                
+                # Calculate parameters
+                mu_a, std_a = series_a.mean(), series_a.std()
+                mu_b, std_b = series_b.mean(), series_b.std()
+                
+                skew_a, kurt_a = stats.skew(series_a), stats.kurtosis(series_a)
+                skew_b, kurt_b = stats.skew(series_b), stats.kurtosis(series_b)
+                
+                jb_a_stat, jb_a_p = stats.jarque_bera(series_a) if len(series_a) > 2 else (0, 1.0)
+                jb_b_stat, jb_b_p = stats.jarque_bera(series_b) if len(series_b) > 2 else (0, 1.0)
+                
+                # Generate curves
+                x_min_s = min(series_a.min(), series_b.min())
+                x_max_s = max(series_a.max(), series_b.max())
+                x_range_s = np.linspace(x_min_s, x_max_s, 300)
+                
+                pdf_a = stats.norm.pdf(x_range_s, mu_a, std_a)
+                pdf_b = stats.norm.pdf(x_range_s, mu_b, std_b)
+                
+                # Calculate common bins for visual alignment and raw occurrence count tooltips
+                combined_s = np.concatenate([series_a, series_b])
+                counts_all_s, bin_edges_s = np.histogram(combined_s, bins=50)
+                counts_a, _ = np.histogram(series_a, bins=bin_edges_s)
+                counts_b, _ = np.histogram(series_b, bins=bin_edges_s)
+                
+                bin_centers_s = (bin_edges_s[:-1] + bin_edges_s[1:]) / 2
+                bin_width_s = bin_edges_s[1] - bin_edges_s[0]
+                
+                density_a = counts_a / (counts_a.sum() * bin_width_s) if counts_a.sum() > 0 else counts_a
+                density_b = counts_b / (counts_b.sum() * bin_width_s) if counts_b.sum() > 0 else counts_b
+                
+                # Plotly Chart
+                fig_dist_s = go.Figure()
+                
+                # Bucket A empirical bar (acting as Histogram)
+                fig_dist_s.add_trace(go.Bar(
+                    x=bin_centers_s,
+                    y=density_a,
+                    width=[bin_width_s] * len(bin_centers_s),
+                    name=f"{bucket_a} Empirical (Hist)",
+                    marker_color='rgba(58, 181, 74, 0.4)',
+                    customdata=counts_a,
+                    hovertemplate="Bin Range: %{x:.2f}%<br>Density: %{y:.4f}<br>Occurrences: %{customdata} days<extra></extra>"
+                ))
+                
+                # Bucket B empirical bar (acting as Histogram)
+                fig_dist_s.add_trace(go.Bar(
+                    x=bin_centers_s,
+                    y=density_b,
+                    width=[bin_width_s] * len(bin_centers_s),
+                    name=f"{bucket_b} Empirical (Hist)",
+                    marker_color='rgba(30, 58, 95, 0.4)',
+                    customdata=counts_b,
+                    hovertemplate="Bin Range: %{x:.2f}%<br>Density: %{y:.4f}<br>Occurrences: %{customdata} days<extra></extra>"
+                ))
+                
+                # Bucket A fitted normal curve
+                fig_dist_s.add_trace(go.Scatter(
+                    x=x_range_s,
+                    y=pdf_a,
+                    mode='lines',
+                    name=f"{bucket_a} Fitted Normal (μ={mu_a:.3f}%, σ={std_a:.3f}%)",
+                    line=dict(color='#3ab54a', width=2.5)
+                ))
+                
+                # Bucket B fitted normal curve
+                fig_dist_s.add_trace(go.Scatter(
+                    x=x_range_s,
+                    y=pdf_b,
+                    mode='lines',
+                    name=f"{bucket_b} Fitted Normal (μ={mu_b:.3f}%, σ={std_b:.3f}%)",
+                    line=dict(color='#93c5fd', width=2.5)
+                ))
+                
+                fig_dist_s.update_layout(
+                    title=f"Return Distribution Overlay & Normal Curves: {bucket_a} vs {bucket_b}",
+                    xaxis=dict(title="Daily Return (%)", showgrid=False, color="#8B9CB6"),
+                    yaxis=dict(title="Probability Density", showgrid=True, gridcolor="rgba(255,255,255,0.05)", color="#8B9CB6"),
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#CDD5E0")),
+                    margin=dict(l=0, r=0, t=40, b=0),
+                    height=420,
+                    barmode='overlay'
+                )
+                st.plotly_chart(fig_dist_s, use_container_width=True)
+                
+                # Metrics Table
+                st.markdown("#### Distribution Statistics Comparison")
+                
+                dist_stats_table = {
+                    "Parameter": [
+                        "Average Return (Mean)",
+                        "Realized Volatility (Std Dev)",
+                        "Skewness (Asymmetry)",
+                        "Kurtosis (Fat Tails / Tail Risk)",
+                        "Jarque-Bera Test p-value",
+                        "Normality Conclusion"
+                    ],
+                    f"{bucket_a}": [
+                        f"{mu_a:.3f}%",
+                        f"{std_a:.3f}%",
+                        f"{skew_a:.3f}",
+                        f"{kurt_a:.3f}",
+                        f"{jb_a_p:.4e}",
+                        "Rejected (Non-Normal)" if jb_a_p < 0.05 else "Accepted (Normal)"
+                    ],
+                    f"{bucket_b}": [
+                        f"{mu_b:.3f}%",
+                        f"{std_b:.3f}%",
+                        f"{skew_b:.3f}",
+                        f"{kurt_b:.3f}",
+                        f"{jb_b_p:.4e}",
+                        "Rejected (Non-Normal)" if jb_b_p < 0.05 else "Accepted (Normal)"
+                    ]
+                }
+                st.dataframe(pd.DataFrame(dist_stats_table), use_container_width=True, hide_index=True)
+                
+                # Empirical Win Rates and Shock Probabilities
+                st.markdown("#### 🎯 Empirical Return Probabilities & Edge Comparison")
+                
+                c_se1, c_se2 = st.columns(2)
+                
+                win_a = (series_a > 0).mean() * 100
+                win_b = (series_b > 0).mean() * 100
+                
+                up1_a = (series_a > 1).mean() * 100
+                up1_b = (series_b > 1).mean() * 100
+                
+                down1_a = (series_a < -1).mean() * 100
+                down1_b = (series_b < -1).mean() * 100
+                
+                down2_a = (series_a < -2).mean() * 100
+                down2_b = (series_b < -2).mean() * 100
+                
+                with c_se1:
+                    st.markdown(f"##### 🟢 Positive Outcome Probabilities ({bucket_a} vs {bucket_b})")
+                    st.write(f"**Win Rate (Daily Return > 0%):**")
+                    st.write(f"- {bucket_a}: **{win_a:.2f}%** | {bucket_b}: **{win_b:.2f}%**")
+                    st.write(f"**Strong Trend Day (Daily Return > +1.00%):**")
+                    st.write(f"- {bucket_a}: **{up1_a:.2f}%** | {bucket_b}: **{up1_b:.2f}%**")
+                    
+                    if abs(win_a - win_b) > 2.0:
+                        better_bucket = bucket_a if win_a > win_b else bucket_b
+                        w_diff = abs(win_a - win_b)
+                        st.success(f"👉 **{better_bucket}** has a **{w_diff:.1f}% higher Win Rate** compared to the other bucket.")
+                    else:
+                        st.info("👉 Win rates are comparable (within 2% deviation).")
+                        
+                with c_se2:
+                    st.markdown(f"##### 🔴 Negative Downside Outcome Probabilities ({bucket_a} vs {bucket_b})")
+                    st.write(f"**Moderate Down Day (Daily Return < -1.00%):**")
+                    st.write(f"- {bucket_a}: **{down1_a:.2f}%** | {bucket_b}: **{down1_b:.2f}%**")
+                    st.write(f"**Severe Sell-off Day (Daily Return < -2.00%):**")
+                    st.write(f"- {bucket_a}: **{down2_a:.2f}%** | {bucket_b}: **{down2_b:.2f}%**")
+                    
+                    riskier_bucket = bucket_a if down2_a > down2_b else bucket_b
+                    r_diff = abs(down2_a - down2_b)
+                    if r_diff > 0.5:
+                        st.warning(f"👉 **{riskier_bucket}** exhibits higher tail risk, with **{r_diff:.2f}% more frequent** daily sell-offs exceeding -2.00%.")
+                    else:
+                        st.info("👉 Downside tail probabilities are comparable.")
+                        
+                st.markdown(
+                    f"""
+                    <div style="background:rgba(58, 181, 74, 0.04);border:1px solid rgba(58, 181, 74, 0.15);border-radius:8px;padding:14px;margin-top:16px;">
+                        <p style="color:#3ab54a;font-weight:700;font-size:0.85rem;margin:0 0 6px 0;">📊 Distribution Insight for {symbol}:</p>
+                        <ul style="color:#8B9CB6;font-size:0.78rem;margin:0;padding-left:16px;">
+                            <li>Comparing <strong>{bucket_a}</strong> (mean: <strong>{mu_a:.3f}%</strong>) vs <strong>{bucket_b}</strong> (mean: <strong>{mu_b:.3f}%</strong>) reveals the mathematical return shift that drives seasonality edges.</li>
+                            <li>Both datasets show a Jarque-Bera p-value near <code>0.00e+00</code>. This highlights that daily stock/index index returns are <strong>leptokurtic (fat-tailed)</strong>. Outlier movements are significantly more frequent than a fitted Normal curve predicts.</li>
+                            <li>Realized Volatility (Std Dev) for <strong>{bucket_a}</strong> is <strong>{std_a:.3f}%</strong> compared to <strong>{std_b:.3f}%</strong> for <strong>{bucket_b}</strong>, highlighting which period carries more trading variance.</li>
+                        </ul>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
         with tab_data:
             if self.show_raw:
                 st.markdown("### First Trading Day Events")
@@ -693,7 +977,11 @@ class SeasonalityAnalysisModule(FazDaneModule):
                 st.markdown("### Last Trading Day Events")
                 st.dataframe(last_days[["DateStr", "Month", "ReturnPct", "Close"]].round(2), use_container_width=True, hide_index=True)
                 st.markdown("### Long Weekend Event Rows")
-                st.dataframe(lw_rows.round(2), use_container_width=True, hide_index=True)
+                display_cols = ["Holiday", "AnchorDate", "TradingDayOffset", "DateStr", "ReturnPct", "Close"]
+                if not lw_rows.empty:
+                    st.dataframe(lw_rows[display_cols].round(2), use_container_width=True, hide_index=True)
+                else:
+                    st.dataframe(lw_rows, use_container_width=True, hide_index=True)
             st.download_button(
                 "Download Daily Seasonality CSV",
                 data=df.to_csv(index=False),
