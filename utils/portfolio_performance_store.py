@@ -16,6 +16,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from utils.persistence import backup_database
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -203,6 +204,12 @@ def save_portfolio_snapshot(
 
         positions = _prepare_position_rows(df, run_id, snapshot_ts, snapshot_date, source_file)
         positions.to_sql("pp_position_snapshots", conn, if_exists="append", index=False)
+
+    # Sync snapshot to cloud storage
+    try:
+        backup_database("portfolio_performance", reason=f"Upload {source_file}")
+    except Exception as e:
+        logger.warning(f"Cloud backup failed for portfolio_performance: {e}")
 
     return {
         "run_id": run_id,

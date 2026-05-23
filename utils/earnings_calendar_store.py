@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
+from utils.persistence import backup_database
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -136,6 +137,12 @@ def save_earnings_events(
             prepared,
         )
 
+    # Sync to cloud storage
+    try:
+        backup_database("earnings_calendar", reason=f"Events Save: {scope}")
+    except Exception as e:
+        logger.warning(f"Cloud backup failed for earnings_calendar: {e}")
+
     return len(prepared)
 
 
@@ -201,6 +208,12 @@ def mark_ticker_coverage(
             rows,
         )
 
+    # Sync to cloud storage
+    try:
+        backup_database("earnings_calendar", reason=f"Coverage Mark: {scope}")
+    except Exception as e:
+        logger.warning(f"Cloud backup failed for earnings_calendar: {e}")
+
 
 def missing_market_dates(
     dates: Iterable[str],
@@ -254,6 +267,12 @@ def mark_market_dates(
             """,
             rows,
         )
+
+    # Sync to cloud storage
+    try:
+        backup_database("earnings_calendar", reason=f"Market Coverage Mark: {scope}")
+    except Exception as e:
+        logger.warning(f"Cloud backup failed for earnings_calendar: {e}")
 
 
 def get_database_summary(db_path: Path = DB_PATH) -> dict:

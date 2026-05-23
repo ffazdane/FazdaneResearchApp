@@ -47,3 +47,6 @@ Thumbs.db
 
 # Skyfield ephemeris cache
 de421.bsp
+
+# Backups and persistence logs
+data/backups/

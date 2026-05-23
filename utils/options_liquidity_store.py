@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from utils.persistence import backup_database
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -102,6 +103,12 @@ def save_options_snapshot(
                     if_exists="append",
                     index=False,
                 )
+
+    # Sync to cloud storage
+    try:
+        backup_database("options_liquidity", reason=f"Scan: {data_source}")
+    except Exception as e:
+        logger.warning(f"Cloud backup failed for options_liquidity: {e}")
 
     return {
         "run_id": run_id,

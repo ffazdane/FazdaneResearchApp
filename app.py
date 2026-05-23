@@ -442,6 +442,17 @@ if not st.session_state.authenticated:
     authenticator.render_login_screen()
     st.stop()
 
+# Initialize databases from cloud backup on startup
+if "db_initialized" not in st.session_state:
+    from utils.persistence import restore_all_databases
+    with st.spinner("Restoring databases from cloud..."):
+        restored, failed = restore_all_databases()
+        if restored:
+            st.session_state["db_restore_msg"] = f"Restored: {', '.join(restored)}"
+        if failed:
+            st.session_state["db_restore_err"] = f"Failed: {', '.join(failed)}"
+    st.session_state["db_initialized"] = True
+
 #
 # SIDEBAR  Navigation
 #
@@ -545,6 +556,17 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
+
+    restore_msg = st.session_state.get("db_restore_msg")
+    restore_err = st.session_state.get("db_restore_err")
+    if restore_msg:
+        st.caption(f"🗄️ {restore_msg}")
+    if restore_err:
+        st.caption(f"⚠️ {restore_err}")
+
+    # Database manual control and logs panel
+    from utils.persistence import render_db_control_panel
+    render_db_control_panel()
 
     st.divider()
 
