@@ -444,15 +444,23 @@ if not st.session_state.authenticated:
 
 # Initialize databases from cloud backup on startup
 if "db_initialized" not in st.session_state:
-    from utils.persistence import restore_all_databases, initialize_volatility_cache_tables
-    with st.spinner("Restoring databases from cloud..."):
-        restored, failed = restore_all_databases()
-        if restored:
-            st.session_state["db_restore_msg"] = f"Restored: {', '.join(restored)}"
-        if failed:
-            st.session_state["db_restore_err"] = f"Failed: {', '.join(failed)}"
-    # Ensure volatility cache tables exist after databases are restored
-    initialize_volatility_cache_tables()
+    try:
+        from utils.persistence import restore_all_databases, initialize_volatility_cache_tables
+
+        with st.spinner("Restoring databases from cloud..."):
+            restored, failed = restore_all_databases()
+            if restored:
+                st.session_state["db_restore_msg"] = f"Restored: {', '.join(restored)}"
+            if failed:
+                st.session_state["db_restore_err"] = f"Failed: {', '.join(failed)}"
+        # Ensure volatility cache tables exist after databases are restored
+        initialize_volatility_cache_tables()
+    except ImportError as exc:
+        logger.exception("Database persistence import failed")
+        st.session_state["db_restore_err"] = f"Database persistence unavailable: {exc}"
+    except Exception as exc:
+        logger.exception("Database persistence initialization failed")
+        st.session_state["db_restore_err"] = f"Database initialization skipped: {exc}"
     st.session_state["db_initialized"] = True
 
 #
@@ -567,8 +575,13 @@ with st.sidebar:
         st.caption(f"⚠️ {restore_err}")
 
     # Database manual control and logs panel
-    from utils.persistence import render_db_control_panel
-    render_db_control_panel()
+    try:
+        from utils.persistence import render_db_control_panel
+        render_db_control_panel()
+    except ImportError as exc:
+        st.caption(f"Database controls unavailable: {exc}")
+    except Exception as exc:
+        st.caption(f"Database controls unavailable: {exc}")
 
     st.divider()
 

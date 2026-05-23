@@ -13,7 +13,7 @@ import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 logger = logging.getLogger("FazDanePersistence")
 
@@ -223,7 +223,7 @@ def restore_database(db_name: str) -> Tuple[bool, str]:
     return ok, msg
 
 
-def restore_all_databases() -> Tuple[list[str], list[str]]:
+def restore_all_databases() -> Tuple[List[str], List[str]]:
     """Scan and restore all configured databases that are empty or missing."""
     restored = []
     failed = []
@@ -634,4 +634,3 @@ def render_db_control_panel():
                 st.info("options_liquidity database not found.")
         except Exception as e:
             st.warning(f"Could not read cache status: {e}")
-
