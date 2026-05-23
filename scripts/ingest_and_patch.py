@@ -163,11 +163,10 @@ def calculate_option_expiries(df_prices: pd.DataFrame) -> pd.DataFrame:
 
 def load_accdb_table(db_path: Path, table_name: str) -> pd.DataFrame:
     """Read a table from the MS Access database."""
-    import pyodbc
-    conn_str = f"DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={db_path};"
     logger.info(f"Loading table '{table_name}' from Access DB: {db_path}...")
-    
     try:
+        import pyodbc
+        conn_str = f"DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={db_path};"
         conn = pyodbc.connect(conn_str)
         df = pd.read_sql_query(f"SELECT * FROM [{table_name}]", conn)
         conn.close()
