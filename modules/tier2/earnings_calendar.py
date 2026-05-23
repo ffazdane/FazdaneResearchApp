@@ -37,7 +37,24 @@ def normalize_earnings_dates(value) -> list[pd.Timestamp]:
     return dates
 
 
-def calendar_fallback_rows(ticker: str, year: int) -> list[dict]:
+def earnings_window() -> tuple[pd.Timestamp, pd.Timestamp]:
+    today = pd.Timestamp(datetime.now().date())
+    return today - pd.Timedelta(days=10), today + pd.Timedelta(days=30)
+
+
+def date_only_timestamp(value) -> pd.Timestamp | None:
+    try:
+        ts = pd.Timestamp(value)
+    except Exception:
+        return None
+    if pd.isna(ts):
+        return None
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert(None)
+    return ts.normalize()
+
+
+def calendar_fallback_rows(ticker: str, start: pd.Timestamp, end: pd.Timestamp) -> list[dict]:
     try:
         ticker_obj = yf.Ticker(ticker)
         cal = ticker_obj.calendar
@@ -66,7 +83,8 @@ def calendar_fallback_rows(ticker: str, year: int) -> list[dict]:
 
     rows = []
     for ts in earnings_dates:
-        if ts.year != year:
+        event_day = date_only_timestamp(ts)
+        if event_day is None or not start <= event_day <= end:
             continue
         rows.append(
             {
@@ -105,26 +123,84 @@ def nasdaq_time_label(value: str) -> str:
     return "TBD"
 
 
-def nasdaq_scan_window(year: int, focus_month: int | None = None) -> tuple[pd.Timestamp, pd.Timestamp]:
-    if focus_month:
-        start = pd.Timestamp(year=year, month=focus_month, day=1)
-        end = start + pd.offsets.MonthEnd(0)
-        return start, end
-
-    today = pd.Timestamp(datetime.now().date())
-    if year == today.year:
-        start = pd.Timestamp(year=year, month=today.month, day=1)
-        end = start + pd.offsets.MonthEnd(0)
-        return start, end
-    return pd.Timestamp(year=year, month=1, day=1), pd.Timestamp(year=year, month=12, day=31)
+def observed_market_holiday(day: pd.Timestamp) -> pd.Timestamp:
+    if day.weekday() == 5:
+        return day - pd.Timedelta(days=1)
+    if day.weekday() == 6:
+        return day + pd.Timedelta(days=1)
+    return day
 
 
-def nasdaq_calendar_fallback_rows(tickers: tuple[str, ...], year: int, focus_month: int | None = None) -> list[dict]:
+def easter_date(year: int) -> pd.Timestamp:
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return pd.Timestamp(year=year, month=month, day=day)
+
+
+def nth_weekday(year: int, month: int, weekday: int, nth: int) -> pd.Timestamp:
+    first = pd.Timestamp(year=year, month=month, day=1)
+    offset = (weekday - first.weekday()) % 7
+    return first + pd.Timedelta(days=offset + (nth - 1) * 7)
+
+
+def last_weekday(year: int, month: int, weekday: int) -> pd.Timestamp:
+    last = pd.Timestamp(year=year, month=month, day=1) + pd.offsets.MonthEnd(0)
+    offset = (last.weekday() - weekday) % 7
+    return last - pd.Timedelta(days=offset)
+
+
+def market_holidays(year: int) -> set[pd.Timestamp]:
+    holidays = {
+        observed_market_holiday(pd.Timestamp(year=year, month=1, day=1)),
+        nth_weekday(year, 1, 0, 3),
+        nth_weekday(year, 2, 0, 3),
+        easter_date(year) - pd.Timedelta(days=2),
+        last_weekday(year, 5, 0),
+        observed_market_holiday(pd.Timestamp(year=year, month=6, day=19)),
+        observed_market_holiday(pd.Timestamp(year=year, month=7, day=4)),
+        nth_weekday(year, 9, 0, 1),
+        nth_weekday(year, 11, 3, 4),
+        observed_market_holiday(pd.Timestamp(year=year, month=12, day=25)),
+    }
+    return {holiday.normalize() for holiday in holidays}
+
+
+def is_market_trading_day(day: pd.Timestamp) -> bool:
+    day = day.normalize()
+    if day.weekday() >= 5:
+        return False
+    years = {day.year - 1, day.year, day.year + 1}
+    holidays = set().union(*(market_holidays(year) for year in years))
+    return day not in holidays
+
+
+def next_market_trading_days(count: int, start_day: pd.Timestamp | None = None) -> list[pd.Timestamp]:
+    day = (start_day or pd.Timestamp(datetime.now().date())).normalize()
+    trading_days = []
+    while len(trading_days) < count:
+        if is_market_trading_day(day):
+            trading_days.append(day)
+        day += pd.Timedelta(days=1)
+    return trading_days
+
+
+def nasdaq_calendar_fallback_rows(tickers: tuple[str, ...], start: pd.Timestamp, end: pd.Timestamp) -> list[dict]:
     wanted = {ticker.upper() for ticker in tickers if ticker and not ticker.startswith("^") and "=" not in ticker}
     if not wanted:
         return []
 
-    start, end = nasdaq_scan_window(year, focus_month)
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Accept": "application/json, text/plain, */*",
@@ -133,8 +209,6 @@ def nasdaq_calendar_fallback_rows(tickers: tuple[str, ...], year: int, focus_mon
     }
     rows = []
     for day in pd.date_range(start=start, end=end, freq="D"):
-        if day.year != year:
-            continue
         url = f"https://api.nasdaq.com/api/calendar/earnings?date={day.strftime('%Y-%m-%d')}"
         try:
             response = requests.get(url, headers=headers, timeout=12)
@@ -163,8 +237,302 @@ def nasdaq_calendar_fallback_rows(tickers: tuple[str, ...], year: int, focus_mon
     return rows
 
 
+def nasdaq_earnings_rows_for_date(day: pd.Timestamp) -> list[dict]:
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://www.nasdaq.com",
+        "Referer": "https://www.nasdaq.com/market-activity/earnings",
+    }
+    url = f"https://api.nasdaq.com/api/calendar/earnings?date={day.strftime('%Y-%m-%d')}"
+    try:
+        response = requests.get(url, headers=headers, timeout=12)
+        if response.status_code != 200:
+            return []
+        payload = response.json()
+        return payload.get("data", {}).get("rows") or []
+    except Exception:
+        return []
+
+
+def safe_price_lookup(symbol: str) -> float | None:
+    try:
+        ticker = yf.Ticker(symbol)
+        fast_info = getattr(ticker, "fast_info", None)
+        if fast_info:
+            for key in ("last_price", "regular_market_price", "previous_close"):
+                try:
+                    value = fast_info.get(key) if hasattr(fast_info, "get") else getattr(fast_info, key, None)
+                except Exception:
+                    value = None
+                if value is not None and not pd.isna(value):
+                    return float(value)
+
+        history = ticker.history(period="5d", interval="1d", auto_adjust=False)
+        if history is not None and not history.empty and "Close" in history:
+            close = history["Close"].dropna()
+            if not close.empty:
+                return float(close.iloc[-1])
+    except Exception:
+        return None
+    return None
+
+
+def batch_latest_prices(symbols: list[str]) -> dict[str, float]:
+    if not symbols:
+        return {}
+
+    prices = {}
+    try:
+        data = yf.download(
+            tickers=" ".join(symbols),
+            period="5d",
+            interval="1d",
+            group_by="ticker",
+            progress=False,
+            threads=True,
+            auto_adjust=False,
+        )
+        if data is None or data.empty:
+            return prices
+
+        if isinstance(data.columns, pd.MultiIndex):
+            for symbol in symbols:
+                if symbol not in data.columns.get_level_values(0):
+                    continue
+                close = data[symbol].get("Close")
+                if close is None:
+                    continue
+                close = close.dropna()
+                if not close.empty:
+                    prices[symbol] = float(close.iloc[-1])
+        elif "Close" in data:
+            close = data["Close"].dropna()
+            if len(symbols) == 1 and not close.empty:
+                prices[symbols[0]] = float(close.iloc[-1])
+    except Exception:
+        return prices
+
+    return prices
+
+
+@st.cache_data(ttl=10800, show_spinner=False)
+def fetch_next_week_earnings_by_price(min_price: float) -> pd.DataFrame:
+    candidates = []
+    rows = []
+    seen = set()
+
+    for day in next_market_trading_days(7):
+        for item in nasdaq_earnings_rows_for_date(day):
+            symbol = str(item.get("symbol", "")).upper().strip()
+            row_key = (day.strftime("%Y-%m-%d"), symbol)
+            if not symbol or row_key in seen or symbol.startswith("^") or "=" in symbol:
+                continue
+            seen.add(row_key)
+            candidates.append(
+                {
+                    "Date": day.strftime("%Y-%m-%d"),
+                    "Ticker": symbol,
+                    "Name": str(item.get("name") or item.get("companyName") or "").strip(),
+                    "Time": nasdaq_time_label(item.get("time")),
+                }
+            )
+
+    price_map = batch_latest_prices(sorted({row["Ticker"] for row in candidates}))
+
+    for candidate in candidates:
+        symbol = candidate["Ticker"]
+        price = price_map.get(symbol)
+        if price is None:
+            price = safe_price_lookup(symbol)
+        if price is None or price < min_price:
+            continue
+
+        rows.append({**candidate, "Price": price})
+
+    records = pd.DataFrame(rows)
+    if records.empty:
+        return records
+    return records.sort_values(["Date", "Ticker"]).reset_index(drop=True)
+
+
+def build_next_week_earnings_html(records: pd.DataFrame, min_price: float) -> str:
+    cards = []
+
+    for day in next_market_trading_days(7):
+        date_key = day.strftime("%Y-%m-%d")
+        day_records = records[records["Date"] == date_key] if not records.empty else pd.DataFrame()
+        weekday = day.strftime("%a")
+        label = f"{day.strftime('%b')} {day.day}"
+
+        if day_records.empty:
+            table_body = "<tr><td class='empty-row' colspan='5'>No matches</td></tr>"
+        else:
+            table_rows = []
+            for _, row in day_records.iterrows():
+                name = str(row.get("Name") or "").strip()
+                short_name = name if len(name) <= 34 else f"{name[:31]}..."
+                price = row.get("Price")
+                price_text = "" if pd.isna(price) else f"${float(price):,.2f}"
+                table_rows.append(
+                    f"""
+                    <tr>
+                        <td class='ticker-cell'>{escape(str(row.get("Ticker", "")))}</td>
+                        <td title='{escape(name)}'>{escape(short_name)}</td>
+                        <td>{escape(str(row.get("Date", "")))}</td>
+                        <td>{escape(str(row.get("Time", "")))}</td>
+                        <td class='price-cell'>{escape(price_text)}</td>
+                    </tr>
+                    """
+                )
+            table_body = "".join(table_rows)
+
+        cards.append(
+            f"""
+            <section class='next-card'>
+                <div class='next-card-head'>
+                    <div>
+                        <div class='weekday'>{escape(weekday)}</div>
+                        <div class='date-label'>{escape(label)}</div>
+                    </div>
+                    <span>{len(day_records)}</span>
+                </div>
+                <div class='table-wrap'>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Ticker</th>
+                                <th>Name</th>
+                                <th>Date</th>
+                                <th>Time</th>
+                                <th>Price</th>
+                            </tr>
+                        </thead>
+                        <tbody>{table_body}</tbody>
+                    </table>
+                </div>
+            </section>
+            """
+        )
+
+    return f"""
+    <style>
+        html, body {{
+            margin: 0;
+            padding: 0;
+            background: #0d1b2e;
+            font-family: Inter, Arial, sans-serif;
+        }}
+        .next-week {{
+            color: #cbd5e1;
+        }}
+        .next-week h3 {{
+            margin: 0 0 6px;
+            color: #3ab54a;
+            font-family: 'Courier Prime', monospace;
+            font-size: 20px;
+        }}
+        .next-week .subhead {{
+            margin: 0 0 14px;
+            color: #94a3b8;
+            font-size: 13px;
+        }}
+        .next-grid {{
+            display: grid;
+            grid-template-columns: repeat(7, minmax(210px, 1fr));
+            gap: 10px;
+            overflow-x: auto;
+            padding-bottom: 6px;
+        }}
+        .next-card {{
+            min-width: 210px;
+            border: 1px solid #1e3a5f;
+            background: rgba(21, 40, 71, 0.48);
+            border-radius: 8px;
+            overflow: hidden;
+        }}
+        .next-card-head {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            background: #152847;
+            border-bottom: 1px solid #1e3a5f;
+            padding: 9px 10px;
+        }}
+        .weekday {{
+            color: #94a3b8;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }}
+        .date-label {{
+            color: #f8fafc;
+            font-size: 14px;
+            font-weight: 800;
+        }}
+        .next-card-head span {{
+            color: #0d1b2e;
+            background: #facc15;
+            border-radius: 999px;
+            padding: 2px 7px;
+            font-size: 11px;
+            font-weight: 800;
+        }}
+        .table-wrap {{
+            max-height: 260px;
+            overflow: auto;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }}
+        th, td {{
+            border-bottom: 1px solid rgba(30, 58, 95, 0.8);
+            padding: 7px 8px;
+            text-align: left;
+            vertical-align: top;
+            color: #cbd5e1;
+            font-size: 11px;
+            line-height: 1.25;
+            overflow-wrap: anywhere;
+        }}
+        th {{
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            background: #10213a;
+            color: #94a3b8;
+            font-size: 10px;
+            text-transform: uppercase;
+        }}
+        .ticker-cell {{
+            color: #f87171;
+            font-weight: 800;
+        }}
+        .price-cell {{
+            color: #86efac;
+            font-weight: 700;
+        }}
+        .empty-row {{
+            color: #64748b;
+            text-align: center;
+            padding: 28px 8px;
+        }}
+    </style>
+    <div class='next-week'>
+        <h3>Next 7 Trading Days Earnings</h3>
+        <p class='subhead'>Whole-market companies reporting earnings on market trading days with latest price at or above ${min_price:,.2f}</p>
+        <div class='next-grid'>{''.join(cards)}</div>
+    </div>
+    """
+
+
 @st.cache_data(ttl=21600, show_spinner=False)
-def fetch_earnings_dates(tickers: tuple[str, ...], year: int, limit: int, focus_month: int | None = None) -> tuple[dict, pd.DataFrame, list[str]]:
+def fetch_earnings_dates(tickers: tuple[str, ...]) -> tuple[dict, pd.DataFrame, list[str]]:
+    start, end = earnings_window()
+    limit = 8
     earnings_map = defaultdict(list)
     rows = []
     failures = []
@@ -176,7 +544,7 @@ def fetch_earnings_dates(tickers: tuple[str, ...], year: int, limit: int, focus_
         if key in seen:
             return
         seen.add(key)
-        tickers_with_rows.add(row["Ticker"])
+        tickers_with_rows.add(row["Ticker"].upper())
         if row["Ticker"] not in earnings_map[row["Date"]]:
             earnings_map[row["Date"]].append(row["Ticker"])
         rows.append(row)
@@ -188,7 +556,8 @@ def fetch_earnings_dates(tickers: tuple[str, ...], year: int, limit: int, focus_
             if data is not None and not data.empty:
                 for dt, values in data.iterrows():
                     ts = pd.Timestamp(dt)
-                    if pd.isna(ts) or ts.year != year:
+                    event_day = date_only_timestamp(ts)
+                    if event_day is None or not start <= event_day <= end:
                         continue
 
                     add_row(
@@ -204,10 +573,10 @@ def fetch_earnings_dates(tickers: tuple[str, ...], year: int, limit: int, focus_
                     )
 
             if len(rows) == ticker_rows_before:
-                for row in calendar_fallback_rows(ticker, year):
+                for row in calendar_fallback_rows(ticker, start, end):
                     add_row(row)
         except Exception:
-            fallback_rows = calendar_fallback_rows(ticker, year)
+            fallback_rows = calendar_fallback_rows(ticker, start, end)
             if fallback_rows:
                 for row in fallback_rows:
                     add_row(row)
@@ -216,7 +585,7 @@ def fetch_earnings_dates(tickers: tuple[str, ...], year: int, limit: int, focus_
 
     missing_tickers = tuple(ticker for ticker in tickers if ticker.upper() not in tickers_with_rows)
     if missing_tickers:
-        for row in nasdaq_calendar_fallback_rows(missing_tickers, year, focus_month):
+        for row in nasdaq_calendar_fallback_rows(missing_tickers, start, end):
             add_row(row)
         failures = [ticker for ticker in failures if ticker.upper() not in tickers_with_rows]
 
@@ -228,9 +597,15 @@ def fetch_earnings_dates(tickers: tuple[str, ...], year: int, limit: int, focus_
     return clean_map, records, failures
 
 
-def month_has_data(year: int, month: int, earnings_map: dict) -> bool:
-    prefix = f"{year}-{month:02d}-"
-    return any(date.startswith(prefix) for date in earnings_map)
+def months_from_earnings_map(earnings_map: dict) -> list[tuple[int, int]]:
+    months = set()
+    for date_key in earnings_map:
+        try:
+            ts = pd.Timestamp(date_key)
+        except Exception:
+            continue
+        months.add((ts.year, ts.month))
+    return sorted(months)
 
 
 def build_month_calendar_html(year: int, month: int, earnings_map: dict) -> str:
@@ -385,46 +760,36 @@ class EarningsCalendarModule(FazDaneModule):
         st.caption(f"{len(self.tickers)} tickers selected from {self.universe_name}.")
 
         st.markdown("**Calendar Settings**")
-        current_year = datetime.now().year
-        self.year = int(
-            st.number_input(
-                "Earnings Year:",
-                min_value=current_year - 2,
-                max_value=current_year + 2,
-                value=current_year,
-                step=1,
-                key="earnings_year",
-            )
+        self.window_start, self.window_end = earnings_window()
+        st.caption(
+            f"Rolling window: {self.window_start.strftime('%Y-%m-%d')} to {self.window_end.strftime('%Y-%m-%d')}."
         )
-        self.limit = int(
-            st.slider(
-                "Dates to request per ticker:",
-                min_value=4,
-                max_value=40,
-                value=20,
-                step=2,
-                key="earnings_limit",
-            )
-        )
-        self.month_filter = st.selectbox(
-            "Months to Display:",
-            ["Current month", "Only months with earnings", "All months"],
-            index=0,
-            key="earnings_month_filter",
-        )
-        current_month_index = datetime.now().month - 1
-        self.selected_month = st.selectbox(
-            "Jump to Month:",
-            list(calendar.month_name)[1:],
-            index=current_month_index,
-            key="earnings_selected_month",
-        )
-        self.selected_month_number = list(calendar.month_name).index(self.selected_month)
         self.show_table = st.checkbox("Show detail table", value=True, key="earnings_show_table")
+        st.markdown("**Next 7 Days Filter**")
+        self.next_week_min_price = float(
+            st.number_input(
+                "Minimum stock price:",
+                min_value=0.0,
+                max_value=10000.0,
+                value=100.0,
+                step=5.0,
+                key="earnings_next_week_min_price",
+            )
+        )
 
         if st.button("Refresh Earnings", use_container_width=True, type="primary", key="earnings_refresh"):
             fetch_earnings_dates.clear()
+            fetch_next_week_earnings_by_price.clear()
             st.rerun()
+
+    def render_next_week_panel(self):
+        with st.spinner("Building next 7 days earnings price filter..."):
+            next_week_records = fetch_next_week_earnings_by_price(self.next_week_min_price)
+        components.html(
+            build_next_week_earnings_html(next_week_records, self.next_week_min_price),
+            height=390,
+            scrolling=False,
+        )
 
     def render_main(self):
         self.render_section_header(
@@ -434,61 +799,48 @@ class EarningsCalendarModule(FazDaneModule):
 
         if not self.tickers:
             st.warning("Select or create a ticker universe to build the earnings calendar.")
+            self.render_next_week_panel()
             return
 
-        with st.spinner(f"Fetching earnings dates for {len(self.tickers)} tickers..."):
-            earnings_map, records, failures = fetch_earnings_dates(
-                tuple(self.tickers),
-                self.year,
-                self.limit,
-                self.selected_month_number,
-            )
+        with st.spinner(f"Fetching rolling earnings window for {len(self.tickers)} tickers..."):
+            earnings_map, records, failures = fetch_earnings_dates(tuple(self.tickers))
         portfolio_tickers = get_tickers("FazDane Portfolio")
         portfolio_records = pd.DataFrame()
         portfolio_failures = []
         if portfolio_tickers:
             with st.spinner(f"Fetching FazDane Portfolio earnings for {len(portfolio_tickers)} tickers..."):
-                _, portfolio_records, portfolio_failures = fetch_earnings_dates(
-                    tuple(portfolio_tickers),
-                    self.year,
-                    self.limit,
-                    self.selected_month_number,
-                )
+                _, portfolio_records, portfolio_failures = fetch_earnings_dates(tuple(portfolio_tickers))
 
         total_events = sum(len(tickers) for tickers in earnings_map.values())
-        active_months = [m for m in range(1, 13) if month_has_data(self.year, m, earnings_map)]
+        active_months = months_from_earnings_map(earnings_map)
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Universe", self.universe_name)
         c2.metric("Tickers", str(len(self.tickers)))
         c3.metric("Earnings Events", str(total_events))
-        c4.metric("Months With Data", str(len(active_months)))
+        c4.metric("Window", "10D back / 30D ahead")
 
         if failures:
             with st.expander(f"Tickers skipped by yfinance ({len(failures)})", expanded=False):
                 st.write(", ".join(sorted(failures)))
 
         if not earnings_map:
-            st.warning("No earnings dates were returned for this universe and year.")
+            st.warning("No earnings dates were returned for this universe in the rolling window.")
+            self.render_next_week_panel()
             return
 
-        if self.month_filter == "Current month":
-            months = [list(calendar.month_name).index(self.selected_month)]
-        elif self.month_filter == "All months":
-            months = range(1, 13)
-        else:
-            months = active_months
-
-        for month in months:
+        for year, month in active_months:
             components.html(
-                build_month_calendar_html(self.year, month, earnings_map),
-                height=month_calendar_height(self.year, month),
+                build_month_calendar_html(year, month, earnings_map),
+                height=month_calendar_height(year, month),
                 scrolling=False,
             )
 
+        self.render_next_week_panel()
+
         st.markdown("### FazDane Portfolio Earnings")
         if portfolio_records.empty:
-            st.info("No FazDane Portfolio earnings dates were returned for the selected year.")
+            st.info("No FazDane Portfolio earnings dates were returned for the rolling window.")
         else:
             portfolio_display = portfolio_records.copy()
             portfolio_display["Portfolio"] = "FazDane Portfolio"
@@ -499,7 +851,7 @@ class EarningsCalendarModule(FazDaneModule):
             st.download_button(
                 "Download FazDane Portfolio Earnings CSV",
                 data=portfolio_display.to_csv(index=False),
-                file_name=f"fazdane_portfolio_earnings_{self.year}.csv",
+                file_name="fazdane_portfolio_earnings_rolling_window.csv",
                 mime="text/csv",
                 use_container_width=True,
             )
@@ -514,7 +866,7 @@ class EarningsCalendarModule(FazDaneModule):
             st.download_button(
                 "Download Earnings CSV",
                 data=records.to_csv(index=False),
-                file_name=f"earnings_{self.universe_name.replace(' ', '_').lower()}_{self.year}.csv",
+                file_name=f"earnings_{self.universe_name.replace(' ', '_').lower()}_rolling_window.csv",
                 mime="text/csv",
                 use_container_width=True,
             )
