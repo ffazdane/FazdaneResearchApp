@@ -1,0 +1,261 @@
+{
+    "Options Default Watchlist": {
+        "tickers": [
+            "SPY",
+            "QQQ",
+            "IWM",
+            "GLD",
+            "TLT",
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "AMZN",
+            "TSLA",
+            "GOOGL",
+            "META",
+            "JPM",
+            "XLK",
+            "XLF"
+        ],
+        "benchmark": "SPY",
+        "description": "Default options liquidity scan list",
+        "module": "general"
+    },
+    "Calendar Candidates": {
+        "tickers": [
+            "SPY",
+            "QQQ",
+            "IWM",
+            "DIA",
+            "GLD",
+            "NVDA",
+            "TSLA",
+            "AAPL",
+            "MSFT",
+            "AMZN",
+            "META",
+            "GOOGL",
+            "AVGO",
+            "AMD",
+            "NFLX",
+            "INTC",
+            "QCOM",
+            "CSCO",
+            "AMAT",
+            "COIN",
+            "HOOD",
+            "PLTR",
+            "IBM",
+            "CRM",
+            "ADBE",
+            "ORCL",
+            "CRWD",
+            "JPM",
+            "GS",
+            "UNH",
+            "LLY",
+            "COST",
+            "HD",
+            "BA",
+            "CAT",
+            "DDOG"
+        ],
+        "benchmark": "SPY",
+        "description": "Calendar spread candidate universe",
+        "module": "general"
+    },
+    "SPX Sectors": {
+        "tickers": [
+            "XLC",
+            "XLY",
+            "XLP",
+            "XLE",
+            "XLF",
+            "XLV",
+            "XLI",
+            "XLB",
+            "XLRE",
+            "XLK",
+            "XLU"
+        ],
+        "benchmark": "SPY",
+        "description": "SPX Sector ETFs",
+        "module": "general"
+    },
+    "MAG 7": {
+        "tickers": [
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "AMZN",
+            "META",
+            "GOOGL",
+            "TSLA"
+        ],
+        "benchmark": "QQQ",
+        "description": "Magnificent 7 mega-cap tech stocks",
+        "module": "general"
+    },
+    "Leading ETFs": {
+        "tickers": [
+            "QQQ",
+            "SPY",
+            "IWM",
+            "DIA",
+            "SMH",
+            "XLK",
+            "XLF",
+            "XLE",
+            "GLD",
+            "SLV",
+            "TLT",
+            "HYG"
+        ],
+        "benchmark": "SPY",
+        "description": "Leading broad-market ETFs",
+        "module": "general"
+    },
+    "Major Indexes": {
+        "tickers": [
+            "^GSPC",
+            "^IXIC",
+            "^DJI",
+            "^RUT",
+            "^NYA",
+            "^VIX"
+        ],
+        "benchmark": "^GSPC",
+        "description": "Major market indices",
+        "module": "general"
+    },
+    "Index Universe": {
+        "tickers": [
+            "^GSPC",
+            "^NDX",
+            "^RUT"
+        ],
+        "benchmark": "^GSPC",
+        "description": "Core index universe: SPX, NDX, and RUT",
+        "module": "general"
+    },
+    "Futures and Indexes": {
+        "tickers": [
+            "ES=F",
+            "NQ=F",
+            "YM=F",
+            "RTY=F",
+            "GC=F",
+            "CL=F",
+            "^VIX",
+            "SPY",
+            "QQQ",
+            "IWM",
+            "DIA"
+        ],
+        "benchmark": "SPY",
+        "description": "Futures, volatility, and index ETFs",
+        "module": "general"
+    },
+    "Correlation Matrix Assets": {
+        "tickers": [
+            "SPY",
+            "QQQ",
+            "IWM",
+            "^VIX",
+            "TLT",
+            "GLD",
+            "CL=F",
+            "BTC=F",
+            "DX-Y.NYB",
+            "HG=F"
+        ],
+        "benchmark": "SPY",
+        "description": "Cross-asset list for correlation matrix analysis",
+        "module": "general"
+    },
+    "FazDane Portfolio": {
+        "tickers": [
+            "NFLX",
+            "CSCO",
+            "DDOG",
+            "NVDA",
+            "AMZN",
+            "AAPL",
+            "GOOG",
+            "TSLA",
+            "AMD",
+            "AVGO",
+            "MSFT",
+            "META",
+            "CRWD",
+            "QQQ",
+            "SPY",
+            "GS"
+        ],
+        "benchmark": "SPY",
+        "description": "FazDane  Portfolio",
+        "module": "general"
+    },
+    "Best Option Spread Tickers": {
+        "tickers": [
+            "SPY",
+            "QQQ",
+            "IWM",
+            "DIA",
+            "NVDA",
+            "TSLA",
+            "AAPL",
+            "MSFT",
+            "AMZN",
+            "META",
+            "GOOGL",
+            "AVGO",
+            "AMD",
+            "NFLX",
+            "COIN",
+            "MSTR",
+            "HOOD",
+            "PLTR",
+            "CRM",
+            "ADBE",
+            "ORCL",
+            "CRWD",
+            "PANW",
+            "JPM",
+            "GS",
+            "UNH",
+            "LLY",
+            "COST",
+            "HD",
+            "BA",
+            "CAT"
+        ],
+        "benchmark": "SPY",
+        "description": "Highly liquid option spread candidates",
+        "module": "general"
+    },
+    "Iron Condor Tradeables": {
+        "tickers": [
+            "^GSPC",
+            "^NDX",
+            "^RUT",
+            "^DJI",
+            "NVDA",
+            "AAPL",
+            "MSFT",
+            "AMZN",
+            "META",
+            "GOOGL",
+            "TSLA",
+            "AVGO",
+            "NFLX",
+            "AMD",
+            "SPY",
+            "QQQ",
+            "IWM"
+        ],
+        "benchmark": "^VIX",
+        "description": "Default instruments for iron condor strategy builder",
+        "module": "general"
+    }
+}

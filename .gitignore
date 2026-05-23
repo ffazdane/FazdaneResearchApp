@@ -3,6 +3,8 @@ config.yaml
 .env
 credentials/
 *.json
+!config/asset_lists.json
+!config/universes.json
 
 # Python
 __pycache__/
