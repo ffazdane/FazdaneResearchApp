@@ -97,6 +97,71 @@ def _get_s3_config() -> Dict[str, str]:
 # Database State Checkers
 # ════════════════════════════════════════════════════════════
 
+def initialize_volatility_cache_tables():
+    """Create the volatility caching tables if they don't already exist.
+
+    Called at app startup to guarantee the schema is present before any
+    module attempts to read or write cached volatility data.
+    """
+    try:
+        db_path = get_db_path("options_liquidity")
+        if not db_path.exists():
+            logger.info("options_liquidity database does not exist yet; skipping cache table init.")
+            return
+        conn = sqlite3.connect(db_path, timeout=10)
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS volatility_page_snapshots (
+                symbol TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                last_price REAL,
+                atm_iv REAL,
+                hv20 REAL,
+                hv30 REAL,
+                hvr REAL,
+                expected_move REAL,
+                regime_label TEXT,
+                trend_label TEXT,
+                vix_current REAL,
+                vix_pct REAL,
+                vvix_current REAL,
+                term_shape TEXT,
+                term_structure_json TEXT,
+                otm_put_iv REAL,
+                otm_call_iv REAL,
+                skew_label TEXT,
+                liq_label TEXT,
+                liq_detail_json TEXT,
+                days_to_earnings INTEGER,
+                strategy_name TEXT,
+                strategy_json TEXT,
+                PRIMARY KEY (symbol, timestamp)
+            );
+
+            CREATE TABLE IF NOT EXISTS options_chains_cache (
+                symbol TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                expiry_date TEXT NOT NULL,
+                strike REAL NOT NULL,
+                option_type TEXT NOT NULL,
+                bid REAL,
+                ask REAL,
+                implied_volatility REAL,
+                volume INTEGER,
+                open_interest INTEGER,
+                PRIMARY KEY (symbol, timestamp, expiry_date, strike, option_type)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_vol_snapshots_symbol_ts
+                ON volatility_page_snapshots(symbol, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_options_chains_cache_symbol_ts
+                ON options_chains_cache(symbol, timestamp);
+        """)
+        conn.close()
+        logger.info("Volatility cache tables verified/created in options_liquidity.sqlite")
+    except Exception as e:
+        logger.warning(f"Failed to initialize volatility cache tables: {e}")
+
+
 def db_exists_and_has_data(db_name: str) -> bool:
     """Check if the SQLite database file exists and contains user tables."""
     try:
@@ -503,4 +568,70 @@ def render_db_control_panel():
                 st.error(f"Failed to read logs: {e}")
         else:
             st.info("No activity logged yet.")
+
+        # ── Volatility Cache Status ──
+        st.divider()
+        st.markdown("**📊 Volatility Engine Cache Status**")
+        try:
+            db_path = get_db_path("options_liquidity")
+            if db_path.exists():
+                conn = sqlite3.connect(db_path, timeout=5)
+                # Check if tables exist
+                tables = [r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('volatility_page_snapshots','options_chains_cache')"
+                ).fetchall()]
+
+                if "volatility_page_snapshots" in tables:
+                    # Get total snapshot count
+                    total_snapshots = conn.execute("SELECT COUNT(*) FROM volatility_page_snapshots").fetchone()[0]
+                    # Get unique symbols cached
+                    symbols = conn.execute("SELECT DISTINCT symbol FROM volatility_page_snapshots ORDER BY symbol").fetchall()
+                    symbol_list = [r[0] for r in symbols]
+
+                    if total_snapshots > 0:
+                        st.caption(f"**Total Snapshots**: {total_snapshots}  |  **Symbols Cached**: {', '.join(symbol_list)}")
+
+                        # Show last cached entry per symbol
+                        recent = conn.execute("""
+                            SELECT symbol, timestamp, last_price, atm_iv, regime_label, strategy_name
+                            FROM volatility_page_snapshots
+                            WHERE (symbol, timestamp) IN (
+                                SELECT symbol, MAX(timestamp) FROM volatility_page_snapshots GROUP BY symbol
+                            )
+                            ORDER BY timestamp DESC
+                        """).fetchall()
+
+                        if recent:
+                            import pandas as pd
+                            cache_df = pd.DataFrame(recent, columns=[
+                                "Symbol", "Last Cached", "Price", "ATM IV", "Regime", "Strategy"
+                            ])
+                            # Format columns
+                            cache_df["Price"] = cache_df["Price"].apply(lambda x: f"${x:,.2f}" if x else "N/A")
+                            cache_df["ATM IV"] = cache_df["ATM IV"].apply(lambda x: f"{x:.1f}%" if x else "N/A")
+                            st.dataframe(cache_df, use_container_width=True, hide_index=True)
+
+                        # Show chain cache counts
+                        if "options_chains_cache" in tables:
+                            chain_summary = conn.execute("""
+                                SELECT symbol, timestamp, COUNT(*) as contracts
+                                FROM options_chains_cache
+                                WHERE (symbol, timestamp) IN (
+                                    SELECT symbol, MAX(timestamp) FROM options_chains_cache GROUP BY symbol
+                                )
+                                GROUP BY symbol, timestamp
+                                ORDER BY timestamp DESC
+                            """).fetchall()
+                            if chain_summary:
+                                chain_info = ", ".join([f"{r[0]}: {r[2]} contracts" for r in chain_summary])
+                                st.caption(f"**Cached Option Chains**: {chain_info}")
+                    else:
+                        st.info("No volatility data cached yet. Load the Volatility Engine page to populate the cache.")
+                else:
+                    st.info("Cache tables not initialized yet.")
+                conn.close()
+            else:
+                st.info("options_liquidity database not found.")
+        except Exception as e:
+            st.warning(f"Could not read cache status: {e}")
 

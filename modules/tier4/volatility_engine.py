@@ -360,6 +360,267 @@ def strategy_engine(hvr, atm_iv, hv20, trend_label, skew_label,
             "reason": f"HV Rank is very low ({hvr:.1f}). Premium is not elevated enough to justify forcing a trade.",
             "warnings": warnings_list, "badge_style": "red"}
 
+# ────────────────────────────────────────────────
+# CACHING & PERSISTENCE HELPERS (FOR RESILIENCY)
+# ────────────────────────────────────────────────
+def _ensure_volatility_cache_schema(conn):
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS volatility_page_snapshots (
+            symbol TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            last_price REAL,
+            atm_iv REAL,
+            hv20 REAL,
+            hv30 REAL,
+            hvr REAL,
+            expected_move REAL,
+            regime_label TEXT,
+            trend_label TEXT,
+            vix_current REAL,
+            vix_pct REAL,
+            vvix_current REAL,
+            term_shape TEXT,
+            term_structure_json TEXT,
+            otm_put_iv REAL,
+            otm_call_iv REAL,
+            skew_label TEXT,
+            liq_label TEXT,
+            liq_detail_json TEXT,
+            days_to_earnings INTEGER,
+            strategy_name TEXT,
+            strategy_json TEXT,
+            PRIMARY KEY (symbol, timestamp)
+        );
+
+        CREATE TABLE IF NOT EXISTS options_chains_cache (
+            symbol TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            expiry_date TEXT NOT NULL,
+            strike REAL NOT NULL,
+            option_type TEXT NOT NULL,
+            bid REAL,
+            ask REAL,
+            implied_volatility REAL,
+            volume INTEGER,
+            open_interest INTEGER,
+            PRIMARY KEY (symbol, timestamp, expiry_date, strike, option_type)
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_vol_snapshots_symbol_ts ON volatility_page_snapshots(symbol, timestamp);
+        CREATE INDEX IF NOT EXISTS idx_options_chains_cache_symbol_ts ON options_chains_cache(symbol, timestamp);
+    """)
+
+def save_volatility_cache(
+    symbol: str,
+    last_price: float,
+    atm_iv: float | None,
+    hv20: float,
+    hv30: float,
+    hvr: float,
+    expected_move: float,
+    regime_label: str,
+    trend_label: str,
+    vix_current: float | None,
+    vix_pct: float | None,
+    vvix_current: float | None,
+    term_shape: str,
+    term_structure: list,
+    otm_put_iv: float | None,
+    otm_call_iv: float | None,
+    skew_label: str,
+    liq_label: str,
+    liq_detail: dict,
+    days_to_earnings: int | None,
+    strategy_result: dict,
+    calls_df: pd.DataFrame | None,
+    puts_df: pd.DataFrame | None,
+    best_expiry: str | None
+):
+    try:
+        import sqlite3
+        import json
+        import math
+        from utils.persistence import get_db_path
+        
+        def _safe_float(val, default=None):
+            """Convert to float, returning default if NaN/None."""
+            if val is None:
+                return default
+            try:
+                f = float(val)
+                return default if math.isnan(f) else f
+            except (ValueError, TypeError):
+                return default
+
+        def _safe_int(val, default=0):
+            """Convert to int, returning default if NaN/None."""
+            if val is None:
+                return default
+            try:
+                f = float(val)
+                return default if math.isnan(f) else int(f)
+            except (ValueError, TypeError):
+                return default
+
+        db_path = get_db_path("options_liquidity")
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        scan_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        term_structure_json = json.dumps(term_structure)
+        liq_detail_json = json.dumps(liq_detail)
+        strategy_name = strategy_result.get("strategy", "HOLD / WAIT")
+        strategy_json = json.dumps(strategy_result)
+        
+        with sqlite3.connect(db_path) as conn:
+            _ensure_volatility_cache_schema(conn)
+            
+            conn.execute("""
+                INSERT OR REPLACE INTO volatility_page_snapshots (
+                    symbol, timestamp, last_price, atm_iv, hv20, hv30, hvr, expected_move,
+                    regime_label, trend_label, vix_current, vix_pct, vvix_current, term_shape,
+                    term_structure_json, otm_put_iv, otm_call_iv, skew_label, liq_label,
+                    liq_detail_json, days_to_earnings, strategy_name, strategy_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                symbol, scan_ts, _safe_float(last_price), _safe_float(atm_iv),
+                _safe_float(hv20), _safe_float(hv30), _safe_float(hvr), _safe_float(expected_move),
+                regime_label, trend_label, _safe_float(vix_current), _safe_float(vix_pct),
+                _safe_float(vvix_current), term_shape,
+                term_structure_json, _safe_float(otm_put_iv), _safe_float(otm_call_iv),
+                skew_label, liq_label,
+                liq_detail_json, _safe_int(days_to_earnings, None), strategy_name, strategy_json
+            ))
+            
+            records = []
+            if calls_df is not None and not calls_df.empty:
+                for _, row in calls_df.iterrows():
+                    expiry_str = best_expiry if best_expiry else ""
+                    records.append((
+                        symbol, scan_ts, expiry_str, float(row['strike']), 'call',
+                        _safe_float(row.get('bid', 0), 0.0), _safe_float(row.get('ask', 0), 0.0),
+                        _safe_float(row.get('impliedVolatility', 0), 0.0) * 100,
+                        _safe_int(row.get('volume', 0)), _safe_int(row.get('openInterest', 0))
+                    ))
+            if puts_df is not None and not puts_df.empty:
+                for _, row in puts_df.iterrows():
+                    expiry_str = best_expiry if best_expiry else ""
+                    records.append((
+                        symbol, scan_ts, expiry_str, float(row['strike']), 'put',
+                        _safe_float(row.get('bid', 0), 0.0), _safe_float(row.get('ask', 0), 0.0),
+                        _safe_float(row.get('impliedVolatility', 0), 0.0) * 100,
+                        _safe_int(row.get('volume', 0)), _safe_int(row.get('openInterest', 0))
+                    ))
+            
+            if records:
+                conn.executemany("""
+                    INSERT OR REPLACE INTO options_chains_cache (
+                        symbol, timestamp, expiry_date, strike, option_type, bid, ask,
+                        implied_volatility, volume, open_interest
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, records)
+                
+            conn.commit()
+            
+        # Sync to cloud storage if backend is configured
+        from utils.persistence import backup_database
+        backup_database("options_liquidity", reason=f"Volatility Cache: {symbol}")
+    except Exception as e:
+        import logging
+        logging.getLogger("FazDanePersistence").warning(f"Failed to save volatility cache: {e}")
+
+def load_volatility_cache(symbol: str) -> dict | None:
+    try:
+        import sqlite3
+        import json
+        from utils.persistence import get_db_path
+        
+        db_path = get_db_path("options_liquidity")
+        if not db_path.exists():
+            return None
+            
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='volatility_page_snapshots'")
+            if not cursor.fetchone():
+                return None
+                
+            row = conn.execute("""
+                SELECT timestamp, last_price, atm_iv, hv20, hv30, hvr, expected_move,
+                       regime_label, trend_label, vix_current, vix_pct, vvix_current, term_shape,
+                       term_structure_json, otm_put_iv, otm_call_iv, skew_label, liq_label,
+                       liq_detail_json, days_to_earnings, strategy_name, strategy_json
+                FROM volatility_page_snapshots
+                WHERE symbol = ?
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """, (symbol,)).fetchone()
+            
+            if not row:
+                return None
+                
+            timestamp = row[0]
+            
+            chain_rows = conn.execute("""
+                SELECT expiry_date, strike, option_type, bid, ask, implied_volatility, volume, open_interest
+                FROM options_chains_cache
+                WHERE symbol = ? AND timestamp = ?
+            """, (symbol, timestamp)).fetchall()
+            
+            calls_list = []
+            puts_list = []
+            best_expiry = None
+            
+            for c_row in chain_rows:
+                expiry, strike, opt_type, bid, ask, iv, vol, oi = c_row
+                best_expiry = expiry
+                item = {
+                    'strike': strike,
+                    'bid': bid,
+                    'ask': ask,
+                    'impliedVolatility': iv / 100.0,
+                    'volume': vol,
+                    'openInterest': oi
+                }
+                if opt_type == 'call':
+                    calls_list.append(item)
+                else:
+                    puts_list.append(item)
+            
+            calls_df = pd.DataFrame(calls_list) if calls_list else pd.DataFrame()
+            puts_df = pd.DataFrame(puts_list) if puts_list else pd.DataFrame()
+            
+            return {
+                'timestamp': timestamp,
+                'last_price': row[1],
+                'atm_iv': row[2],
+                'hv20': row[3],
+                'hv30': row[4],
+                'hvr': row[5],
+                'expected_move': row[6],
+                'regime_label': row[7],
+                'trend_label': row[8],
+                'vix_current': row[9],
+                'vix_pct': row[10],
+                'vvix_current': row[11],
+                'term_shape': row[12],
+                'term_structure': json.loads(row[13]) if row[13] else [],
+                'otm_put_iv': row[14],
+                'otm_call_iv': row[15],
+                'skew_label': row[16],
+                'liq_label': row[17],
+                'liq_detail': json.loads(row[18]) if row[18] else {},
+                'days_to_earnings': row[19],
+                'strategy_name': row[20],
+                'strategy_result': json.loads(row[21]) if row[21] else {},
+                'calls_df': calls_df,
+                'puts_df': puts_df,
+                'best_expiry': best_expiry
+            }
+    except Exception as e:
+        import logging
+        logging.getLogger("FazDanePersistence").error(f"Failed to load volatility cache: {e}")
+        return None
+
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # TICKER RESOLUTION FUNCTION
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -530,9 +791,42 @@ class VolatilityEngineModule(FazDaneModule):
             vix_data = get_vix_data(st.session_state.get("ve_start_date"), st.session_state.get("ve_end_date"))
             vvix_val = get_vvix()
 
+        # Check if live fetch was successful
+        live_fetch_failed = (
+            calls is None or puts is None or atm_iv is None or
+            term_structure is None or len(term_structure) == 0 or
+            otm_put_iv is None
+        )
+        
+        cache_data = None
+        if live_fetch_failed:
+            cache_data = load_volatility_cache(display_ticker)
+            if cache_data:
+                st.warning(f"⚠️ Live options data fetch failed or rate-limited. Loaded last browsed cached data from {cache_data['timestamp']}.")
+                atm_iv = cache_data['atm_iv']
+                best_expiry = cache_data['best_expiry']
+                calls = cache_data['calls_df']
+                puts = cache_data['puts_df']
+                term_structure = cache_data['term_structure']
+                otm_put_iv = cache_data['otm_put_iv']
+                otm_call_iv = cache_data['otm_call_iv']
+                if best_expiry:
+                    try:
+                        actual_dte = (datetime.strptime(best_expiry, "%Y-%m-%d").date() - today_d).days
+                    except:
+                        actual_dte = selected_dte
+                else:
+                    actual_dte = selected_dte
+            else:
+                st.error("❌ Live options fetch failed and no cached data is available for this symbol. Please check connection or try again later.")
+                st.stop()
+
         earnings_date    = get_earnings_date(data_ticker)
         today_d          = date.today()
         days_to_earnings = (earnings_date - today_d).days if earnings_date else None
+        
+        if live_fetch_failed and cache_data and days_to_earnings is None:
+            days_to_earnings = cache_data['days_to_earnings']
 
         liq_label, liq_style, liq_detail = (get_liquidity_score(calls, puts, current_price)
                                              if calls is not None and not calls.empty
@@ -540,6 +834,14 @@ class VolatilityEngineModule(FazDaneModule):
 
         vix_current  = float(vix_data.iloc[-1]) if vix_data is not None else None
         vix_pct      = get_vix_percentile(vix_data)
+        
+        if live_fetch_failed and cache_data:
+            if vix_current is None:
+                vix_current = cache_data['vix_current']
+            if vix_pct is None:
+                vix_pct = cache_data['vix_pct']
+            if vvix_val is None:
+                vvix_val = cache_data['vvix_current']
 
         iv_hv_diff   = (atm_iv - hv20) if atm_iv else None
 
@@ -575,6 +877,35 @@ class VolatilityEngineModule(FazDaneModule):
         )
         if st.session_state.get("ve_macro_event", False):
             result["warnings"].append("Manual macro event flagged (Fed/CPI/etc.) - reduce size or avoid.")
+
+        # Save successfully fetched live options and volatility data to cache
+        if not live_fetch_failed:
+            save_volatility_cache(
+                symbol=display_ticker,
+                last_price=current_price,
+                atm_iv=atm_iv,
+                hv20=hv20,
+                hv30=hv30,
+                hvr=hvr,
+                expected_move=exp_move,
+                regime_label=regime_label,
+                trend_label=trend_label,
+                vix_current=vix_current,
+                vix_pct=vix_pct,
+                vvix_current=vvix_val,
+                term_shape=term_shape,
+                term_structure=term_structure,
+                otm_put_iv=otm_put_iv,
+                otm_call_iv=otm_call_iv,
+                skew_label=skew_label,
+                liq_label=liq_label,
+                liq_detail=liq_detail,
+                days_to_earnings=days_to_earnings,
+                strategy_result=result,
+                calls_df=calls,
+                puts_df=puts,
+                best_expiry=best_expiry
+            )
 
         # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # TABS

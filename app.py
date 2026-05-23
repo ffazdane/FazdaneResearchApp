@@ -444,13 +444,15 @@ if not st.session_state.authenticated:
 
 # Initialize databases from cloud backup on startup
 if "db_initialized" not in st.session_state:
-    from utils.persistence import restore_all_databases
+    from utils.persistence import restore_all_databases, initialize_volatility_cache_tables
     with st.spinner("Restoring databases from cloud..."):
         restored, failed = restore_all_databases()
         if restored:
             st.session_state["db_restore_msg"] = f"Restored: {', '.join(restored)}"
         if failed:
             st.session_state["db_restore_err"] = f"Failed: {', '.join(failed)}"
+    # Ensure volatility cache tables exist after databases are restored
+    initialize_volatility_cache_tables()
     st.session_state["db_initialized"] = True
 
 #
