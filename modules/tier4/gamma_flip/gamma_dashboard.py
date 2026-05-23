@@ -142,7 +142,7 @@ class GammaFlipLineModule(FazDaneModule):
                     use_container_width=True,
                 )
             with st.expander("Strike x Expiration GEX Heatmap", expanded=False):
-                st.plotly_chart(expiration_heatmap(analysis["gex_rows"]), use_container_width=True)
+                st.plotly_chart(expiration_heatmap(analysis["gex_rows"], summary["Spot Price"]), use_container_width=True)
 
         with tab2:
             st.markdown("### Summary Table")
