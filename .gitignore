@@ -30,6 +30,8 @@ data/options_liquidity/*.sqlite-*
 data/options_liquidity/exports/
 data/portfolio_performance/*.sqlite
 data/portfolio_performance/*.sqlite-*
+data/earnings_calendar/*.sqlite
+data/earnings_calendar/*.sqlite-*
 
 # IDE
 .vscode/

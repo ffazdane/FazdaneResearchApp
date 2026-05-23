@@ -20,9 +20,8 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "data" / "portfolio_performance"
-DB_PATH = Path(
-    os.getenv("PORTFOLIO_PERFORMANCE_DB_PATH", DATA_DIR / "portfolio_performance.sqlite")
-).expanduser()
+DEFAULT_DB_PATH = DATA_DIR / "portfolio_performance.sqlite"
+DB_PATH = Path(os.getenv("PORTFOLIO_PERFORMANCE_DB_PATH", DEFAULT_DB_PATH)).expanduser()
 CENTRAL_TZ = ZoneInfo("America/Chicago")
 
 
@@ -299,6 +298,56 @@ def get_latest_portfolio_positions(db_path: Path = DB_PATH) -> tuple[pd.DataFram
     return df, metadata
 
 
+def get_database_status(db_path: Path = DB_PATH) -> dict[str, Any]:
+    """Return storage diagnostics so production can detect ephemeral DB paths."""
+    resolved = db_path.expanduser().resolve()
+    repo_root = REPO_ROOT.resolve()
+    env_path = os.getenv("PORTFOLIO_PERFORMANCE_DB_PATH")
+    exists = resolved.exists()
+    inside_repo = _is_relative_to(resolved, repo_root)
+
+    status = {
+        "db_path": str(resolved),
+        "configured_env_path": env_path,
+        "exists": exists,
+        "inside_repo": inside_repo,
+        "is_default_path": resolved == DEFAULT_DB_PATH.resolve(),
+        "run_count": 0,
+        "position_count": 0,
+        "latest_snapshot_ts": None,
+        "latest_source_file": None,
+        "warning": None,
+    }
+
+    if inside_repo:
+        status["warning"] = (
+            "Database is inside the app repository. Git will not overwrite it, "
+            "but production hosts with ephemeral app storage can wipe it on reboot or redeploy. "
+            "Set PORTFOLIO_PERFORMANCE_DB_PATH to a persistent mounted volume."
+        )
+
+    if not exists:
+        return status
+
+    with sqlite3.connect(resolved) as conn:
+        _ensure_schema(conn)
+        status["run_count"] = int(conn.execute("SELECT COUNT(*) FROM pp_runs").fetchone()[0])
+        status["position_count"] = int(conn.execute("SELECT COUNT(*) FROM pp_position_snapshots").fetchone()[0])
+        latest = conn.execute(
+            """
+            SELECT snapshot_ts, source_file
+            FROM pp_runs
+            ORDER BY snapshot_ts DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if latest:
+            status["latest_snapshot_ts"] = latest[0]
+            status["latest_source_file"] = latest[1]
+
+    return status
+
+
 def extract_snapshot_datetime(text: str) -> datetime:
     """Extract Schwab's report timestamp when present, otherwise use local time."""
     first_lines = " ".join(text.splitlines()[:8])
@@ -422,6 +471,14 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             ON pp_position_snapshots(snapshot_date, ticker);
         """
     )
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
 
 
 def _prepare_position_rows(

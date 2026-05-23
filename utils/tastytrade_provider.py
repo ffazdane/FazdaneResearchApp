@@ -232,7 +232,15 @@ def _normalize_market_data_item(item: dict[str, Any]) -> dict[str, Any]:
         "ask": _to_float(item.get("ask")),
         "mark": _to_float(item.get("mark")),
         "last_price": _to_float(item.get("last")),
-        "close": _to_float(item.get("close") or item.get("prev-close")),
+        "close": _to_float(item.get("close") or item.get("prev-close") or item.get("previous-close")),
+        "prev_close": _to_float(item.get("prev-close") or item.get("previous-close")),
+        "net_change": _to_float(item.get("net-change") or item.get("change") or item.get("price-change")),
+        "percent_change": _to_float(
+            item.get("percent-change")
+            or item.get("change-percent")
+            or item.get("percentChange")
+            or item.get("changePercent")
+        ),
         "volume": _to_float(item.get("volume")),
         "open_interest": _to_float(item.get("open-interest") or item.get("open_interest")),
         "implied_volatility": _to_float(

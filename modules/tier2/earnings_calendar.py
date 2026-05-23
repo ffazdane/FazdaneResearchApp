@@ -15,6 +15,19 @@ import streamlit.components.v1 as components
 import yfinance as yf
 
 from modules.base_module import FazDaneModule
+from utils.earnings_calendar_store import (
+    get_coverage_sample,
+    get_database_summary,
+    get_recent_events,
+    get_saved_tickers,
+    load_earnings_events,
+    load_market_earnings,
+    mark_market_dates,
+    mark_ticker_coverage,
+    missing_market_dates,
+    missing_ticker_coverage,
+    save_earnings_events,
+)
 from utils.universe_manager import get_tickers, render_universe_manager
 
 
@@ -316,41 +329,47 @@ def batch_latest_prices(symbols: list[str]) -> dict[str, float]:
     return prices
 
 
-@st.cache_data(ttl=10800, show_spinner=False)
 def fetch_next_week_earnings_by_price(min_price: float) -> pd.DataFrame:
+    trading_days = next_market_trading_days(7)
+    date_keys = [day.strftime("%Y-%m-%d") for day in trading_days]
+    missing_dates = set(missing_market_dates(date_keys))
     candidates = []
-    rows = []
     seen = set()
 
-    for day in next_market_trading_days(7):
+    for day in trading_days:
+        date_key = day.strftime("%Y-%m-%d")
+        if date_key not in missing_dates:
+            continue
         for item in nasdaq_earnings_rows_for_date(day):
             symbol = str(item.get("symbol", "")).upper().strip()
-            row_key = (day.strftime("%Y-%m-%d"), symbol)
+            row_key = (date_key, symbol)
             if not symbol or row_key in seen or symbol.startswith("^") or "=" in symbol:
                 continue
             seen.add(row_key)
             candidates.append(
                 {
-                    "Date": day.strftime("%Y-%m-%d"),
+                    "Date": date_key,
                     "Ticker": symbol,
                     "Name": str(item.get("name") or item.get("companyName") or "").strip(),
                     "Time": nasdaq_time_label(item.get("time")),
+                    "Source": "Nasdaq earnings calendar",
                 }
             )
 
-    price_map = batch_latest_prices(sorted({row["Ticker"] for row in candidates}))
+    if missing_dates:
+        price_map = batch_latest_prices(sorted({row["Ticker"] for row in candidates}))
+        market_rows = []
+        for candidate in candidates:
+            symbol = candidate["Ticker"]
+            price = price_map.get(symbol)
+            if price is None:
+                price = safe_price_lookup(symbol)
+            market_rows.append({**candidate, "Price": price})
 
-    for candidate in candidates:
-        symbol = candidate["Ticker"]
-        price = price_map.get(symbol)
-        if price is None:
-            price = safe_price_lookup(symbol)
-        if price is None or price < min_price:
-            continue
+        save_earnings_events(market_rows, scope="market_next_7")
+        mark_market_dates(sorted(missing_dates), scope="market_next_7")
 
-        rows.append({**candidate, "Price": price})
-
-    records = pd.DataFrame(rows)
+    records = load_market_earnings(date_keys, min_price, scope="market_next_7")
     if records.empty:
         return records
     return records.sort_values(["Date", "Ticker"]).reset_index(drop=True)
@@ -529,12 +548,13 @@ def build_next_week_earnings_html(records: pd.DataFrame, min_price: float) -> st
     """
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
 def fetch_earnings_dates(tickers: tuple[str, ...]) -> tuple[dict, pd.DataFrame, list[str]]:
     start, end = earnings_window()
     limit = 8
-    earnings_map = defaultdict(list)
-    rows = []
+    window_dates = [day.strftime("%Y-%m-%d") for day in pd.date_range(start=start, end=end, freq="D")]
+    requested_tickers = tuple(str(ticker).strip().upper() for ticker in tickers if str(ticker).strip())
+    tickers_to_fetch = tuple(missing_ticker_coverage(requested_tickers, window_dates, scope="universe"))
+    fetched_rows = []
     failures = []
     seen = set()
     tickers_with_rows = set()
@@ -545,13 +565,11 @@ def fetch_earnings_dates(tickers: tuple[str, ...]) -> tuple[dict, pd.DataFrame, 
             return
         seen.add(key)
         tickers_with_rows.add(row["Ticker"].upper())
-        if row["Ticker"] not in earnings_map[row["Date"]]:
-            earnings_map[row["Date"]].append(row["Ticker"])
-        rows.append(row)
+        fetched_rows.append(row)
 
-    for ticker in tickers:
+    for ticker in tickers_to_fetch:
         try:
-            ticker_rows_before = len(rows)
+            ticker_rows_before = len(fetched_rows)
             data = yf.Ticker(ticker).get_earnings_dates(limit=limit)
             if data is not None and not data.empty:
                 for dt, values in data.iterrows():
@@ -562,7 +580,7 @@ def fetch_earnings_dates(tickers: tuple[str, ...]) -> tuple[dict, pd.DataFrame, 
 
                     add_row(
                         {
-                            "Date": ts.strftime("%Y-%m-%d"),
+                            "Date": event_day.strftime("%Y-%m-%d"),
                             "Ticker": ticker,
                             "Time": ts.strftime("%I:%M %p %Z"),
                             "EPS Estimate": values.get("EPS Estimate", None),
@@ -572,7 +590,7 @@ def fetch_earnings_dates(tickers: tuple[str, ...]) -> tuple[dict, pd.DataFrame, 
                         }
                     )
 
-            if len(rows) == ticker_rows_before:
+            if len(fetched_rows) == ticker_rows_before:
                 for row in calendar_fallback_rows(ticker, start, end):
                     add_row(row)
         except Exception:
@@ -583,14 +601,26 @@ def fetch_earnings_dates(tickers: tuple[str, ...]) -> tuple[dict, pd.DataFrame, 
             else:
                 failures.append(ticker)
 
-    missing_tickers = tuple(ticker for ticker in tickers if ticker.upper() not in tickers_with_rows)
+    missing_tickers = tuple(ticker for ticker in tickers_to_fetch if ticker.upper() not in tickers_with_rows)
     if missing_tickers:
         for row in nasdaq_calendar_fallback_rows(missing_tickers, start, end):
             add_row(row)
         failures = [ticker for ticker in failures if ticker.upper() not in tickers_with_rows]
 
+    if tickers_to_fetch:
+        save_earnings_events(fetched_rows, scope="universe")
+        mark_ticker_coverage(tickers_to_fetch, window_dates, scope="universe")
+
+    records = load_earnings_events(requested_tickers, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), scope="universe")
+    earnings_map = defaultdict(list)
+    if not records.empty:
+        for _, row in records.iterrows():
+            ticker = row["Ticker"]
+            date_key = row["Date"]
+            if ticker not in earnings_map[date_key]:
+                earnings_map[date_key].append(ticker)
+
     clean_map = {date: sorted(symbols) for date, symbols in sorted(earnings_map.items())}
-    records = pd.DataFrame(rows)
     if not records.empty:
         records = records.sort_values(["Date", "Ticker"]).reset_index(drop=True)
 
@@ -739,6 +769,49 @@ def month_calendar_height(year: int, month: int) -> int:
     return 92 + (week_count * 124)
 
 
+def render_database_status():
+    summary = get_database_summary()
+    with st.expander("Earnings Database Status", expanded=False):
+        st.caption(summary["db_path"])
+        if summary.get("warning"):
+            st.warning(summary["warning"])
+        elif summary.get("configured_env_path"):
+            st.success("Using EARNINGS_CALENDAR_DB_PATH.")
+        else:
+            st.info("Using the default local development database path.")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Saved Events", f"{summary['event_count']:,}")
+        c2.metric("Saved Tickers", f"{summary['ticker_count']:,}")
+        c3.metric("Ticker Coverage Rows", f"{summary['ticker_coverage_count']:,}")
+        c4.metric("Market Days Covered", f"{summary['market_coverage_count']:,}")
+
+        if summary.get("latest_fetch"):
+            st.caption(f"Latest database write: {summary['latest_fetch']}")
+
+        tab_tickers, tab_events, tab_coverage = st.tabs(["Tickers", "Recent Events", "Coverage"])
+        with tab_tickers:
+            saved_tickers = get_saved_tickers()
+            if saved_tickers.empty:
+                st.info("No saved earnings tickers yet.")
+            else:
+                st.dataframe(saved_tickers, use_container_width=True, hide_index=True)
+
+        with tab_events:
+            recent_events = get_recent_events(limit=100)
+            if recent_events.empty:
+                st.info("No saved earnings events yet.")
+            else:
+                st.dataframe(recent_events, use_container_width=True, hide_index=True)
+
+        with tab_coverage:
+            coverage = get_coverage_sample(limit=100)
+            if coverage.empty:
+                st.info("No ticker coverage rows yet.")
+            else:
+                st.dataframe(coverage, use_container_width=True, hide_index=True)
+
+
 class EarningsCalendarModule(FazDaneModule):
     MODULE_NAME = "Earnings Calendar"
     MODULE_ICON = "📺"
@@ -778,8 +851,7 @@ class EarningsCalendarModule(FazDaneModule):
         )
 
         if st.button("Refresh Earnings", use_container_width=True, type="primary", key="earnings_refresh"):
-            fetch_earnings_dates.clear()
-            fetch_next_week_earnings_by_price.clear()
+            st.cache_data.clear()
             st.rerun()
 
     def render_next_week_panel(self):
@@ -819,6 +891,7 @@ class EarningsCalendarModule(FazDaneModule):
         c2.metric("Tickers", str(len(self.tickers)))
         c3.metric("Earnings Events", str(total_events))
         c4.metric("Window", "10D back / 30D ahead")
+        render_database_status()
 
         if failures:
             with st.expander(f"Tickers skipped by yfinance ({len(failures)})", expanded=False):

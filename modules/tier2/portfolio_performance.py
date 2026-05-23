@@ -20,6 +20,7 @@ from utils.tastytrade_provider import (
     load_config,
 )
 from utils.portfolio_performance_store import (
+    get_database_status,
     get_latest_portfolio_positions,
     get_portfolio_history,
     get_recent_portfolio_snapshots,
@@ -131,16 +132,25 @@ def _fetch_tastytrade_daily_change(symbols: tuple[str, ...]) -> pd.DataFrame:
     for _, quote in quotes.iterrows():
         ticker = str(quote.get("market_symbol") or "").upper()
         last = _first_numeric(quote, ["last_price", "mark", "ask", "bid"])
-        previous = _first_numeric(quote, ["close"])
+        previous = _first_numeric(quote, ["prev_close", "close"])
+        net_change = _first_numeric(quote, ["net_change"])
+        pct_change = _first_numeric(quote, ["percent_change"])
+        if previous is None and last is not None and net_change is not None:
+            previous = float(last) - float(net_change)
+        if pct_change is not None and abs(pct_change) <= 1:
+            pct_change = pct_change * 100
         if not ticker or last is None or previous is None or previous == 0:
             continue
+        if pct_change is None:
+            pct_change = (last / previous - 1) * 100
+        price_change = net_change if net_change is not None else last - previous
         rows.append(
             {
                 "ticker": ticker,
                 "last_price": float(last),
                 "previous_close": float(previous),
-                "price_change": float(last - previous),
-                "pct_change": float((last / previous - 1) * 100),
+                "price_change": float(price_change),
+                "pct_change": float(pct_change),
                 "market_source": "Tastytrade",
             }
         )
@@ -263,7 +273,7 @@ class PortfolioPerformanceModule(FazDaneModule):
         )
         self.market_data_source = st.selectbox(
             "Daily Net Change Source",
-            ["Tastytrade First", "yfinance Only", "Tastytrade Only"],
+            ["yfinance Only", "Tastytrade First", "Tastytrade Only"],
             index=0,
             key="pp_daily_change_source",
         )
@@ -276,6 +286,8 @@ class PortfolioPerformanceModule(FazDaneModule):
             st.session_state.pop("pp_last_saved_hash", None)
             fetch_daily_net_change.clear()
             st.rerun()
+
+        self._render_database_status()
 
     def render_main(self):
         self.render_section_header(
@@ -488,7 +500,7 @@ class PortfolioPerformanceModule(FazDaneModule):
         fig.add_vline(x=0, line_width=1, line_color=BRAND["muted"])
         style_figure(fig, height=max(360, 26 * len(daily) + 96))
         fig.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
-        fig.update_xaxes(ticksuffix="%", tickformat="+.2f")
+        fig.update_xaxes(ticksuffix="%", tickformat=".2f", separatethousands=False)
         st.plotly_chart(fig, use_container_width=True, theme=None)
 
         total_estimate = daily["estimated_dollar_change"].sum()
@@ -664,6 +676,26 @@ class PortfolioPerformanceModule(FazDaneModule):
                     "total_delta": st.column_config.NumberColumn("Delta", format="%.2f"),
                 },
             )
+
+    def _render_database_status(self):
+        status = get_database_status()
+        with st.expander("Database Storage", expanded=False):
+            st.caption(status["db_path"])
+            if status.get("warning"):
+                st.warning(status["warning"])
+            elif status["configured_env_path"]:
+                st.success("Using PORTFOLIO_PERFORMANCE_DB_PATH.")
+            else:
+                st.info("Using the default local development database path.")
+
+            c1, c2 = st.columns(2)
+            c1.metric("Saved Runs", f"{status['run_count']:,}")
+            c2.metric("Saved Positions", f"{status['position_count']:,}")
+            if status.get("latest_snapshot_ts"):
+                st.caption(
+                    f"Latest snapshot: {status['latest_snapshot_ts']} "
+                    f"from {status.get('latest_source_file') or 'unknown source'}"
+                )
 
     def _render_data_tab(self, positions: pd.DataFrame, metadata: dict):
         st.markdown("### Parsed Position Snapshot")
