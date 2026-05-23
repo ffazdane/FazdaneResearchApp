@@ -910,7 +910,7 @@ class OptionsLiquidityModule(FazDaneModule):
 
     #  Tab 1: Heatmap
 
-    def _render_trade_signal_buckets(self, symbols: list[str]):
+    def _render_trade_signal_buckets(self, symbols: list[str], focus_symbol: str | None = None):
         st.markdown("### FDTS + MACD Trade Signal Buckets")
         with st.spinner("Calculating daily FDTS + MACD regimes..."):
             signals = fetch_trade_signal_buckets(tuple(symbols))
@@ -918,6 +918,36 @@ class OptionsLiquidityModule(FazDaneModule):
         if signals.empty:
             st.info("No trade signal data available for the current symbols.")
             return
+
+        focus_symbol = str(focus_symbol or "").strip().upper()
+        if focus_symbol:
+            focus_rows = signals[signals["Ticker"].astype(str).str.upper() == focus_symbol]
+            if focus_rows.empty:
+                st.info(f"{focus_symbol} is not available in the FDTS + MACD signal table.")
+            else:
+                focus = focus_rows.iloc[0]
+                signal_color = {
+                    "Buy": "#3ab54a",
+                    "No Trade": "#f59e0b",
+                    "Sell": "#ef4444",
+                }.get(str(focus["Signal"]), "#94a3b8")
+                st.markdown(
+                    f"""
+                    <div style="
+                        border:1px solid {signal_color};
+                        border-left:5px solid {signal_color};
+                        background:rgba(21,40,71,0.78);
+                        border-radius:8px;
+                        padding:10px 12px;
+                        margin:4px 0 12px;
+                    ">
+                        <span style="color:#e2e8f0;font-weight:800;">{focus_symbol}</span>
+                        <span style="color:{signal_color};font-weight:800;margin-left:10px;">{focus['Signal']}</span>
+                        <span style="color:#94a3b8;margin-left:10px;">from {focus['Previous']} on {focus['Start']} | {focus['Days']} days | delta {focus['Delta']:.2f}</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
         bucket_defs = [
             ("Buy", "#3ab54a"),
@@ -945,8 +975,21 @@ class OptionsLiquidityModule(FazDaneModule):
                     st.caption("No symbols in this bucket.")
                     continue
 
+                display_df = bucket_df[["Ticker", "Previous", "Start", "Days", "Entry", "Last", "Delta"]]
+                if focus_symbol:
+                    styled_df = display_df.style.apply(
+                        lambda row: [
+                            "background-color: rgba(250, 204, 21, 0.22); color: #ffffff; font-weight: 800;"
+                            if str(row["Ticker"]).upper() == focus_symbol
+                            else ""
+                            for _ in row
+                        ],
+                        axis=1,
+                    )
+                else:
+                    styled_df = display_df
                 st.dataframe(
-                    bucket_df[["Ticker", "Previous", "Start", "Days", "Entry", "Last", "Delta"]],
+                    styled_df,
                     use_container_width=True,
                     hide_index=True,
                     column_config={
@@ -960,14 +1003,15 @@ class OptionsLiquidityModule(FazDaneModule):
                     },
                 )
 
-        self._render_trade_signal_rotation(signals)
+        self._render_trade_signal_rotation(signals, focus_symbol=focus_symbol)
 
-    def _render_trade_signal_rotation(self, signals: pd.DataFrame):
+    def _render_trade_signal_rotation(self, signals: pd.DataFrame, focus_symbol: str | None = None):
         st.markdown("### Ticker Signal Rotation")
         if signals.empty or not {"Previous", "Signal", "Ticker"}.issubset(signals.columns):
             st.info("No signal rotation data available.")
             return
 
+        focus_symbol = str(focus_symbol or "").strip().upper()
         bucket_x = {"Buy": -1, "No Trade": 0, "Sell": 1}
         bucket_color = {"Sell": "#ef4444", "No Trade": "#f59e0b", "Buy": "#3ab54a"}
         plot_df = signals.copy()
@@ -991,12 +1035,17 @@ class OptionsLiquidityModule(FazDaneModule):
             previous = row["PreviousText"]
             current = row["SignalText"]
             color = bucket_color.get(current, "#94a3b8")
+            is_focus = str(row["Ticker"]).upper() == focus_symbol
             fig.add_trace(go.Scatter(
                 x=[bucket_x.get(previous, 0), bucket_x.get(current, 0)],
                 y=[row["Lane"], row["Lane"]],
                 mode="lines+markers+text",
-                line=dict(color=color, width=3 if row["Changed"] else 1.5, dash="dot"),
-                marker=dict(size=[8, 11], color=[bucket_color.get(previous, "#94a3b8"), color]),
+                line=dict(color="#facc15" if is_focus else color, width=5 if is_focus else 3 if row["Changed"] else 1.5, dash="solid" if is_focus else "dot"),
+                marker=dict(
+                    size=[12, 16] if is_focus else [8, 11],
+                    color=[bucket_color.get(previous, "#94a3b8"), color],
+                    line=dict(color="#facc15" if is_focus else color, width=3 if is_focus else 0),
+                ),
                 text=["", row["Ticker"]],
                 textposition="middle right",
                 hovertemplate=(
@@ -1078,21 +1127,64 @@ class OptionsLiquidityModule(FazDaneModule):
         call_vals = pivot.get("Call", pd.Series([0] * len(pivot))).tolist()
         put_vals  = pivot.get("Put",  pd.Series([0] * len(pivot))).tolist()
         syms      = pivot["symbol"].tolist()
+        focus_state_key = "ol_heatmap_focus_symbol"
+        focus_picker_key = "ol_heatmap_focus_picker"
+        selected_symbol = st.session_state.get(focus_state_key)
+        if selected_symbol not in syms:
+            selected_symbol = syms[0] if syms else None
+            st.session_state[focus_state_key] = selected_symbol
+        if st.session_state.get(focus_picker_key) not in syms:
+            st.session_state[focus_picker_key] = selected_symbol
+
+        control_cols = st.columns([2, 1])
+        with control_cols[0]:
+            focus_symbol = st.selectbox(
+                "Focus ticker",
+                syms,
+                index=syms.index(selected_symbol) if selected_symbol in syms else 0,
+                key=focus_picker_key,
+                help="Click a heatmap bar when supported, or choose a ticker here to highlight its FDTS + MACD status below.",
+            )
+            if focus_symbol != st.session_state.get(focus_state_key):
+                st.session_state[focus_state_key] = focus_symbol
+        with control_cols[1]:
+            volume_cols = [c for c in ["Call", "Put"] if c in pivot.columns]
+            focused_volume = 0
+            if focus_symbol in syms and volume_cols:
+                focused_volume = int(
+                    pivot.loc[pivot["symbol"] == focus_symbol, volume_cols]
+                    .sum(axis=1)
+                    .iloc[0]
+                )
+            st.metric(
+                "Focused Volume",
+                f"{focused_volume:,}",
+            )
 
         fig = go.Figure()
+        focus_line = ["#facc15" if sym == focus_symbol else "rgba(226,232,240,0.18)" for sym in syms]
+        focus_width = [4 if sym == focus_symbol else 1 for sym in syms]
         fig.add_trace(go.Bar(
             name="Calls",
             x=syms,
             y=call_vals,
             marker_color="#3ab54a",
+            marker_line_color=focus_line,
+            marker_line_width=focus_width,
             opacity=0.85,
+            customdata=syms,
+            hovertemplate="<b>%{x}</b><br>Calls: %{y:,}<extra></extra>",
         ))
         fig.add_trace(go.Bar(
             name="Puts",
             x=syms,
             y=put_vals,
             marker_color="#ef4444",
+            marker_line_color=focus_line,
+            marker_line_width=focus_width,
             opacity=0.85,
+            customdata=syms,
+            hovertemplate="<b>%{x}</b><br>Puts: %{y:,}<extra></extra>",
         ))
 
         fig.update_layout(
@@ -1111,10 +1203,29 @@ class OptionsLiquidityModule(FazDaneModule):
             margin=dict(l=0, r=0, t=30, b=0),
             height=380,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        try:
+            heatmap_event = st.plotly_chart(
+                fig,
+                use_container_width=True,
+                key="ol_volume_heatmap",
+                on_select="rerun",
+                selection_mode="points",
+            )
+            if isinstance(heatmap_event, dict):
+                selection = heatmap_event.get("selection", {})
+            else:
+                selection = getattr(heatmap_event, "selection", {})
+            points = selection.get("points", []) if isinstance(selection, dict) else []
+            if points:
+                clicked_symbol = str(points[0].get("x") or points[0].get("customdata") or "").upper()
+                if clicked_symbol in syms and clicked_symbol != focus_symbol:
+                    st.session_state[focus_state_key] = clicked_symbol
+                    st.rerun()
+        except TypeError:
+            st.plotly_chart(fig, use_container_width=True, key="ol_volume_heatmap_static")
 
         signal_symbols = sorted(df["symbol"].dropna().astype(str).str.upper().unique())
-        self._render_trade_signal_buckets(signal_symbols)
+        self._render_trade_signal_buckets(signal_symbols, focus_symbol=focus_symbol)
 
 
     #  Tab 2: Chain Table
