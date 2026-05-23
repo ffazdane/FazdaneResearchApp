@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -217,19 +218,33 @@ def expiration_heatmap(gex_rows: pd.DataFrame, spot: float | None = None) -> go.
         heat = filtered_rows.groupby(["strike", "expiration"], as_index=False)["signed_gex"].sum()
         if not heat.empty:
             pivot = heat.pivot(index="strike", columns="expiration", values="signed_gex").fillna(0)
+            vals = pivot.values
+            abs_vals = np.abs(vals)
+            
+            # Find 90th percentile of absolute non-zero values to scale colorbar and clip outliers
+            non_zero = abs_vals[abs_vals > 0]
+            if len(non_zero) > 0:
+                limit = np.percentile(non_zero, 90)
+                # Ensure limit is positive and not tiny to avoid division issues
+                limit = max(limit, 1000.0)
+                clipped_values = np.clip(vals, -limit, limit)
+            else:
+                clipped_values = vals
+                
             fig.add_trace(
                 go.Heatmap(
                     x=list(pivot.columns),
                     y=list(pivot.index),
-                    z=pivot.values,
+                    z=clipped_values,
+                    customdata=vals,
                     colorscale=[
-                        [0.0, "rgb(239, 68, 68)"],     # Red
-                        [0.5, "rgb(15, 23, 42)"],      # Dark slate blue midpoint (0 GEX)
-                        [1.0, "rgb(58, 181, 74)"]      # Green
+                        [0.0, "rgb(239, 68, 68)"],     # Brighter Red
+                        [0.5, "rgb(22, 32, 48)"],      # Dark slate blue midpoint (clearly visible 0 GEX)
+                        [1.0, "rgb(58, 181, 74)"]      # Brighter Green
                     ],
                     zmid=0,
                     colorbar={"title": "GEX ($)"},
-                    hovertemplate="Expiration: %{x}<br>Strike: $%{y:.2f}<br>GEX: $%{z:,.0f}<extra></extra>"
+                    hovertemplate="Expiration: %{x}<br>Strike: $%{y:.2f}<br>GEX: $%{customdata:,.0f}<extra></extra>"
                 )
             )
 
