@@ -475,6 +475,17 @@ def render_db_control_panel():
         if error:
             st.error(error)
 
+        st.divider()
+        if st.button("Rebuild/Patch DB from Online", key="db_manual_ingest", use_container_width=True, help="Download historical price data from Yahoo Finance and calculate option expiries directly in production to rebuild the SQLite database from scratch."):
+            with st.spinner("Downloading historical data and rebuilding database..."):
+                try:
+                    from scripts.ingest_and_patch import main as run_ingestion
+                    run_ingestion()
+                    st.session_state["db_action_status"] = "Database successfully rebuilt from online sources!"
+                except Exception as e:
+                    st.session_state["db_action_error"] = f"Ingestion failed: {e}"
+            st.rerun()
+
         # Show recent logs
         st.divider()
         st.markdown("**Recent Actions Log**")

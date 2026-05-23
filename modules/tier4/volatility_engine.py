@@ -971,34 +971,82 @@ class VolatilityEngineModule(FazDaneModule):
             st.markdown('<p class="panel-title">VIX Seasonality & Regime Analysis</p>', unsafe_allow_html=True)
             
             # Load VIX and OpEx data from SQLite
+            vix_df = pd.DataFrame()
+            exp_df = pd.DataFrame()
+            
+            # Fetch start and end date from session state
+            start_date_val = st.session_state.get("ve_start_date")
+            end_date_val = st.session_state.get("ve_end_date")
+            start_str = start_date_val.strftime("%Y-%m-%d") if start_date_val else "1990-01-01"
+            end_str = end_date_val.strftime("%Y-%m-%d") if end_date_val else datetime.now().strftime("%Y-%m-%d")
+            
             try:
                 import sqlite3
                 from utils.persistence import get_db_path
                 db_path = get_db_path("options_liquidity")
                 
-                # Fetch start and end date from session state
-                start_date_val = st.session_state.get("ve_start_date")
-                end_date_val = st.session_state.get("ve_end_date")
-                start_str = start_date_val.strftime("%Y-%m-%d") if start_date_val else "1990-01-01"
-                end_str = end_date_val.strftime("%Y-%m-%d") if end_date_val else datetime.now().strftime("%Y-%m-%d")
-                
-                with sqlite3.connect(db_path) as conn:
-                    # Fetch VIX prices within date range
-                    vix_df = pd.read_sql_query(
-                        "SELECT date, close FROM daily_prices WHERE symbol = 'VIX' AND date BETWEEN ? AND ? ORDER BY date",
-                        conn,
-                        params=(start_str, end_str)
-                    )
-                    # Fetch expiries within date range
-                    exp_df = pd.read_sql_query(
-                        "SELECT expiry_date FROM option_expiries WHERE symbol = 'VIX' AND expiry_date BETWEEN ? AND ?",
-                        conn,
-                        params=(start_str, end_str)
-                    )
+                if db_path.exists():
+                    with sqlite3.connect(db_path) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='daily_prices'")
+                        if cursor.fetchone():
+                            vix_df = pd.read_sql_query(
+                                "SELECT date, close FROM daily_prices WHERE symbol = 'VIX' AND date BETWEEN ? AND ? ORDER BY date",
+                                conn,
+                                params=(start_str, end_str)
+                            )
+                            exp_df = pd.read_sql_query(
+                                "SELECT expiry_date FROM option_expiries WHERE symbol = 'VIX' AND expiry_date BETWEEN ? AND ?",
+                                conn,
+                                params=(start_str, end_str)
+                            )
             except Exception as e:
-                vix_df = pd.DataFrame()
-                exp_df = pd.DataFrame()
-                st.error(f"Error loading VIX data from SQLite: {e}")
+                logger.warning(f"Error loading VIX from SQLite: {e}")
+                
+            # Fallback to Yahoo Finance online if SQLite database is empty/missing
+            if vix_df.empty:
+                st.info("SQLite database not initialized. Fetching VIX data from Yahoo Finance online...")
+                try:
+                    # Download VIX from yfinance
+                    vix_data = yf.download("^VIX", start=start_str, end=end_str, auto_adjust=True, progress=False)
+                    if not vix_data.empty:
+                        if isinstance(vix_data.columns, pd.MultiIndex):
+                            vix_data.columns = ["_".join(str(part) for part in col if part).strip() for col in vix_data.columns]
+                        close_cols = [col for col in vix_data.columns if "Close" in str(col)]
+                        if close_cols:
+                            vix_df = vix_data[[close_cols[0]]].copy()
+                            vix_df.columns = ["close"]
+                            vix_df = vix_df.reset_index().rename(columns={"Date": "date"})
+                            vix_df["date"] = pd.to_datetime(vix_df["date"])
+                            
+                            # Ensure clean float close prices
+                            vix_df['close'] = pd.to_numeric(vix_df['close'])
+                            
+                            # Calculate option expiries (3rd Fridays) dynamically
+                            trading_dates = set(vix_df['date'].dt.strftime('%Y-%m-%d'))
+                            temp_df = vix_df.copy()
+                            temp_df['year'] = temp_df['date'].dt.year
+                            temp_df['month'] = temp_df['date'].dt.month
+                            years_months = temp_df[['year', 'month']].drop_duplicates().values.tolist()
+                            
+                            dyn_expiries = []
+                            for yr, mn in years_months:
+                                # Find 3rd Friday of this month
+                                for day in range(15, 22):
+                                    d = date(int(yr), int(mn), day)
+                                    if d.weekday() == 4: # Friday
+                                        curr_date = d
+                                        # Walk backwards to find active trading date
+                                        while curr_date.strftime("%Y-%m-%d") not in trading_dates:
+                                            curr_date -= timedelta(days=1)
+                                            if curr_date.month != mn:
+                                                curr_date = d
+                                                break
+                                        dyn_expiries.append(curr_date.strftime("%Y-%m-%d"))
+                                        break
+                            exp_df = pd.DataFrame({"expiry_date": dyn_expiries})
+                except Exception as ex:
+                    st.error(f"Error loading VIX from Yahoo Finance: {ex}")
                 
             if vix_df.empty:
                 st.warning("VIX historical data is not available in the SQLite database. Please run Ingestion & Patching first.")
