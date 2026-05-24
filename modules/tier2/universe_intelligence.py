@@ -16,6 +16,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from scipy.cluster.hierarchy import linkage, leaves_list
 from scipy.spatial.distance import pdist
+from scipy.cluster.vq import kmeans, vq
 
 from modules.base_module import FazDaneModule
 from utils.universe_manager import render_universe_manager, get_universe_names
@@ -529,10 +530,11 @@ class UniverseIntelligenceModule(FazDaneModule):
             "📊 Capital Allocation Engine",
             "⚡ Internals & Leadership",
             "🛡️ Risk & Volatility Structure",
+            "🧬 Cluster Analysis",
             "🔍 Interactive Drill-Downs"
         ]
         
-        tab_battlefield, tab_performance, tab_allocation, tab_internals, tab_risk, tab_drilldowns = st.tabs(tab_list)
+        tab_battlefield, tab_performance, tab_allocation, tab_internals, tab_risk, tab_cluster, tab_drilldowns = st.tabs(tab_list)
 
         # --- TAB 1: EXECUTIVE BATTLEFIELD MAP ---
         with tab_battlefield:
@@ -1165,7 +1167,496 @@ class UniverseIntelligenceModule(FazDaneModule):
             vol_df["Expected 5D Move %"] = (vol_df["Beta"] * 2.5).round(2)
             st.dataframe(vol_df.sort_values("IV Rank (Sim)", ascending=False), use_container_width=True, hide_index=True)
 
-        # --- TAB 5: INTERACTIVE DRILL-DOWNS ---
+        # --- TAB 5: CLUSTER ANALYSIS ---
+        with tab_cluster:
+            self.render_section_header("5. Dimensionality Reduction & Theme Clustering", "Dynamically group universe assets using Principal Component Analysis and K-Means clustering to uncover hidden thematic drivers.")
+            
+            if len(ticker_list) < 3:
+                st.warning("⚠️ Cluster Analysis requires at least 3 tickers in the active universe. Please select a larger universe in the sidebar.")
+            else:
+                # 1. Math PCA engine
+                # Gather daily returns for tickers in the universe
+                returns_df = close_df[ticker_list].pct_change().fillna(0.0)
+                
+                # Standardize returns (z-score)
+                std = returns_df.std()
+                std = std.replace(0.0, 1.0).fillna(1.0)
+                standardized_returns = (returns_df - returns_df.mean()) / std
+                
+                # Calculate correlation matrix
+                corr_matrix = standardized_returns.corr().fillna(0.0)
+                
+                # Eigenvalue decomposition
+                pca_success = False
+                try:
+                    eigenvals, eigenvectors = np.linalg.eigh(corr_matrix.values)
+                    
+                    # eigenvalues and eigenvectors are sorted in ascending order.
+                    # The two largest eigenvalues are at the end.
+                    pc1_val = max(0.0, eigenvals[-1])
+                    pc2_val = max(0.0, eigenvals[-2]) if len(eigenvals) >= 2 else 0.0
+                    
+                    x_coords = eigenvectors[:, -1] * np.sqrt(pc1_val)
+                    y_coords = eigenvectors[:, -2] * np.sqrt(pc2_val) if len(eigenvals) >= 2 else np.zeros_like(x_coords)
+                    pca_success = True
+                except Exception as ex:
+                    logger.error(f"Failed to calculate PCA: {ex}")
+                    st.error(f"Failed to calculate PCA components: {ex}")
+                    x_coords = np.zeros(len(ticker_list))
+                    y_coords = np.zeros(len(ticker_list))
+                    corr_matrix = pd.DataFrame(np.eye(len(ticker_list)), index=ticker_list, columns=ticker_list)
+
+                if pca_success:
+                    # 2. UI Control Sliders
+                    cc1, cc2 = st.columns(2)
+                    with cc1:
+                        k_val = st.slider("Number of Clusters (K):", min_value=2, max_value=6, value=4, step=1, key="ui_cluster_k_val")
+                    with cc2:
+                        threshold_val = st.slider("Similarity Edge Threshold (Correlation):", min_value=0.3, max_value=0.9, value=0.5, step=0.05, key="ui_cluster_threshold_val")
+                        
+                    k_adjusted = min(k_val, len(ticker_list))
+                    
+                    # 3. K-Means clustering
+                    features = np.column_stack((x_coords, y_coords)).astype(np.float64)
+                    cluster_ids = np.zeros(len(ticker_list), dtype=int)
+                    try:
+                        centroids, _ = kmeans(features, k_adjusted)
+                        cluster_ids, _ = vq(features, centroids)
+                    except Exception as e:
+                        logger.warning(f"K-Means failed, defaulting all to cluster 0: {e}")
+
+                    # 4. Define theme helper and labels
+                    def get_ticker_theme_scores(ticker: str, meta: dict, beta: float) -> dict:
+                        scores = {
+                            "AI & High-Beta Tech": 0.0,
+                            "Defensive (Value/Utilities/Staples)": 0.0,
+                            "Commodities & Inflation Sensitive": 0.0,
+                            "Rate-Sensitive (Financials/Real Estate)": 0.0
+                        }
+                        t_up = ticker.upper()
+                        sector = (meta.get("sector") or "").lower()
+                        industry = (meta.get("industry") or "").lower()
+                        
+                        # AI & High-Beta Tech
+                        tech_tickers = {"NVDA", "AMD", "AVGO", "MSFT", "AAPL", "AMZN", "META", "GOOGL", "GOOG", "TSLA", "NFLX", "SMH", "XLK", "QQQ"}
+                        if t_up in tech_tickers:
+                            scores["AI & High-Beta Tech"] += 3.0
+                        if any(s in sector for s in ["technology", "communication"]):
+                            scores["AI & High-Beta Tech"] += 2.0
+                        if any(ind in industry for ind in ["semiconductor", "software", "hardware", "consumer electronics", "internet"]):
+                            scores["AI & High-Beta Tech"] += 2.0
+                        if beta > 1.25:
+                            scores["AI & High-Beta Tech"] += 1.0
+                            
+                        # Defensive
+                        defensive_tickers = {"XLV", "XLP", "XLU", "LLY", "UNH", "JNJ", "PG", "KO", "PEP", "WMT", "COST", "DHR", "NEE", "SO", "SPY", "DIA"}
+                        if t_up in defensive_tickers:
+                            scores["Defensive (Value/Utilities/Staples)"] += 3.0
+                        if any(s in sector for s in ["healthcare", "consumer defensive", "utilities"]):
+                            scores["Defensive (Value/Utilities/Staples)"] += 2.0
+                        if any(ind in industry for ind in ["utilities", "drug", "pharmaceutical", "medical", "beverage", "packaged foods", "discount stores"]):
+                            scores["Defensive (Value/Utilities/Staples)"] += 2.0
+                        if beta < 0.85:
+                            scores["Defensive (Value/Utilities/Staples)"] += 1.0
+                            
+                        # Commodities
+                        commodity_tickers = {"XLE", "XLB", "XOP", "GDX", "GLD", "USO", "SLV", "FCX", "COP", "XOM", "CVX", "NEM"}
+                        if t_up in commodity_tickers:
+                            scores["Commodities & Inflation Sensitive"] += 3.0
+                        if any(s in sector for s in ["energy", "basic materials"]):
+                            scores["Commodities & Inflation Sensitive"] += 2.0
+                        if any(ind in industry for ind in ["oil", "gas", "gold", "silver", "copper", "metal", "mining", "steel", "chemical"]):
+                            scores["Commodities & Inflation Sensitive"] += 2.0
+                            
+                        # Rate-Sensitive
+                        rate_tickers = {"XLF", "XLRE", "KRE", "JPM", "BAC", "MS", "GS", "WFC", "BLK", "SCHW", "AMT", "PLD", "CCI"}
+                        if t_up in rate_tickers:
+                            scores["Rate-Sensitive (Financials/Real Estate)"] += 3.0
+                        if any(s in sector for s in ["financial services", "financials", "real estate"]):
+                            scores["Rate-Sensitive (Financials/Real Estate)"] += 2.0
+                        if any(ind in industry for ind in ["bank", "insurance", "credit", "capital markets", "savings", "reit", "real estate investment"]):
+                            scores["Rate-Sensitive (Financials/Real Estate)"] += 2.0
+                            
+                        return scores
+
+                    cluster_themes = {}
+                    used_themes = {}
+                    for c_id in range(k_adjusted):
+                        cluster_indices = np.where(cluster_ids == c_id)[0]
+                        c_tickers = [ticker_list[idx] for idx in cluster_indices]
+                        
+                        totals = {
+                            "AI & High-Beta Tech": 0.0,
+                            "Defensive (Value/Utilities/Staples)": 0.0,
+                            "Commodities & Inflation Sensitive": 0.0,
+                            "Rate-Sensitive (Financials/Real Estate)": 0.0
+                        }
+                        for t in c_tickers:
+                            meta = fetch_info_details(t)
+                            beta = meta.get("beta", 1.0)
+                            t_scores = get_ticker_theme_scores(t, meta, beta)
+                            for theme, val in t_scores.items():
+                                totals[theme] += val
+                                
+                        best_theme = max(totals, key=totals.get)
+                        if totals[best_theme] == 0.0:
+                            fallbacks = [
+                                "AI & High-Beta Tech",
+                                "Defensive (Value/Utilities/Staples)",
+                                "Commodities & Inflation Sensitive",
+                                "Rate-Sensitive (Financials/Real Estate)"
+                            ]
+                            best_theme = fallbacks[c_id % len(fallbacks)]
+                            
+                        if best_theme not in used_themes:
+                            used_themes[best_theme] = 1
+                            final_label = best_theme
+                        else:
+                            used_themes[best_theme] += 1
+                            num = used_themes[best_theme]
+                            roman = {2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI"}.get(num, str(num))
+                            final_label = f"{best_theme} {roman}"
+                            
+                        cluster_themes[c_id] = final_label
+
+                    def get_theme_color(theme_label: str) -> str:
+                        if "AI & High-Beta Tech" in theme_label:
+                            return "#a855f7" # Purple
+                        elif "Defensive" in theme_label:
+                            return "#10b981" # Emerald Green
+                        elif "Commodities" in theme_label:
+                            return "#f59e0b" # Amber/Gold
+                        elif "Rate-Sensitive" in theme_label:
+                            return "#3b82f6" # Blue
+                        return "#64748b" # Slate/Grey
+
+                    # 5. Build hover texts
+                    hover_texts = []
+                    for idx, t in enumerate(ticker_list):
+                        row = data_df[data_df["Ticker"] == t]
+                        if not row.empty:
+                            name = row["Name"].values[0]
+                            beta = row["Beta"].values[0]
+                            rsi = row["RSI"].values[0]
+                            fdts = row["FDTS Signal"].values[0]
+                        else:
+                            meta = fetch_info_details(t)
+                            name = meta["name"]
+                            beta = meta["beta"]
+                            rsi = 50.0
+                            fdts = "No Trade"
+                            
+                        c_id = cluster_ids[idx]
+                        theme = cluster_themes[c_id]
+                        fd_emoji = {"Buy": "🟢 Buy", "Sell": "🔴 Sell", "No Trade": "⚪ No Trade"}.get(fdts, fdts)
+                        
+                        hover_text = f"<b>{t}</b> ({name})<br>"
+                        hover_text += f"Theme: {theme}<br>"
+                        hover_text += f"Cluster ID: {c_id}<br>"
+                        hover_text += f"Beta vs SPY: {beta:.2f}<br>"
+                        hover_text += f"RSI (14): {rsi:.1f}<br>"
+                        hover_text += f"FDTS Signal: {fd_emoji}"
+                        hover_texts.append(hover_text)
+
+                    # 6. Render Plots (Side-by-Side)
+                    fig_pca = go.Figure()
+                    fig_pca.add_hline(y=0, line_dash="dash", line_color="#475569", line_width=1)
+                    fig_pca.add_vline(x=0, line_dash="dash", line_color="#475569", line_width=1)
+                    
+                    for c_id in range(k_adjusted):
+                        c_indices = np.where(cluster_ids == c_id)[0]
+                        if len(c_indices) == 0:
+                            continue
+                        theme_name = cluster_themes[c_id]
+                        theme_color = get_theme_color(theme_name)
+                        
+                        fig_pca.add_trace(go.Scatter(
+                            x=x_coords[c_indices],
+                            y=y_coords[c_indices],
+                            mode="markers+text",
+                            name=theme_name,
+                            text=[ticker_list[i] for i in c_indices],
+                            textposition="top center",
+                            hoverinfo="text",
+                            hovertext=[hover_texts[i] for i in c_indices],
+                            marker=dict(
+                                size=14,
+                                color=theme_color,
+                                line=dict(width=1.5, color="#0d1b2e")
+                            )
+                        ))
+                        
+                    fig_pca.update_layout(
+                         title="PCA Asset Quadrant Projection",
+                         xaxis=dict(title="Principal Component 1 (PC1) ->", gridcolor="rgba(148,163,184,0.08)"),
+                         yaxis=dict(title="Principal Component 2 (PC2) ->", gridcolor="rgba(148,163,184,0.08)"),
+                         paper_bgcolor="#0d1b2e",
+                         plot_bgcolor="rgba(21, 40, 71, 0.2)",
+                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5, bgcolor="rgba(13,27,46,0.6)"),
+                         margin=dict(l=20, r=20, t=55, b=20),
+                         height=500,
+                         font=dict(color="#e2e8f0", family="Inter")
+                    )
+
+                    fig_net = go.Figure()
+                    edge_x = []
+                    edge_y = []
+                    for i in range(len(ticker_list)):
+                        for j in range(i + 1, len(ticker_list)):
+                            corr_coef = corr_matrix.iloc[i, j]
+                            if corr_coef > threshold_val:
+                                edge_x.extend([x_coords[i], x_coords[j], None])
+                                edge_y.extend([y_coords[i], y_coords[j], None])
+                                
+                    fig_net.add_trace(go.Scatter(
+                        x=edge_x,
+                        y=edge_y,
+                        mode="lines",
+                        line=dict(width=1.5, color="rgba(148, 163, 184, 0.3)"),
+                        hoverinfo="none",
+                        showlegend=False
+                    ))
+                    
+                    for c_id in range(k_adjusted):
+                        c_indices = np.where(cluster_ids == c_id)[0]
+                        if len(c_indices) == 0:
+                            continue
+                        theme_name = cluster_themes[c_id]
+                        theme_color = get_theme_color(theme_name)
+                        
+                        fig_net.add_trace(go.Scatter(
+                            x=x_coords[c_indices],
+                            y=y_coords[c_indices],
+                            mode="markers+text",
+                            name=theme_name,
+                            text=[ticker_list[i] for i in c_indices],
+                            textposition="top center",
+                            hoverinfo="text",
+                            hovertext=[hover_texts[i] for i in c_indices],
+                            marker=dict(
+                                size=14,
+                                color=theme_color,
+                                line=dict(width=1.5, color="#0d1b2e")
+                            )
+                        ))
+                        
+                    fig_net.update_layout(
+                        title=f"Similarity Network Graph (Correlation > {threshold_val:.2f})",
+                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                        paper_bgcolor="#0d1b2e",
+                        plot_bgcolor="rgba(21, 40, 71, 0.2)",
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5, bgcolor="rgba(13,27,46,0.6)"),
+                        margin=dict(l=20, r=20, t=55, b=20),
+                        height=500,
+                        font=dict(color="#e2e8f0", family="Inter")
+                    )
+
+                    plot_col1, plot_col2 = st.columns(2)
+                    with plot_col1:
+                        st.plotly_chart(fig_pca, use_container_width=True, key="cluster_pca_chart")
+                    with plot_col2:
+                        st.plotly_chart(fig_net, use_container_width=True, key="cluster_network_chart")
+
+                    # 7. Thematic Breakdown Grid
+                    st.markdown("### 📊 Thematic Breakdown & Dynamic Insights")
+                    for i in range(0, k_adjusted, 2):
+                        col1, col2 = st.columns(2)
+                        
+                        # Cluster 1
+                        with col1:
+                            c_id = i
+                            c_indices = np.where(cluster_ids == c_id)[0]
+                            c_tickers = [ticker_list[idx] for idx in c_indices]
+                            theme_name = cluster_themes[c_id]
+                            theme_color = get_theme_color(theme_name)
+                            
+                            # Metrics
+                            c_betas = [fetch_info_details(t).get("beta", 1.0) for t in c_tickers]
+                            avg_beta = np.mean(c_betas) if c_betas else 1.0
+                            
+                            c_rsis = []
+                            for t in c_tickers:
+                                row = data_df[data_df["Ticker"] == t]
+                                c_rsis.append(row["RSI"].values[0] if not row.empty else 50.0)
+                            avg_rsi = np.mean(c_rsis) if c_rsis else 50.0
+                            
+                            signals = []
+                            for t in c_tickers:
+                                row = data_df[data_df["Ticker"] == t]
+                                signals.append(row["FDTS Signal"].values[0] if not row.empty else "No Trade")
+                                
+                            buys = signals.count("Buy")
+                            sells = signals.count("Sell")
+                            no_trades = signals.count("No Trade")
+                            signal_str = f"🟢 {buys} Buy | ⚪ {no_trades} No Trade | 🔴 {sells} Sell"
+                            
+                            base_theme = theme_name
+                            for r in [" VI", " V", " IV", " III", " II"]:
+                                if base_theme.endswith(r):
+                                    base_theme = base_theme[:-len(r)]
+                                    break
+                                    
+                            fdts_sentiment = f"{buys} Buy, {sells} Sell, {no_trades} No Trade"
+                            if buys > sells and buys > no_trades:
+                                fdts_sentiment += " (Bullish Connotation)"
+                            elif sells > buys and sells > no_trades:
+                                fdts_sentiment += " (Bearish Connotation)"
+                            else:
+                                fdts_sentiment += " (Neutral/Accumulation)"
+                                
+                            if "AI & High-Beta Tech" in base_theme:
+                                narrative = f"This cluster represents high-beta growth equities, showing an average beta of **{avg_beta:.2f}** and current RSI of **{avg_rsi:.1f}**. The cluster is heavily driven by secular technology expansion, semiconductor demand, and AI infrastructure capital expenditures. Current FDTS sentiment is **{fdts_sentiment}**. Recommended actions involve utilizing option structures like bull call spreads or calendar spreads to capture high implied volatility while mitigating tail risk."
+                            elif "Defensive" in base_theme:
+                                narrative = f"Composed of low-beta, stable cash flow entities with an average beta of **{avg_beta:.2f}** and RSI of **{avg_rsi:.1f}**. These companies act as market shock-absorbers, demonstrating resilience during liquidity contractions or rate hikes. With FDTS signaling **{fdts_sentiment}**, this cluster serves as a capital preservation vehicle. Writing covered calls or cash-secured puts is favored here for yield enhancement."
+                            elif "Commodities" in base_theme:
+                                narrative = f"This group represents raw materials, energy producers, and miners, presenting an average beta of **{avg_beta:.2f}** and RSI of **{avg_rsi:.1f}**. These assets are highly sensitive to supply chain bottlenecks, geopolitical risks, and global inflation. Current FDTS signal profile is **{fdts_sentiment}**. Option play: long calls or ratio spreads to capitalize on supply-driven price spikes."
+                            elif "Rate-Sensitive" in base_theme:
+                                narrative = f"Comprising banking institutions, asset managers, and yield-sensitive real estate assets, with an average beta of **{avg_beta:.2f}** and RSI of **{avg_rsi:.1f}**. Highly influenced by yield curve dynamics, Federal Reserve policy, and credit spreads. FDTS signals are **{fdts_sentiment}**. Position strategy: interest-rate sensitive options or credit vertical spreads."
+                            else:
+                                narrative = f"This cluster is categorized by general market themes with an average beta of **{avg_beta:.2f}** and RSI of **{avg_rsi:.1f}**. The constituent elements present mixed profiles with FDTS signaling **{fdts_sentiment}**. Standard defensive positioning or index replication is suggested."
+
+                            st.markdown(
+                                f"""
+                                <div style="border: 1px solid {theme_color}60; border-radius: 8px; padding: 15px; margin-bottom: 12px; background-color: rgba(21, 40, 71, 0.25);">
+                                    <h4 style="color: {theme_color}; margin-top: 0; margin-bottom: 8px;">🧬 Theme: {theme_name}</h4>
+                                    <p style="font-size: 13px; color: #cbd5e1; margin-bottom: 12px; line-height: 1.4;">{narrative}</p>
+                                    <div style="display: flex; gap: 15px; font-size: 12px; color: #94a3b8; margin-bottom: 5px;">
+                                        <span><b>Avg Beta:</b> {avg_beta:.2f}</span>
+                                        <span><b>Avg RSI:</b> {avg_rsi:.1f}</span>
+                                        <span><b>Signals:</b> {signal_str}</span>
+                                    </div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
+                            
+                            c_data = []
+                            for t in c_tickers:
+                                row = data_df[data_df["Ticker"] == t]
+                                if not row.empty:
+                                    name = row["Name"].values[0]
+                                    sector = row["Sector"].values[0]
+                                    rsi_val = row["RSI"].values[0]
+                                    beta_val = row["Beta"].values[0]
+                                    fdts_val = row["FDTS Signal"].values[0]
+                                else:
+                                    meta = fetch_info_details(t)
+                                    name = meta["name"]
+                                    sector = meta["sector"]
+                                    rsi_val = 50.0
+                                    beta_val = meta["beta"]
+                                    fdts_val = "No Trade"
+                                    
+                                fd_emoji = {"Buy": "🟢 Buy", "Sell": "🔴 Sell", "No Trade": "⚪ No Trade"}.get(fdts_val, fdts_val)
+                                c_data.append({
+                                    "Ticker": t,
+                                    "Company Name": name,
+                                    "Sector": sector,
+                                    "Beta": round(beta_val, 2),
+                                    "RSI": round(rsi_val, 1),
+                                    "FDTS Signal": fd_emoji
+                                })
+                            st.dataframe(pd.DataFrame(c_data), use_container_width=True, hide_index=True)
+
+                        # Cluster 2
+                        if i + 1 < k_adjusted:
+                            with col2:
+                                c_id = i + 1
+                                c_indices = np.where(cluster_ids == c_id)[0]
+                                c_tickers = [ticker_list[idx] for idx in c_indices]
+                                theme_name = cluster_themes[c_id]
+                                theme_color = get_theme_color(theme_name)
+                                
+                                # Metrics
+                                c_betas = [fetch_info_details(t).get("beta", 1.0) for t in c_tickers]
+                                avg_beta = np.mean(c_betas) if c_betas else 1.0
+                                
+                                c_rsis = []
+                                for t in c_tickers:
+                                    row = data_df[data_df["Ticker"] == t]
+                                    c_rsis.append(row["RSI"].values[0] if not row.empty else 50.0)
+                                avg_rsi = np.mean(c_rsis) if c_rsis else 50.0
+                                
+                                signals = []
+                                for t in c_tickers:
+                                    row = data_df[data_df["Ticker"] == t]
+                                    signals.append(row["FDTS Signal"].values[0] if not row.empty else "No Trade")
+                                    
+                                buys = signals.count("Buy")
+                                sells = signals.count("Sell")
+                                no_trades = signals.count("No Trade")
+                                signal_str = f"🟢 {buys} Buy | ⚪ {no_trades} No Trade | 🔴 {sells} Sell"
+                                
+                                base_theme = theme_name
+                                for r in [" VI", " V", " IV", " III", " II"]:
+                                    if base_theme.endswith(r):
+                                        base_theme = base_theme[:-len(r)]
+                                        break
+                                        
+                                fdts_sentiment = f"{buys} Buy, {sells} Sell, {no_trades} No Trade"
+                                if buys > sells and buys > no_trades:
+                                    fdts_sentiment += " (Bullish Connotation)"
+                                elif sells > buys and sells > no_trades:
+                                    fdts_sentiment += " (Bearish Connotation)"
+                                else:
+                                    fdts_sentiment += " (Neutral/Accumulation)"
+                                    
+                                if "AI & High-Beta Tech" in base_theme:
+                                    narrative = f"This cluster represents high-beta growth equities, showing an average beta of **{avg_beta:.2f}** and current RSI of **{avg_rsi:.1f}**. The cluster is heavily driven by secular technology expansion, semiconductor demand, and AI infrastructure capital expenditures. Current FDTS sentiment is **{fdts_sentiment}**. Recommended actions involve utilizing option structures like bull call spreads or calendar spreads to capture high implied volatility while mitigating tail risk."
+                                elif "Defensive" in base_theme:
+                                    narrative = f"Composed of low-beta, stable cash flow entities with an average beta of **{avg_beta:.2f}** and RSI of **{avg_rsi:.1f}**. These companies act as market shock-absorbers, demonstrating resilience during liquidity contractions or rate hikes. With FDTS signaling **{fdts_sentiment}**, this cluster serves as a capital preservation vehicle. Writing covered calls or cash-secured puts is favored here for yield enhancement."
+                                elif "Commodities" in base_theme:
+                                    narrative = f"This group represents raw materials, energy producers, and miners, presenting an average beta of **{avg_beta:.2f}** and RSI of **{avg_rsi:.1f}**. These assets are highly sensitive to supply chain bottlenecks, geopolitical risks, and global inflation. Current FDTS signal profile is **{fdts_sentiment}**. Option play: long calls or ratio spreads to capitalize on supply-driven price spikes."
+                                elif "Rate-Sensitive" in base_theme:
+                                    narrative = f"Comprising banking institutions, asset managers, and yield-sensitive real estate assets, with an average beta of **{avg_beta:.2f}** and RSI of **{avg_rsi:.1f}**. Highly influenced by yield curve dynamics, Federal Reserve policy, and credit spreads. FDTS signals are **{fdts_sentiment}**. Position strategy: interest-rate sensitive options or credit vertical spreads."
+                                else:
+                                    narrative = f"This cluster is categorized by general market themes with an average beta of **{avg_beta:.2f}** and RSI of **{avg_rsi:.1f}**. The constituent elements present mixed profiles with FDTS signaling **{fdts_sentiment}**. Standard defensive positioning or index replication is suggested."
+
+                                st.markdown(
+                                    f"""
+                                    <div style="border: 1px solid {theme_color}60; border-radius: 8px; padding: 15px; margin-bottom: 12px; background-color: rgba(21, 40, 71, 0.25);">
+                                        <h4 style="color: {theme_color}; margin-top: 0; margin-bottom: 8px;">🧬 Theme: {theme_name}</h4>
+                                        <p style="font-size: 13px; color: #cbd5e1; margin-bottom: 12px; line-height: 1.4;">{narrative}</p>
+                                        <div style="display: flex; gap: 15px; font-size: 12px; color: #94a3b8; margin-bottom: 5px;">
+                                            <span><b>Avg Beta:</b> {avg_beta:.2f}</span>
+                                            <span><b>Avg RSI:</b> {avg_rsi:.1f}</span>
+                                            <span><b>Signals:</b> {signal_str}</span>
+                                        </div>
+                                    </div>
+                                    """,
+                                    unsafe_allow_html=True
+                                )
+                                
+                                c_data = []
+                                for t in c_tickers:
+                                    row = data_df[data_df["Ticker"] == t]
+                                    if not row.empty:
+                                        name = row["Name"].values[0]
+                                        sector = row["Sector"].values[0]
+                                        rsi_val = row["RSI"].values[0]
+                                        beta_val = row["Beta"].values[0]
+                                        fdts_val = row["FDTS Signal"].values[0]
+                                    else:
+                                        meta = fetch_info_details(t)
+                                        name = meta["name"]
+                                        sector = meta["sector"]
+                                        rsi_val = 50.0
+                                        beta_val = meta["beta"]
+                                        fdts_val = "No Trade"
+                                        
+                                    fd_emoji = {"Buy": "🟢 Buy", "Sell": "🔴 Sell", "No Trade": "⚪ No Trade"}.get(fdts_val, fdts_val)
+                                    c_data.append({
+                                        "Ticker": t,
+                                        "Company Name": name,
+                                        "Sector": sector,
+                                        "Beta": round(beta_val, 2),
+                                        "RSI": round(rsi_val, 1),
+                                        "FDTS Signal": fd_emoji
+                                    })
+                                st.dataframe(pd.DataFrame(c_data), use_container_width=True, hide_index=True)
+
+        # --- TAB 7: INTERACTIVE DRILL-DOWNS ---
         with tab_drilldowns:
             st.markdown("### Interactive Drill-Down Explorer")
             drill_tabs = st.tabs(["Level 1: Ticker Detail", "Level 2: Sector/Theme Analysis", "Level 3: Portfolio Impact Model"])
