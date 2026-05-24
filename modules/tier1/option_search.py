@@ -15,7 +15,6 @@ import streamlit as st
 from modules.base_module import FazDaneModule
 from modules.tier1.options_liquidity import fetch_options_data
 from utils.tastytrade_provider import load_config
-from utils.universe_manager import load_universes, render_universe_manager
 
 from modules.tier1.option_search_db import (
     init_option_search_db,
@@ -330,11 +329,26 @@ class OptionSearchModule(FazDaneModule):
 
     def render_sidebar(self):
         st.markdown("**Search Universe**")
-        universe_name, symbols, _ = render_universe_manager(
-            key_prefix="os",
-            show_benchmark=False,
-            label="Base Watchlist:"
-        )
+        st.caption("Scanning the highly liquid CBOE Weekly-Listed Options Universe (120+ assets).")
+        
+        # Hardcoded liquid weekly option listed tickers
+        symbols = [
+            # ETFs
+            "SPY", "QQQ", "IWM", "DIA", "GLD", "SLV", "TLT", "SMH", "EEM", "FXI", "GDX", "GDXJ",
+            "XLE", "XLF", "XLK", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE", "XOP", "KRE",
+            "ARKK", "USO", "UNG", "TQQQ", "SQQQ", "SOXL", "SOXS",
+            # Megacap / Growth / Liquid Stocks
+            "AAPL", "MSFT", "NVDA", "AMZN", "TSLA", "GOOGL", "GOOG", "META", "NFLX", "AMD", "AVGO",
+            "COIN", "MSTR", "HOOD", "PLTR", "CRM", "ADBE", "ORCL", "CRWD", "PANW", "JPM", "GS",
+            "UNH", "LLY", "COST", "HD", "BA", "CAT", "DIS", "V", "MA", "BAC", "WFC", "C", "MS",
+            "SCHW", "XOM", "CVX", "COP", "FCX", "NEM", "ABBV", "MRK", "PFE", "JNJ", "GILD", "AMGN",
+            "NKE", "SBUX", "MCD", "WMT", "TGT", "PG", "KO", "PEP", "GE", "HON", "LMT", "RTX",
+            "FDX", "UPS", "CSX", "UNP", "IBKR", "AAL", "DAL", "UAL", "LUV", "MAR", "F", "GM",
+            "TM", "TSM", "ASML", "INTC", "QCOM", "TXN", "MU", "LRCX", "KLAC", "NXPI", "ADI",
+            "ON", "MRVL", "ANET", "ROKU", "DKNG", "PINS", "SNAP", "NET", "DDOG", "ZS",
+            "WDAY", "NOW", "SNOW", "TEAM", "MDB", "SOFI", "PYPL", "SQ", "BABA", "JD", "PDD",
+            "BIDU", "NIO", "LI", "XPEV", "FUTU", "RIVN"
+        ]
 
         custom_input = st.text_area("Custom Comma Tickers:", placeholder="NVDA,PLTR,TSLA", key="os_custom_input")
         if custom_input:
