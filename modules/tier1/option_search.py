@@ -411,6 +411,15 @@ class OptionSearchModule(FazDaneModule):
                 st.session_state.pop("os_summary", None)
                 st.session_state.pop("os_run_id", None)
 
+        # Database Tickers copy section
+        init_option_search_db()
+        db_tickers = get_active_ticker_list()
+        if db_tickers:
+            st.divider()
+            with st.expander("📋 Copy Active DB Tickers", expanded=False):
+                st.caption("Copy the comma-delimited active tickers list currently stored in your database:")
+                st.text_area("Active DB Tickers:", value=",".join(db_tickers), height=120, key="os_sidebar_db_tickers_copy")
+
     def render_main(self):
         self.render_section_header("Option Search Universe", "Maintain and search a persistent option trading universe of liquid contracts")
 
@@ -587,6 +596,14 @@ class OptionSearchModule(FazDaneModule):
         c4.metric("Stale (Deactivated) Tickers", f"{db_stats['stale_count']}")
 
         st.divider()
+
+        # Database Tickers copy section (Welcome Screen)
+        active_tickers = get_active_ticker_list()
+        if active_tickers:
+            with st.expander("📋 Copy Active Database Ticker List (Comma Delimited)", expanded=True):
+                st.caption("Copy this list to customize or merge with your search list:")
+                st.text_area("Database Tickers:", value=",".join(active_tickers), height=100, key="os_welcome_db_tickers_copy")
+            st.divider()
 
         cl1, cl2 = st.columns(2)
         with cl1:
