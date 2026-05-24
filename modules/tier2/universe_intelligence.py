@@ -1408,13 +1408,12 @@ class UniverseIntelligenceModule(FazDaneModule):
                         ))
                         
                     fig_pca.update_layout(
-                         title="PCA Asset Quadrant Projection",
                          xaxis=dict(title="Principal Component 1 (PC1) ->", gridcolor="rgba(148,163,184,0.08)"),
                          yaxis=dict(title="Principal Component 2 (PC2) ->", gridcolor="rgba(148,163,184,0.08)"),
                          paper_bgcolor="#0d1b2e",
                          plot_bgcolor="rgba(21, 40, 71, 0.2)",
                          legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5, bgcolor="rgba(13,27,46,0.6)"),
-                         margin=dict(l=20, r=20, t=55, b=20),
+                         margin=dict(l=20, r=20, t=30, b=20),
                          height=500,
                          font=dict(color="#e2e8f0", family="Inter")
                     )
@@ -1462,21 +1461,22 @@ class UniverseIntelligenceModule(FazDaneModule):
                         ))
                         
                     fig_net.update_layout(
-                        title=f"Similarity Network Graph (Correlation > {threshold_val:.2f})",
                         xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
                         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
                         paper_bgcolor="#0d1b2e",
                         plot_bgcolor="rgba(21, 40, 71, 0.2)",
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5, bgcolor="rgba(13,27,46,0.6)"),
-                        margin=dict(l=20, r=20, t=55, b=20),
+                        margin=dict(l=20, r=20, t=30, b=20),
                         height=500,
                         font=dict(color="#e2e8f0", family="Inter")
                     )
 
                     plot_col1, plot_col2 = st.columns(2)
                     with plot_col1:
+                        st.markdown("<h5 style='text-align: left; margin-bottom: 0px;'>📍 PCA Asset Quadrant Projection</h5>", unsafe_allow_html=True)
                         st.plotly_chart(fig_pca, use_container_width=True, key="cluster_pca_chart")
                     with plot_col2:
+                        st.markdown(f"<h5 style='text-align: left; margin-bottom: 0px;'>🕸️ Similarity Network Graph (Correlation > {threshold_val:.2f})</h5>", unsafe_allow_html=True)
                         st.plotly_chart(fig_net, use_container_width=True, key="cluster_network_chart")
 
                     # 7. Thematic Breakdown Grid
