@@ -440,6 +440,7 @@ def _finalize_options_frame(combined: pd.DataFrame) -> pd.DataFrame:
         "strike", "moneyness", "iv_pct", "volume", "openInterest",
         "open_interest", "bid", "ask", "spread", "spread_pct", "lastPrice",
         "last_price", "contract", "streamer_symbol", "data_source",
+        "implied_volatility", "impliedVolatility", "delta", "gamma", "theta", "vega"
     ]
     available = [c for c in keep_cols if c in combined.columns]
     combined = combined[available].copy()
