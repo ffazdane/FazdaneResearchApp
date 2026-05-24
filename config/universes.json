@@ -17,6 +17,23 @@
             "XLK",
             "XLF"
         ],
+        "ticker_names": {
+            "SPY": "SPDR S&P 500 ETF Trust",
+            "QQQ": "Invesco QQQ Trust",
+            "IWM": "iShares Russell 2000 ETF",
+            "GLD": "SPDR Gold Shares",
+            "TLT": "iShares 20+ Year Treasury Bond ETF",
+            "AAPL": "Apple Inc.",
+            "MSFT": "Microsoft Corporation",
+            "NVDA": "NVIDIA Corporation",
+            "AMZN": "Amazon.com Inc.",
+            "TSLA": "Tesla Inc.",
+            "GOOGL": "Alphabet Inc.",
+            "META": "Meta Platforms Inc.",
+            "JPM": "JPMorgan Chase & Co.",
+            "XLK": "Technology Select Sector SPDR Fund",
+            "XLF": "Financial Select Sector SPDR Fund"
+        },
         "benchmark": "SPY",
         "description": "Default options liquidity scan list",
         "module": "general"
@@ -60,6 +77,44 @@
             "CAT",
             "DDOG"
         ],
+        "ticker_names": {
+            "SPY": "SPDR S&P 500 ETF Trust",
+            "QQQ": "Invesco QQQ Trust",
+            "IWM": "iShares Russell 2000 ETF",
+            "DIA": "SPDR Dow Jones Industrial Average ETF Trust",
+            "GLD": "SPDR Gold Shares",
+            "NVDA": "NVIDIA Corporation",
+            "TSLA": "Tesla Inc.",
+            "AAPL": "Apple Inc.",
+            "MSFT": "Microsoft Corporation",
+            "AMZN": "Amazon.com Inc.",
+            "META": "Meta Platforms Inc.",
+            "GOOGL": "Alphabet Inc.",
+            "AVGO": "Broadcom Inc.",
+            "AMD": "Advanced Micro Devices Inc.",
+            "NFLX": "Netflix Inc.",
+            "INTC": "Intel Corporation",
+            "QCOM": "Qualcomm Inc.",
+            "CSCO": "Cisco Systems Inc.",
+            "AMAT": "Applied Materials Inc.",
+            "COIN": "Coinbase Global Inc.",
+            "HOOD": "Robinhood Markets Inc.",
+            "PLTR": "Palantir Technologies Inc.",
+            "IBM": "International Business Machines Corporation",
+            "CRM": "Salesforce Inc.",
+            "ADBE": "Adobe Inc.",
+            "ORCL": "Oracle Corporation",
+            "CRWD": "CrowdStrike Holdings Inc.",
+            "JPM": "JPMorgan Chase & Co.",
+            "GS": "Goldman Sachs Group Inc.",
+            "UNH": "UnitedHealth Group Inc.",
+            "LLY": "Eli Lilly and Company",
+            "COST": "Costco Wholesale Corporation",
+            "HD": "Home Depot Inc.",
+            "BA": "Boeing Company",
+            "CAT": "Caterpillar Inc.",
+            "DDOG": "Datadog Inc."
+        },
         "benchmark": "SPY",
         "description": "Calendar spread candidate universe",
         "module": "general"
@@ -78,6 +133,19 @@
             "XLK",
             "XLU"
         ],
+        "ticker_names": {
+            "XLC": "Communication Services Select Sector SPDR Fund",
+            "XLY": "Consumer Discretionary Select Sector SPDR Fund",
+            "XLP": "Consumer Staples Select Sector SPDR Fund",
+            "XLE": "Energy Select Sector SPDR Fund",
+            "XLF": "Financial Select Sector SPDR Fund",
+            "XLV": "Health Care Select Sector SPDR Fund",
+            "XLI": "Industrial Select Sector SPDR Fund",
+            "XLB": "Materials Select Sector SPDR Fund",
+            "XLRE": "Real Estate Select Sector SPDR Fund",
+            "XLK": "Technology Select Sector SPDR Fund",
+            "XLU": "Utilities Select Sector SPDR Fund"
+        },
         "benchmark": "SPY",
         "description": "SPX Sector ETFs",
         "module": "general"
@@ -92,6 +160,15 @@
             "GOOGL",
             "TSLA"
         ],
+        "ticker_names": {
+            "AAPL": "Apple Inc.",
+            "MSFT": "Microsoft Corporation",
+            "NVDA": "NVIDIA Corporation",
+            "AMZN": "Amazon.com Inc.",
+            "META": "Meta Platforms Inc.",
+            "GOOGL": "Alphabet Inc.",
+            "TSLA": "Tesla Inc."
+        },
         "benchmark": "QQQ",
         "description": "Magnificent 7 mega-cap tech stocks",
         "module": "general"
@@ -111,6 +188,20 @@
             "TLT",
             "HYG"
         ],
+        "ticker_names": {
+            "QQQ": "Invesco QQQ Trust",
+            "SPY": "SPDR S&P 500 ETF Trust",
+            "IWM": "iShares Russell 2000 ETF",
+            "DIA": "SPDR Dow Jones Industrial Average ETF Trust",
+            "SMH": "VanEck Semiconductor ETF",
+            "XLK": "Technology Select Sector SPDR Fund",
+            "XLF": "Financial Select Sector SPDR Fund",
+            "XLE": "Energy Select Sector SPDR Fund",
+            "GLD": "SPDR Gold Shares",
+            "SLV": "iShares Silver Trust",
+            "TLT": "iShares 20+ Year Treasury Bond ETF",
+            "HYG": "iShares iBoxx High Yield Corporate Bond ETF"
+        },
         "benchmark": "SPY",
         "description": "Leading broad-market ETFs",
         "module": "general"
@@ -124,6 +215,14 @@
             "^NYA",
             "^VIX"
         ],
+        "ticker_names": {
+            "^GSPC": "S&P 500 Index",
+            "^IXIC": "Nasdaq Composite Index",
+            "^DJI": "Dow Jones Industrial Average",
+            "^RUT": "Russell 2000 Index",
+            "^NYA": "NYSE Composite Index",
+            "^VIX": "CBOE Volatility Index"
+        },
         "benchmark": "^GSPC",
         "description": "Major market indices",
         "module": "general"
@@ -134,6 +233,11 @@
             "^NDX",
             "^RUT"
         ],
+        "ticker_names": {
+            "^GSPC": "S&P 500 Index",
+            "^NDX": "Nasdaq 100 Index",
+            "^RUT": "Russell 2000 Index"
+        },
         "benchmark": "^GSPC",
         "description": "Core index universe: SPX, NDX, and RUT",
         "module": "general"
@@ -152,6 +256,19 @@
             "IWM",
             "DIA"
         ],
+        "ticker_names": {
+            "ES=F": "E-mini S&P 500 Futures",
+            "NQ=F": "E-mini Nasdaq 100 Futures",
+            "YM=F": "E-mini Dow Futures",
+            "RTY=F": "E-mini Russell 2000 Futures",
+            "GC=F": "Gold Futures",
+            "CL=F": "Crude Oil Futures",
+            "^VIX": "CBOE Volatility Index",
+            "SPY": "SPDR S&P 500 ETF Trust",
+            "QQQ": "Invesco QQQ Trust",
+            "IWM": "iShares Russell 2000 ETF",
+            "DIA": "SPDR Dow Jones Industrial Average ETF Trust"
+        },
         "benchmark": "SPY",
         "description": "Futures, volatility, and index ETFs",
         "module": "general"
@@ -169,6 +286,18 @@
             "DX-Y.NYB",
             "HG=F"
         ],
+        "ticker_names": {
+            "SPY": "SPDR S&P 500 ETF Trust",
+            "QQQ": "Invesco QQQ Trust",
+            "IWM": "iShares Russell 2000 ETF",
+            "^VIX": "CBOE Volatility Index",
+            "TLT": "iShares 20+ Year Treasury Bond ETF",
+            "GLD": "SPDR Gold Shares",
+            "CL=F": "Crude Oil Futures",
+            "BTC=F": "Bitcoin Futures",
+            "DX-Y.NYB": "US Dollar Index",
+            "HG=F": "Copper Futures"
+        },
         "benchmark": "SPY",
         "description": "Cross-asset list for correlation matrix analysis",
         "module": "general"
@@ -192,6 +321,24 @@
             "SPY",
             "GS"
         ],
+        "ticker_names": {
+            "NFLX": "Netflix Inc.",
+            "CSCO": "Cisco Systems Inc.",
+            "DDOG": "Datadog Inc.",
+            "NVDA": "NVIDIA Corporation",
+            "AMZN": "Amazon.com Inc.",
+            "AAPL": "Apple Inc.",
+            "GOOG": "Alphabet Inc.",
+            "TSLA": "Tesla Inc.",
+            "AMD": "Advanced Micro Devices Inc.",
+            "AVGO": "Broadcom Inc.",
+            "MSFT": "Microsoft Corporation",
+            "META": "Meta Platforms Inc.",
+            "CRWD": "CrowdStrike Holdings Inc.",
+            "QQQ": "Invesco QQQ Trust",
+            "SPY": "SPDR S&P 500 ETF Trust",
+            "GS": "Goldman Sachs Group Inc."
+        },
         "benchmark": "SPY",
         "description": "FazDane  Portfolio",
         "module": "general"
@@ -228,8 +375,43 @@
             "COST",
             "HD",
             "BA",
-            "CAT"
+            "CAT",
+            "INTC"
         ],
+        "ticker_names": {
+            "SPY": "SPDR S&P 500 ETF Trust",
+            "QQQ": "Invesco QQQ Trust",
+            "IWM": "iShares Russell 2000 ETF",
+            "DIA": "SPDR Dow Jones Industrial Average ETF Trust",
+            "NVDA": "NVIDIA Corporation",
+            "TSLA": "Tesla Inc.",
+            "AAPL": "Apple Inc.",
+            "MSFT": "Microsoft Corporation",
+            "AMZN": "Amazon.com Inc.",
+            "META": "Meta Platforms Inc.",
+            "GOOGL": "Alphabet Inc.",
+            "AVGO": "Broadcom Inc.",
+            "AMD": "Advanced Micro Devices Inc.",
+            "NFLX": "Netflix Inc.",
+            "COIN": "Coinbase Global Inc.",
+            "MSTR": "MicroStrategy Inc.",
+            "HOOD": "Robinhood Markets Inc.",
+            "PLTR": "Palantir Technologies Inc.",
+            "CRM": "Salesforce Inc.",
+            "ADBE": "Adobe Inc.",
+            "ORCL": "Oracle Corporation",
+            "CRWD": "CrowdStrike Holdings Inc.",
+            "PANW": "Palo Alto Networks Inc.",
+            "JPM": "JPMorgan Chase & Co.",
+            "GS": "Goldman Sachs Group Inc.",
+            "UNH": "UnitedHealth Group Inc.",
+            "LLY": "Eli Lilly and Company",
+            "COST": "Costco Wholesale Corporation",
+            "HD": "Home Depot Inc.",
+            "BA": "Boeing Company",
+            "CAT": "Caterpillar Inc.",
+            "INTC": "Intel Corporation"
+        },
         "benchmark": "SPY",
         "description": "Highly liquid option spread candidates",
         "module": "general"
@@ -254,6 +436,25 @@
             "QQQ",
             "IWM"
         ],
+        "ticker_names": {
+            "^GSPC": "S&P 500 Index",
+            "^NDX": "Nasdaq 100 Index",
+            "^RUT": "Russell 2000 Index",
+            "^DJI": "Dow Jones Industrial Average",
+            "NVDA": "NVIDIA Corporation",
+            "AAPL": "Apple Inc.",
+            "MSFT": "Microsoft Corporation",
+            "AMZN": "Amazon.com Inc.",
+            "META": "Meta Platforms Inc.",
+            "GOOGL": "Alphabet Inc.",
+            "TSLA": "Tesla Inc.",
+            "AVGO": "Broadcom Inc.",
+            "NFLX": "Netflix Inc.",
+            "AMD": "Advanced Micro Devices Inc.",
+            "SPY": "SPDR S&P 500 ETF Trust",
+            "QQQ": "Invesco QQQ Trust",
+            "IWM": "iShares Russell 2000 ETF"
+        },
         "benchmark": "^VIX",
         "description": "Default instruments for iron condor strategy builder",
         "module": "general"

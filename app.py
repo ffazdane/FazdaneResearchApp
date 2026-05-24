@@ -626,6 +626,7 @@ with st.sidebar:
     with st.expander("Analysis & Intelligence", expanded=False):
         tier2_options = [
             TIER2_DEFAULT,
+            "Universe Intelligence System",
             "Portfolio Performance",
             "Portfolio Performance & Risk Management",
             "Multi-Timeframe Money Flow",
@@ -865,6 +866,17 @@ elif active_module == "Social Stock Stories":
     module.run()
     logger.info("Social Stock Stories")
 
+elif active_module == "Universe Intelligence System":
+    try:
+        from modules.tier2.universe_intelligence import UniverseIntelligenceModule
+        module = UniverseIntelligenceModule()
+        module.run()
+        logger.info("Universe Intelligence System")
+    except Exception as e:
+        import traceback
+        st.error(f"Failed to load Universe Intelligence System: {e}")
+        st.code(traceback.format_exc())
+
 elif "Bradley Siderograph" in active_module:
     from modules.tier3.bradley_siderograph import BradleySiderographModule
     module = BradleySiderographModule()
@@ -952,6 +964,7 @@ else:
         {
             "label": "Analysis & Intelligence",
             "items": [
+                {"label": "Universe Intelligence System", "module": "Universe Intelligence System", "tier": 2, "key": "macro_universe_intelligence"},
                 {"label": "Portfolio Performance", "module": "Portfolio Performance", "tier": 2, "key": "macro_portfolio_performance"},
                 {"label": "Portfolio Risk Management", "module": "Portfolio Performance & Risk Management", "tier": 2, "key": "macro_portfolio_risk"},
                 {"label": "Multi-Timeframe Money Flow", "module": "Multi-Timeframe Money Flow", "tier": 2, "key": "macro_money_flow"},

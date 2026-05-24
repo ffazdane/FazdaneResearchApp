@@ -576,6 +576,28 @@ def extract_snapshot_datetime(text: str) -> datetime:
     return datetime.now(CENTRAL_TZ).replace(microsecond=0)
 
 
+def get_underlying_ticker(ticker: str) -> str:
+    """Extract underlying stock ticker from option leg formats."""
+    ticker = str(ticker).strip().upper()
+    if not ticker or ticker in ["CASH", "USD", "MMDA12", "MMDA"] or "CASH" in ticker:
+        return "CASH"
+    
+    # Format 1: OCC option symbol format (e.g. AAPL  240621C00180000 or AAPL240621C00180000)
+    match_occ = re.match(r"^([A-Z]+)\s*\d{6}[CP]\d{8}$", ticker)
+    if match_occ:
+        return match_occ.group(1)
+        
+    # Format 2: Schwab format with date (e.g. AAPL 06/21/2024 180.00 C)
+    match_schwab = re.match(r"^([A-Z]+)\s+\d{1,2}/\d{1,2}/\d{2,4}\s+", ticker)
+    if match_schwab:
+        return match_schwab.group(1)
+        
+    if ticker.startswith("^"):
+        return ticker
+        
+    return ticker
+
+
 def _extract_positions(text: str) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     current_group = "Unknown"
@@ -614,6 +636,12 @@ def _extract_positions(text: str) -> pd.DataFrame:
 
         record = dict(zip(header, row))
         ticker = str(record.get("Instrument", "")).strip().upper()
+        
+        # Resolve option leg symbols to their underlying ticker
+        underlying = get_underlying_ticker(ticker)
+        if underlying and underlying != "CASH":
+            ticker = underlying
+
         is_ticker = bool(re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", ticker))
         is_detail_row = ticker in {"CUSTOM", "CALENDAR", "VERTICAL", "NONE"}
         if not is_ticker or is_detail_row:
