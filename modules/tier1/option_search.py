@@ -28,6 +28,8 @@ from modules.tier1.option_search_db import (
     get_universe_summary,
     get_new_tickers_for_run,
     get_requalified_tickers_for_run,
+    get_distinct_contract_tickers,
+    get_contracts_from_db,
 )
 
 logger = logging.getLogger("OptionSearch")
@@ -767,72 +769,131 @@ class OptionSearchModule(FazDaneModule):
     def _render_contracts_tab(self, filtered_df: pd.DataFrame):
         st.markdown("### Qualified Option Contracts Database")
 
+        # Toggle between Current Scan and SQLite Database
+        db_path = "data/option_search.db"
+        db_exists = os.path.exists(db_path)
+        
+        source_mode = "Current Scan Results"
+        if db_exists:
+            source_mode = st.radio(
+                "Data Source:",
+                ["Current Scan Results", "Local SQLite Database (All Scans)"],
+                horizontal=True,
+                key="contracts_source_mode"
+            )
+
+        # Get list of tickers depending on mode
+        if source_mode == "Local SQLite Database (All Scans)":
+            db_tickers = get_distinct_contract_tickers()
+            tickers_list = ["All"] + db_tickers
+        else:
+            tickers_list = ["All"] + sorted(filtered_df["ticker"].dropna().unique().tolist())
+
         # Tab-level filter columns
         c1, c2, c3 = st.columns(3)
         with c1:
-            tickers_list = ["All"] + sorted(filtered_df["ticker"].dropna().unique().tolist())
             sel_ticker = st.selectbox("Filter Ticker:", tickers_list, key="contract_sel_ticker")
         with c2:
             sel_type = st.selectbox("Option Type:", ["All", "Call", "Put"], key="contract_sel_type")
         with c3:
-            qualities = ["All"] + sorted(filtered_df["spread_quality_label"].dropna().unique().tolist())
+            # Determine base dataframe to compute quality labels and other fields
+            if source_mode == "Local SQLite Database (All Scans)":
+                base_df = get_contracts_from_db(ticker=sel_ticker)
+            else:
+                base_df = filtered_df.copy()
+                if sel_ticker != "All":
+                    base_df = base_df[base_df["ticker"] == sel_ticker]
+            
+            qualities = ["All"] + sorted(base_df["spread_quality_label"].dropna().unique().tolist()) if not base_df.empty else ["All"]
             sel_quality = st.selectbox("Spread Quality:", qualities, key="contract_sel_quality")
+
+        # Determine stable slider bounds based on overall data source to avoid reset state bugs
+        if source_mode == "Local SQLite Database (All Scans)":
+            all_db_df = get_contracts_from_db(ticker="All")
+            if not all_db_df.empty:
+                min_dte_val = int(all_db_df["DTE"].min())
+                max_dte_val = int(all_db_df["DTE"].max())
+                min_vol_val = int(all_db_df["volume"].min())
+                max_vol_val = int(all_db_df["volume"].max())
+            else:
+                min_dte_val, max_dte_val = 0, 180
+                min_vol_val, max_vol_val = 0, 10000
+        else:
+            if not filtered_df.empty:
+                min_dte_val = int(filtered_df["DTE"].min())
+                max_dte_val = int(filtered_df["DTE"].max())
+                min_vol_val = int(filtered_df["volume"].min())
+                max_vol_val = int(filtered_df["volume"].max())
+            else:
+                min_dte_val, max_dte_val = 0, 180
+                min_vol_val, max_vol_val = 0, 10000
+
+        # Safety check for equal boundaries
+        if min_dte_val == max_dte_val:
+            max_dte_val = min_dte_val + 1
+        if min_vol_val == max_vol_val:
+            max_vol_val = min_vol_val + 1
 
         c4, c5 = st.columns(2)
         with c4:
-            min_dte_val = int(filtered_df["DTE"].min())
-            max_dte_val = int(filtered_df["DTE"].max())
             sel_dte_range = st.slider("DTE Range:", min_dte_val, max_dte_val, (min_dte_val, max_dte_val), key="contract_sel_dte")
         with c5:
-            min_vol_val = int(filtered_df["volume"].min())
-            max_vol_val = int(filtered_df["volume"].max())
             sel_vol = st.slider("Contract Volume Floor:", min_vol_val, max_vol_val, min_vol_val, key="contract_sel_vol")
 
-        # Apply filters
-        display_df = filtered_df.copy()
-        if sel_ticker != "All":
-            display_df = display_df[display_df["ticker"] == sel_ticker]
+        # Apply remaining filters on base_df
+        display_df = base_df.copy()
         if sel_type != "All":
             display_df = display_df[display_df["option_type"] == sel_type]
         if sel_quality != "All":
             display_df = display_df[display_df["spread_quality_label"] == sel_quality]
         
-        display_df = display_df[
-            (display_df["DTE"] >= sel_dte_range[0]) & 
-            (display_df["DTE"] <= sel_dte_range[1]) & 
-            (display_df["volume"] >= sel_vol)
-        ]
+        if not display_df.empty:
+            display_df = display_df[
+                (display_df["DTE"] >= sel_dte_range[0]) & 
+                (display_df["DTE"] <= sel_dte_range[1]) & 
+                (display_df["volume"] >= sel_vol)
+            ]
 
-        st.markdown(f"Showing **{len(display_df)}** of **{len(filtered_df)}** qualified contracts.")
-        
+        total_base_count = len(base_df)
+        st.markdown(f"Showing **{len(display_df)}** of **{total_base_count}** contracts.")
+
+        if display_df.empty:
+            st.info("No contracts matched the selected filters.")
+            return
+
+        # Prepare column configs
+        col_config = {
+            "symbol": st.column_config.TextColumn("Symbol"),
+            "ticker": st.column_config.TextColumn("Ticker"),
+            "underlying_price": st.column_config.NumberColumn("Underlying", format="$%.2f"),
+            "expiration": st.column_config.TextColumn("Expiration"),
+            "DTE": st.column_config.NumberColumn("DTE"),
+            "expiration_bucket": st.column_config.TextColumn("Bucket"),
+            "option_type": st.column_config.TextColumn("Type"),
+            "strike": st.column_config.NumberColumn("Strike", format="$%.2f"),
+            "bid": st.column_config.NumberColumn("Bid", format="$%.2f"),
+            "ask": st.column_config.NumberColumn("Ask", format="$%.2f"),
+            "mid_price": st.column_config.NumberColumn("Mid Price", format="$%.2f"),
+            "spread": st.column_config.NumberColumn("Spread $", format="$%.2f"),
+            "spread_pct": st.column_config.NumberColumn("Spread %", format="%.2f%%"),
+            "spread_quality_label": st.column_config.TextColumn("Quality"),
+            "volume": st.column_config.NumberColumn("Volume", format="%d"),
+            "open_interest": st.column_config.NumberColumn("Open Interest", format="%d"),
+            "implied_volatility": st.column_config.NumberColumn("IV %", format="%.2f%%"),
+            "delta": st.column_config.NumberColumn("Delta", format="%.3f"),
+            "gamma": st.column_config.NumberColumn("Gamma", format="%.4f"),
+            "theta": st.column_config.NumberColumn("Theta", format="%.3f"),
+            "vega": st.column_config.NumberColumn("Vega", format="%.3f"),
+            "source": st.column_config.TextColumn("Source")
+        }
+        if "run_timestamp" in display_df.columns:
+            col_config["run_timestamp"] = st.column_config.TextColumn("Recorded At")
+
         st.dataframe(
             display_df,
             use_container_width=True,
             hide_index=True,
-            column_config={
-                "symbol": st.column_config.TextColumn("Symbol"),
-                "ticker": st.column_config.TextColumn("Ticker"),
-                "underlying_price": st.column_config.NumberColumn("Underlying", format="$%.2f"),
-                "expiration": st.column_config.TextColumn("Expiration"),
-                "DTE": st.column_config.NumberColumn("DTE"),
-                "expiration_bucket": st.column_config.TextColumn("Bucket"),
-                "option_type": st.column_config.TextColumn("Type"),
-                "strike": st.column_config.NumberColumn("Strike", format="$%.2f"),
-                "bid": st.column_config.NumberColumn("Bid", format="$%.2f"),
-                "ask": st.column_config.NumberColumn("Ask", format="$%.2f"),
-                "mid_price": st.column_config.NumberColumn("Mid Price", format="$%.2f"),
-                "spread": st.column_config.NumberColumn("Spread $", format="$%.2f"),
-                "spread_pct": st.column_config.NumberColumn("Spread %", format="%.2f%%"),
-                "spread_quality_label": st.column_config.TextColumn("Quality"),
-                "volume": st.column_config.NumberColumn("Volume", format="%d"),
-                "open_interest": st.column_config.NumberColumn("Open Interest", format="%d"),
-                "implied_volatility": st.column_config.NumberColumn("IV %", format="%.2f%%"),
-                "delta": st.column_config.NumberColumn("Delta", format="%.3f"),
-                "gamma": st.column_config.NumberColumn("Gamma", format="%.4f"),
-                "theta": st.column_config.NumberColumn("Theta", format="%.3f"),
-                "vega": st.column_config.NumberColumn("Vega", format="%.3f"),
-                "source": st.column_config.TextColumn("Source")
-            }
+            column_config=col_config
         )
 
     def _render_weekly_candidates_tab(self, summary_df: pd.DataFrame, filtered_df: pd.DataFrame):

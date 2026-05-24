@@ -474,3 +474,41 @@ def get_requalified_tickers_for_run(run_id):
         }
         for r in rows
     ]
+
+
+def get_distinct_contract_tickers():
+    """Return list of distinct tickers from option_contract_history. Sorted alphabetically."""
+    if not os.path.exists(DB_PATH):
+        return []
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT ticker FROM option_contract_history ORDER BY ticker ASC;")
+    rows = cursor.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def get_contracts_from_db(ticker=None):
+    """Return DataFrame of contracts from option_contract_history, optionally filtered by ticker."""
+    if not os.path.exists(DB_PATH):
+        return pd.DataFrame()
+    conn = sqlite3.connect(DB_PATH)
+    if ticker and ticker != "All":
+        df = pd.read_sql_query(
+            "SELECT * FROM option_contract_history WHERE ticker = ? ORDER BY run_timestamp DESC, dte ASC;",
+            conn,
+            params=(ticker,)
+        )
+    else:
+        df = pd.read_sql_query(
+            "SELECT * FROM option_contract_history ORDER BY run_timestamp DESC, dte ASC LIMIT 5000;",
+            conn
+        )
+    conn.close()
+    if not df.empty:
+        if "symbol" not in df.columns:
+            df["symbol"] = ""
+        if "dte" in df.columns:
+            df["DTE"] = df["dte"]
+    return df
+
