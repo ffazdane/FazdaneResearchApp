@@ -157,6 +157,12 @@ def enrich_positions(
     vega_raw = _numeric_series(df, "vega", 0)
     df["gamma"] = gamma_raw.where(gamma_raw.abs() > 0, df["delta"].abs() * 0.018)
     df["vega"] = vega_raw.where(vega_raw.abs() > 0, df["market_value"].abs() * 0.006)
+    
+    # Initialize default stock/equity values before applying option-leg overrides
+    df["current_value"] = df["market_value"]
+    df["entry_value"] = df["market_value"] - df["pl_open"]
+    df["entry_value"] = df["entry_value"].where(df["market_value"].abs() > 0, df["pl_open"].abs())
+
     df = _apply_leg_detail_metrics(df, details)
     for column in [
         "leg_count",
@@ -302,8 +308,8 @@ def _apply_leg_detail_metrics(df: pd.DataFrame, details: pd.DataFrame | None) ->
     ).fillna(0.0)
     enriched.loc[has_legs, "market_value"] = enriched.loc[has_legs, "net_mark_value"]
     enriched.loc[has_legs, "notional_abs"] = enriched.loc[has_legs, "leg_gross_exposure"]
-    enriched["entry_value"] = pd.to_numeric(enriched.get("net_trade_value"), errors="coerce").fillna(0.0)
-    enriched["current_value"] = pd.to_numeric(enriched.get("net_mark_value"), errors="coerce").fillna(0.0)
+    enriched.loc[has_legs, "entry_value"] = pd.to_numeric(enriched.loc[has_legs, "net_trade_value"], errors="coerce").fillna(0.0)
+    enriched.loc[has_legs, "current_value"] = pd.to_numeric(enriched.loc[has_legs, "net_mark_value"], errors="coerce").fillna(0.0)
     enriched["gross_exposure"] = pd.to_numeric(enriched.get("gross_current_value"), errors="coerce").fillna(0.0)
     enriched.loc[~has_legs, "gross_exposure"] = enriched.loc[~has_legs, "current_value"].abs()
     enriched.loc[has_legs, "gross_exposure"] = enriched.loc[has_legs, "leg_gross_exposure"]
