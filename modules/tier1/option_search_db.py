@@ -8,7 +8,8 @@ import sqlite3
 import pandas as pd
 
 logger = logging.getLogger("OptionSearchDB")
-DB_PATH = "data/option_search.db"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DB_PATH = os.getenv("OPTION_SEARCH_DB_PATH", os.path.join(REPO_ROOT, "data", "option_search.db"))
 
 
 def init_option_search_db():

@@ -33,6 +33,10 @@ DATABASES = {
         "env_var": "OPTIONS_LIQUIDITY_DB_PATH",
         "default_path": REPO_ROOT / "data" / "options_liquidity" / "options_liquidity.sqlite",
     },
+    "option_search": {
+        "env_var": "OPTION_SEARCH_DB_PATH",
+        "default_path": REPO_ROOT / "data" / "option_search.db",
+    },
 }
 
 BACKUP_DIR = REPO_ROOT / "data" / "backups"
