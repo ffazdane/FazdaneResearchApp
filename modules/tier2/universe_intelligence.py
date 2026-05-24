@@ -669,8 +669,11 @@ class UniverseIntelligenceModule(FazDaneModule):
                     
                     curr_stage = data_df.loc[data_df["Ticker"] == ticker, "Stage"].values[0]
                     if past_stage != curr_stage:
+                        curr_fdts = data_df.loc[data_df["Ticker"] == ticker, "FDTS Signal"].values[0]
+                        fd_emoji = {"Buy": "🟢 Buy", "Sell": "🔴 Sell", "No Trade": "⚪ No Trade"}.get(curr_fdts, "⚪ No Trade")
                         trans_rows.append({
                             "Ticker": ticker,
+                            "FDTS Signal": fd_emoji,
                             "Prior State": past_stage,
                             "Current State": curr_stage,
                             "RS Change": f"{data_df.loc[data_df['Ticker'] == ticker, 'RS-Ratio'].values[0] - p_rs:+.2f}",
@@ -678,7 +681,14 @@ class UniverseIntelligenceModule(FazDaneModule):
                         })
             
             if trans_rows:
-                st.dataframe(pd.DataFrame(trans_rows), use_container_width=True, hide_index=True)
+                st.dataframe(
+                    pd.DataFrame(trans_rows),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "FDTS Signal": st.column_config.TextColumn("FDTS Signal", width="small")
+                    }
+                )
             else:
                 st.info("No tickers transitioned stages over the selected trail step period.")
 
