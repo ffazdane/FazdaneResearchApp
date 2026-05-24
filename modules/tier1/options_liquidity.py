@@ -527,16 +527,15 @@ def fetch_iv_rank(symbols: tuple) -> dict:
                 ranks[sym] = None
                 continue
 
+            close_series = hist["Close"]
+            if isinstance(close_series, pd.DataFrame):
+                close_series = close_series.iloc[:, 0]
+
             # 30-day rolling historical volatility (annualised)
-            log_ret = np.log(hist["Close"] / hist["Close"].shift(1)).dropna()
+            log_ret = np.log(close_series / close_series.shift(1)).dropna()
             hv = log_ret.rolling(30).std() * np.sqrt(252) * 100  # in %
 
-            current_hv = hv.iloc[-1]
-            if hasattr(current_hv, '__len__'):
-                current_hv = float(current_hv.iloc[0])
-            else:
-                current_hv = float(current_hv)
-
+            current_hv = float(hv.iloc[-1])
             hv_min = float(hv.min())
             hv_max = float(hv.max())
             rng = hv_max - hv_min

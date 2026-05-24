@@ -520,6 +520,50 @@ def render_db_control_panel():
             st.caption(f"**{db_name}**: {size_kb:.1f} KB")
 
         st.divider()
+
+        # Pre-Release Diagnostics Check
+        if st.button("🚀 Run Pre-Release Checks", key="db_manual_checks", use_container_width=True, type="primary"):
+            with st.spinner("Running automated release checks..."):
+                import io
+                import contextlib
+                import re
+                from scripts.run_release_tests import main as run_suite
+                
+                f = io.StringIO()
+                success = False
+                with contextlib.redirect_stdout(f):
+                    try:
+                        run_suite()
+                        success = True
+                    except SystemExit as e:
+                        success = (e.code == 0)
+                    except Exception as e:
+                        print(f"Exception during test run: {e}")
+                        success = False
+                
+                # Strip ANSI escape sequences
+                ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+                clean_logs = ansi_escape.sub('', f.getvalue())
+                
+                st.session_state["db_diag_status"] = success
+                st.session_state["db_diag_logs"] = clean_logs
+            st.rerun()
+
+        diag_status = st.session_state.get("db_diag_status")
+        diag_logs = st.session_state.get("db_diag_logs")
+        if diag_status is not None:
+            if diag_status:
+                st.success("✅ Pre-Release Checks: PASSED")
+            else:
+                st.error("❌ Pre-Release Checks: FAILED")
+            if diag_logs:
+                st.text_area("Diagnostics Log", value=diag_logs, height=250, key="db_diag_logs_view")
+            if st.button("Clear Check Results", key="db_clear_diag", use_container_width=True):
+                st.session_state.pop("db_diag_status", None)
+                st.session_state.pop("db_diag_logs", None)
+                st.rerun()
+
+        st.divider()
         
         # Manual actions
         col1, col2 = st.columns(2)

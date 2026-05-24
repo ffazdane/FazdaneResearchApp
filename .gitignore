@@ -53,3 +53,8 @@ de421.bsp
 
 # Backups and persistence logs
 data/backups/
+
+# Local database files
+data/option_search.db
+data/option_search.db-*
+

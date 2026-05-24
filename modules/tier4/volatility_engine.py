@@ -178,6 +178,31 @@ def get_vix_percentile(vix_series):
         return None
     return round((vix_series < vix_series.iloc[-1]).mean() * 100, 1)
 
+def _get_spot_price(stock):
+    """Retrieve the current price of the asset, falling back to history if fast_info fails."""
+    try:
+        fast_info = getattr(stock, "fast_info", None)
+        if fast_info is not None:
+            for key in ["lastPrice", "last_price", "regularMarketPrice", "regular_market_price"]:
+                try:
+                    val = getattr(fast_info, key)
+                except Exception:
+                    try:
+                        val = fast_info[key]
+                    except Exception:
+                        val = None
+                if val is not None and float(val) > 0:
+                    return float(val)
+    except Exception:
+        pass
+    try:
+        hist = stock.history(period="1d")
+        if not hist.empty:
+            return float(hist["Close"].dropna().iloc[-1])
+    except Exception:
+        pass
+    return None
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_options_chain(ticker, dte_target=30):
     try:
@@ -190,14 +215,19 @@ def get_options_chain(ticker, dte_target=30):
         a_dte = (datetime.strptime(best, "%Y-%m-%d").date() - today).days
         chain = stock.option_chain(best)
         calls, puts = chain.calls.copy(), chain.puts.copy()
-        price = stock.fast_info["lastPrice"]
+        price = _get_spot_price(stock)
+        if not price:
+            return None, None, None, None, None
         valid = calls[calls["impliedVolatility"] > 0.01]
         if valid.empty:
             return calls, puts, None, best, a_dte
         idx    = (valid["strike"] - price).abs().idxmin()
         atm_iv = float(valid.loc[idx, "impliedVolatility"]) * 100
         return calls, puts, atm_iv, best, a_dte
-    except:
+    except Exception as e:
+        import logging
+        import traceback
+        logging.getLogger("FazDanePersistence").error(f"get_options_chain failed for {ticker}: {e}\n{traceback.format_exc()}")
         return None, None, None, None, None
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -207,7 +237,9 @@ def get_term_structure(ticker):
         exps  = stock.options
         if not exps:
             return []
-        price = stock.fast_info["lastPrice"]
+        price = _get_spot_price(stock)
+        if not price:
+            return []
         today = date.today()
         out   = []
         for exp in exps[:12]:
@@ -225,7 +257,10 @@ def get_term_structure(ticker):
             except:
                 continue
         return sorted(out, key=lambda x: x["dte"])
-    except:
+    except Exception as e:
+        import logging
+        import traceback
+        logging.getLogger("FazDanePersistence").error(f"get_term_structure failed for {ticker}: {e}\n{traceback.format_exc()}")
         return []
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -238,7 +273,9 @@ def get_skew_data(ticker, dte_target=30):
         today = date.today()
         best  = min(exps, key=lambda d: abs((datetime.strptime(d, "%Y-%m-%d").date() - today).days - dte_target))
         chain = stock.option_chain(best)
-        price = stock.fast_info["lastPrice"]
+        price = _get_spot_price(stock)
+        if not price:
+            return None, None, None
         calls = chain.calls[chain.calls["impliedVolatility"] > 0.01].copy()
         puts  = chain.puts[chain.puts["impliedVolatility"]  > 0.01].copy()
         if calls.empty:
@@ -248,7 +285,10 @@ def get_skew_data(ticker, dte_target=30):
         otm_put_iv  = float(puts.loc[(puts["strike"] - price * 0.95).abs().idxmin(), "impliedVolatility"]) * 100 if not puts.empty else None
         otm_call_iv = float(calls.loc[(calls["strike"] - price * 1.05).abs().idxmin(), "impliedVolatility"]) * 100
         return otm_put_iv, atm_iv, otm_call_iv
-    except:
+    except Exception as e:
+        import logging
+        import traceback
+        logging.getLogger("FazDanePersistence").error(f"get_skew_data failed for {ticker}: {e}\n{traceback.format_exc()}")
         return None, None, None
 
 def get_liquidity_score(calls, puts, price):
@@ -800,6 +840,13 @@ class VolatilityEngineModule(FazDaneModule):
         
         cache_data = None
         if live_fetch_failed:
+            import logging
+            logging.getLogger("FazDanePersistence").warning(
+                f"Live fetch failed or rate-limited for {display_ticker}. "
+                f"Details: calls_is_none={calls is None}, puts_is_none={puts is None}, "
+                f"atm_iv_is_none={atm_iv is None}, term_structure_len={len(term_structure) if term_structure else 0}, "
+                f"otm_put_iv_is_none={otm_put_iv is None}"
+            )
             cache_data = load_volatility_cache(display_ticker)
             if cache_data:
                 st.warning(f"⚠️ Live options data fetch failed or rate-limited. Loaded last browsed cached data from {cache_data['timestamp']}.")

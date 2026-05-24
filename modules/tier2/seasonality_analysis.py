@@ -602,8 +602,8 @@ class SeasonalityAnalysisModule(FazDaneModule):
                     [
                         {"Bucket": "Best Weekday", "Value": str(weekday_stats.sort_values("Avg_ReturnPct", ascending=False).iloc[0]["Weekday"]), "Avg %": weekday_stats["Avg_ReturnPct"].max()},
                         {"Bucket": "Worst Weekday", "Value": str(weekday_stats.sort_values("Avg_ReturnPct", ascending=True).iloc[0]["Weekday"]), "Avg %": weekday_stats["Avg_ReturnPct"].min()},
-                        {"Bucket": "Best ISO Week", "Value": int(weekly_stats.sort_values("Avg_ReturnPct", ascending=False).iloc[0]["ISOWeek"]), "Avg %": weekly_stats["Avg_ReturnPct"].max()},
-                        {"Bucket": "Worst ISO Week", "Value": int(weekly_stats.sort_values("Avg_ReturnPct", ascending=True).iloc[0]["ISOWeek"]), "Avg %": weekly_stats["Avg_ReturnPct"].min()},
+                        {"Bucket": "Best ISO Week", "Value": str(int(weekly_stats.sort_values("Avg_ReturnPct", ascending=False).iloc[0]["ISOWeek"])), "Avg %": weekly_stats["Avg_ReturnPct"].max()},
+                        {"Bucket": "Worst ISO Week", "Value": str(int(weekly_stats.sort_values("Avg_ReturnPct", ascending=True).iloc[0]["ISOWeek"])), "Avg %": weekly_stats["Avg_ReturnPct"].min()},
                         {"Bucket": "Best Month", "Value": str(monthly_perf.sort_values("Avg_ReturnPct", ascending=False).iloc[0]["Month"]), "Avg %": monthly_perf["Avg_ReturnPct"].max()},
                         {"Bucket": "Worst Month", "Value": str(monthly_perf.sort_values("Avg_ReturnPct", ascending=True).iloc[0]["Month"]), "Avg %": monthly_perf["Avg_ReturnPct"].min()},
                     ]
