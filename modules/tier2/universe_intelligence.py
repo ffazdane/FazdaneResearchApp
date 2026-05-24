@@ -1174,6 +1174,27 @@ class UniverseIntelligenceModule(FazDaneModule):
             if len(ticker_list) < 3:
                 st.warning("⚠️ Cluster Analysis requires at least 3 tickers in the active universe. Please select a larger universe in the sidebar.")
             else:
+                # 0. Show Universe-wide KPIs
+                univ_count = len(ticker_list)
+                univ_beta = data_df["Beta"].mean() if "Beta" in data_df.columns else 1.0
+                univ_rsi = data_df["RSI"].mean() if "RSI" in data_df.columns else 50.0
+                
+                buys_univ = len(data_df[data_df["FDTS Signal"] == "Buy"]) if "FDTS Signal" in data_df.columns else 0
+                sells_univ = len(data_df[data_df["FDTS Signal"] == "Sell"]) if "FDTS Signal" in data_df.columns else 0
+                no_trades_univ = len(data_df[data_df["FDTS Signal"] == "No Trade"]) if "FDTS Signal" in data_df.columns else 0
+                
+                kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
+                with kpi_col1:
+                    st.metric("Total Universe Assets", f"{univ_count}")
+                with kpi_col2:
+                    st.metric("Universe Average Beta", f"{univ_beta:.2f}")
+                with kpi_col3:
+                    st.metric("Universe Average RSI", f"{univ_rsi:.1f}")
+                with kpi_col4:
+                    st.metric("Universe FDTS Signals", f"🟢 {buys_univ} | ⚪ {no_trades_univ} | 🔴 {sells_univ}")
+                
+                st.markdown("<div style='margin-bottom: 25px;'></div>", unsafe_allow_html=True)
+
                 # 1. Math PCA engine
                 # Gather daily returns for tickers in the universe
                 returns_df = close_df[ticker_list].pct_change().fillna(0.0)
