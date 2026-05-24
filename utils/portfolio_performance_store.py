@@ -13,7 +13,15 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    try:
+        from backports.zoneinfo import ZoneInfo
+    except ImportError:
+        ZoneInfo = None
+
 
 import pandas as pd
 from utils.persistence import backup_database
@@ -23,7 +31,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "data" / "portfolio_performance"
 DEFAULT_DB_PATH = DATA_DIR / "portfolio_performance.sqlite"
 DB_PATH = Path(os.getenv("PORTFOLIO_PERFORMANCE_DB_PATH", DEFAULT_DB_PATH)).expanduser()
-CENTRAL_TZ = ZoneInfo("America/Chicago")
+try:
+    CENTRAL_TZ = ZoneInfo("America/Chicago") if ZoneInfo is not None else None
+except Exception:
+    CENTRAL_TZ = None
+
+if CENTRAL_TZ is None:
+    from datetime import timezone, timedelta
+    CENTRAL_TZ = timezone(timedelta(hours=-5))
+
 
 
 POSITION_COLUMNS = [

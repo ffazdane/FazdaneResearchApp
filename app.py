@@ -802,16 +802,26 @@ elif active_module == "Multi-Timeframe Money Flow":
     logger.info(f"User {user['username']}  Money Flow")
 
 elif active_module == "Portfolio Performance":
-    from modules.tier2.portfolio_performance import PortfolioPerformanceModule
-    module = PortfolioPerformanceModule()
-    module.run()
-    logger.info("Portfolio Performance")
+    try:
+        from modules.tier2.portfolio_performance import PortfolioPerformanceModule
+        module = PortfolioPerformanceModule()
+        module.run()
+        logger.info("Portfolio Performance")
+    except Exception as e:
+        import traceback
+        st.error(f"Failed to load Portfolio Performance: {e}")
+        st.code(traceback.format_exc())
 
 elif active_module == "Portfolio Performance & Risk Management":
-    from modules.tier2.portfolio_risk_management import PortfolioRiskManagementModule
-    module = PortfolioRiskManagementModule()
-    module.run()
-    logger.info("Portfolio Performance & Risk Management")
+    try:
+        from modules.tier2.portfolio_risk_management import PortfolioRiskManagementModule
+        module = PortfolioRiskManagementModule()
+        module.run()
+        logger.info("Portfolio Performance & Risk Management")
+    except Exception as e:
+        import traceback
+        st.error(f"Failed to load Portfolio Performance & Risk Management: {e}")
+        st.code(traceback.format_exc())
 
 elif active_module == "Market Structure Heatmap":
     from modules.tier2.market_structure import MarketStructureModule
