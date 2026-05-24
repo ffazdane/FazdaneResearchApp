@@ -80,7 +80,7 @@ def fetch_yahoo_prices(yahoo_symbol: str, start_date: str, end_date: str) -> pd.
         indicators = result['indicators']['quote'][0]
         
         df = pd.DataFrame({
-            'date': [datetime.fromtimestamp(t).strftime('%Y-%m-%d') for t in timestamps],
+            'date': [(datetime(1970, 1, 1) + timedelta(seconds=t)).strftime('%Y-%m-%d') for t in timestamps],
             'open': indicators.get('open', []),
             'high': indicators.get('high', []),
             'low': indicators.get('low', []),

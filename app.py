@@ -627,6 +627,7 @@ with st.sidebar:
         tier2_options = [
             TIER2_DEFAULT,
             "Portfolio Performance",
+            "Portfolio Performance & Risk Management",
             "Multi-Timeframe Money Flow",
             "Market Structure Heatmap",
             "Correlation Matrix",
@@ -806,6 +807,12 @@ elif active_module == "Portfolio Performance":
     module.run()
     logger.info("Portfolio Performance")
 
+elif active_module == "Portfolio Performance & Risk Management":
+    from modules.tier2.portfolio_risk_management import PortfolioRiskManagementModule
+    module = PortfolioRiskManagementModule()
+    module.run()
+    logger.info("Portfolio Performance & Risk Management")
+
 elif active_module == "Market Structure Heatmap":
     from modules.tier2.market_structure import MarketStructureModule
     module = MarketStructureModule()
@@ -936,6 +943,7 @@ else:
             "label": "Analysis & Intelligence",
             "items": [
                 {"label": "Portfolio Performance", "module": "Portfolio Performance", "tier": 2, "key": "macro_portfolio_performance"},
+                {"label": "Portfolio Risk Management", "module": "Portfolio Performance & Risk Management", "tier": 2, "key": "macro_portfolio_risk"},
                 {"label": "Multi-Timeframe Money Flow", "module": "Multi-Timeframe Money Flow", "tier": 2, "key": "macro_money_flow"},
                 {"label": "Market Structure Heatmap", "module": "Market Structure Heatmap", "tier": 2, "key": "macro_market_structure"},
                 {"label": "Correlation Matrix", "module": "Correlation Matrix", "tier": 2, "key": "macro_correlation"},

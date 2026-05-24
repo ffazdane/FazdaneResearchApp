@@ -21,6 +21,7 @@ build/
 venv/
 .venv/
 .venv-test/
+.python/
 env/
 
 # Logs

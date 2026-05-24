@@ -38,9 +38,40 @@ POSITION_COLUMNS = [
     "market_value",
     "theta",
     "delta",
+    "gamma",
+    "vega",
     "pl_open",
     "pl_day",
     "bp_effect",
+]
+
+DETAIL_COLUMNS = [
+    "run_id",
+    "snapshot_ts",
+    "snapshot_date",
+    "source_file",
+    "account_group",
+    "underlying",
+    "row_type",
+    "strategy",
+    "instrument",
+    "quantity",
+    "days",
+    "expiration",
+    "strike",
+    "call_put",
+    "side",
+    "trade_price",
+    "mark_price",
+    "mark_change",
+    "delta",
+    "theta",
+    "gamma",
+    "vega",
+    "pl_open",
+    "pl_day",
+    "bp_effect",
+    "is_weekly",
 ]
 
 
@@ -107,6 +138,8 @@ def parse_schwab_positions_csv(
         "market_value": "sum",
         "theta": "sum",
         "delta": "sum",
+        "gamma": "sum",
+        "vega": "sum",
         "pl_open": "sum",
         "pl_day": "sum",
         "bp_effect": "sum",
@@ -129,9 +162,38 @@ def parse_schwab_positions_csv(
         "file_sha256": hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest(),
         "row_count": int(len(positions)),
         "raw_row_count": int(len(rows)),
+        "detail_row_count": int(len(_extract_position_details(text))),
         "totals": summarize_positions(positions),
     }
     return positions, metadata
+
+
+def parse_schwab_position_details_csv(
+    content: bytes | str,
+    source_file: str = "uploaded_positions.csv",
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Extract raw Schwab ticker, strategy, equity description, and option-leg rows."""
+    text = _decode_content(content)
+    snapshot_dt = extract_snapshot_datetime(text)
+    details = _extract_position_details(text)
+    if details.empty:
+        raise ValueError("No detailed position rows found. Check the Schwab Position Statement CSV format.")
+
+    details["snapshot_ts"] = snapshot_dt.isoformat(sep=" ")
+    details["snapshot_date"] = snapshot_dt.date().isoformat()
+    details["source_file"] = source_file
+
+    metadata = {
+        "source_file": source_file,
+        "snapshot_ts": snapshot_dt.isoformat(sep=" "),
+        "snapshot_date": snapshot_dt.date().isoformat(),
+        "file_sha256": hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest(),
+        "detail_row_count": int(len(details)),
+        "option_leg_count": int((details["row_type"] == "option_leg").sum()),
+        "strategy_row_count": int((details["row_type"] == "strategy").sum()),
+        "summary_row_count": int((details["row_type"] == "ticker_summary").sum()),
+    }
+    return details, metadata
 
 
 def summarize_positions(df: pd.DataFrame) -> dict[str, float]:
@@ -142,6 +204,8 @@ def summarize_positions(df: pd.DataFrame) -> dict[str, float]:
             "total_pl_day": 0.0,
             "total_theta": 0.0,
             "total_delta": 0.0,
+            "total_gamma": 0.0,
+            "total_vega": 0.0,
             "total_market_value": 0.0,
             "positive_open": 0.0,
             "negative_open": 0.0,
@@ -152,15 +216,64 @@ def summarize_positions(df: pd.DataFrame) -> dict[str, float]:
         "total_pl_day": float(df["pl_day"].sum()),
         "total_theta": float(df["theta"].sum()),
         "total_delta": float(df["delta"].sum()),
+        "total_gamma": float(df["gamma"].sum()) if "gamma" in df.columns else 0.0,
+        "total_vega": float(df["vega"].sum()) if "vega" in df.columns else 0.0,
         "total_market_value": float(df.get("market_value", pd.Series(dtype=float)).sum()),
         "positive_open": float(df.loc[df["pl_open"] > 0, "pl_open"].sum()),
         "negative_open": float(df.loc[df["pl_open"] < 0, "pl_open"].sum()),
     }
 
 
+def summarize_position_details(details: pd.DataFrame | None) -> dict[str, float]:
+    """Return portfolio totals from option-leg detail rows when available."""
+    if details is None or details.empty or "row_type" not in details.columns:
+        return {}
+
+    legs = details[details["row_type"].astype(str).eq("option_leg")].copy()
+    if legs.empty:
+        return {}
+
+    for column in [
+        "quantity",
+        "trade_price",
+        "mark_price",
+        "delta",
+        "theta",
+        "gamma",
+        "vega",
+        "pl_open",
+        "pl_day",
+    ]:
+        if column not in legs.columns:
+            legs[column] = 0.0
+        legs[column] = pd.to_numeric(legs[column], errors="coerce").fillna(0.0)
+
+    entry_values = legs["quantity"] * legs["trade_price"] * 100
+    current_values = legs["quantity"] * legs["mark_price"] * 100
+    gross_entry_values = legs["quantity"].abs() * legs["trade_price"].abs() * 100
+    gross_current_values = legs["quantity"].abs() * legs["mark_price"].abs() * 100
+
+    return {
+        "total_pl_open": float(legs["pl_open"].sum()),
+        "total_pl_day": float(legs["pl_day"].sum()),
+        "total_theta": float(legs["theta"].sum()),
+        "total_delta": float(legs["delta"].sum()),
+        "total_gamma": float(legs["gamma"].sum()),
+        "total_vega": float(legs["vega"].sum()),
+        "total_entry_value": float(entry_values.sum()),
+        "total_market_value": float(current_values.sum()),
+        "total_net_profit": float(current_values.sum() - entry_values.sum()),
+        "gross_entry_value": float(gross_entry_values.sum()),
+        "gross_current_value": float(gross_current_values.sum()),
+        "positive_open": float(legs.loc[legs["pl_open"] > 0, "pl_open"].sum()),
+        "negative_open": float(legs.loc[legs["pl_open"] < 0, "pl_open"].sum()),
+    }
+
+
 def save_portfolio_snapshot(
     df: pd.DataFrame,
     metadata: dict[str, Any],
+    details: pd.DataFrame | None = None,
     db_path: Path = DB_PATH,
 ) -> dict[str, Any]:
     """Persist one uploaded portfolio snapshot and its ticker-level rows."""
@@ -173,6 +286,9 @@ def save_portfolio_snapshot(
     snapshot_date = str(metadata.get("snapshot_date") or snapshot_ts[:10])
     source_file = str(metadata.get("source_file") or "uploaded_positions.csv")
     totals = summarize_positions(df)
+    detail_totals = summarize_position_details(details)
+    if detail_totals:
+        totals.update(detail_totals)
 
     with sqlite3.connect(db_path) as conn:
         _ensure_schema(conn)
@@ -204,6 +320,9 @@ def save_portfolio_snapshot(
 
         positions = _prepare_position_rows(df, run_id, snapshot_ts, snapshot_date, source_file)
         positions.to_sql("pp_position_snapshots", conn, if_exists="append", index=False)
+        if details is not None and not details.empty:
+            detail_rows = _prepare_detail_rows(details, run_id, snapshot_ts, snapshot_date, source_file)
+            detail_rows.to_sql("pp_position_details", conn, if_exists="append", index=False)
 
     # Sync snapshot to cloud storage
     try:
@@ -216,6 +335,7 @@ def save_portfolio_snapshot(
         "snapshot_ts": snapshot_ts,
         "snapshot_date": snapshot_date,
         "row_count": int(len(df)),
+        "detail_row_count": int(len(details)) if details is not None else 0,
         "db_path": str(db_path),
     }
 
@@ -284,7 +404,7 @@ def get_latest_portfolio_positions(db_path: Path = DB_PATH) -> tuple[pd.DataFram
             """
             SELECT
                 account_group, ticker, quantity, mark_price, market_value,
-                theta, delta, pl_open, pl_day, bp_effect,
+                theta, delta, gamma, vega, pl_open, pl_day, bp_effect,
                 snapshot_ts, snapshot_date, source_file
             FROM pp_position_snapshots
             WHERE run_id = ?
@@ -303,6 +423,74 @@ def get_latest_portfolio_positions(db_path: Path = DB_PATH) -> tuple[pd.DataFram
         "totals": json.loads(run[5]) if run[5] else summarize_positions(df),
     }
     return df, metadata
+
+
+def get_latest_portfolio_details(db_path: Path = DB_PATH) -> tuple[pd.DataFrame, dict[str, Any] | None]:
+    """Load detailed rows from the most recent saved portfolio snapshot."""
+    if not db_path.exists():
+        return pd.DataFrame(), None
+
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        run = conn.execute(
+            """
+            SELECT run_id, snapshot_ts, snapshot_date, source_file
+            FROM pp_runs
+            ORDER BY snapshot_ts DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if not run:
+            return pd.DataFrame(), None
+
+        df = pd.read_sql_query(
+            """
+            SELECT
+                account_group, underlying, row_type, strategy, instrument,
+                quantity, days, expiration, strike, call_put, side,
+                trade_price, mark_price, mark_change, delta, theta, gamma, vega,
+                pl_open, pl_day, bp_effect, is_weekly,
+                snapshot_ts, snapshot_date, source_file
+            FROM pp_position_details
+            WHERE run_id = ?
+            ORDER BY underlying, row_type, instrument
+            """,
+            conn,
+            params=(run[0],),
+        )
+
+    metadata = {
+        "run_id": run[0],
+        "snapshot_ts": run[1],
+        "snapshot_date": run[2],
+        "source_file": run[3],
+        "detail_row_count": int(len(df)),
+    }
+    return df, metadata
+
+
+def get_portfolio_details_for_run(run_id: str, db_path: Path = DB_PATH) -> pd.DataFrame:
+    """Return detailed rows for a saved run id."""
+    if not db_path.exists():
+        return pd.DataFrame()
+
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        return pd.read_sql_query(
+            """
+            SELECT
+                account_group, underlying, row_type, strategy, instrument,
+                quantity, days, expiration, strike, call_put, side,
+                trade_price, mark_price, mark_change, delta, theta, gamma, vega,
+                pl_open, pl_day, bp_effect, is_weekly,
+                snapshot_ts, snapshot_date, source_file
+            FROM pp_position_details
+            WHERE run_id = ?
+            ORDER BY underlying, row_type, instrument
+            """,
+            conn,
+            params=(run_id,),
+        )
 
 
 def get_database_status(db_path: Path = DB_PATH) -> dict[str, Any]:
@@ -424,6 +612,8 @@ def _extract_positions(text: str) -> pd.DataFrame:
                 "market_value": parse_money(_first_available(record, ["Market Value", "Mkt Val"])),
                 "theta": parse_number(record.get("Theta")),
                 "delta": parse_number(record.get("Delta")),
+                "gamma": parse_number(record.get("Gamma")),
+                "vega": parse_number(record.get("Vega")),
                 "pl_open": parse_money(record.get("P/L Open")),
                 "pl_day": parse_money(record.get("P/L Day")),
                 "bp_effect": parse_money(record.get("BP Effect")),
@@ -431,6 +621,122 @@ def _extract_positions(text: str) -> pd.DataFrame:
         )
 
     return pd.DataFrame(rows)
+
+
+def _extract_position_details(text: str) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    current_group = "Unknown"
+    current_underlying: str | None = None
+    current_strategy: str | None = None
+    header: list[str] | None = None
+    in_table = False
+    option_pattern = re.compile(
+        r"^100\s+(?:(\(Weeklys\))\s+)?(\d{1,2}\s+[A-Z]{3}\s+\d{2})\s+([0-9.]+)\s+(CALL|PUT)$",
+        flags=re.IGNORECASE,
+    )
+
+    reader = csv.reader(io.StringIO(text))
+    for raw_row in reader:
+        if not raw_row:
+            continue
+
+        row = [str(value).strip() for value in raw_row]
+        first = row[0] if row else ""
+
+        if first.startswith('Group "'):
+            current_group = first.replace('Group "', "").replace('"', "") or "Unknown"
+            current_underlying = None
+            current_strategy = None
+            in_table = False
+            header = None
+            continue
+
+        if first == "Instrument":
+            header = row
+            in_table = True
+            continue
+
+        if first.startswith("Subtotals") or first.startswith("Overall Totals"):
+            in_table = False
+            header = None
+            current_underlying = None
+            current_strategy = None
+            continue
+
+        if not in_table or header is None:
+            continue
+
+        if len(row) < len(header):
+            row = row + [""] * (len(header) - len(row))
+
+        record = dict(zip(header, row))
+        instrument = str(record.get("Instrument", "")).strip()
+        if not instrument or instrument == "None":
+            continue
+
+        option_match = option_pattern.match(instrument)
+        is_ticker = bool(re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", instrument))
+        is_strategy = instrument in {"CUSTOM", "CALENDAR", "VERTICAL", "NONE"}
+
+        row_type = "detail"
+        strategy = current_strategy
+        expiration = None
+        strike = None
+        call_put = None
+        side = None
+        is_weekly = False
+
+        if option_match:
+            row_type = "option_leg"
+            is_weekly = bool(option_match.group(1))
+            expiration = option_match.group(2).upper()
+            strike = parse_number(option_match.group(3))
+            call_put = option_match.group(4).upper()
+            quantity = parse_number(_first_available(record, ["Qty", "Quantity"]))
+            side = "SELL" if quantity < 0 else "BUY"
+        elif is_strategy:
+            row_type = "strategy"
+            current_strategy = instrument if instrument != "CUSTOM" else current_strategy
+            strategy = current_strategy
+        elif is_ticker:
+            row_type = "ticker_summary"
+            current_underlying = instrument.upper()
+            current_strategy = None
+            strategy = None
+        elif parse_number(_first_available(record, ["Qty", "Quantity"])) == 0:
+            row_type = "equity_description"
+
+        rows.append(
+            {
+                "account_group": current_group,
+                "underlying": current_underlying,
+                "row_type": row_type,
+                "strategy": strategy,
+                "instrument": instrument,
+                "quantity": parse_number(_first_available(record, ["Qty", "Quantity"])),
+                "days": parse_number(record.get("Days")),
+                "expiration": expiration,
+                "strike": strike,
+                "call_put": call_put,
+                "side": side,
+                "trade_price": parse_money(_first_available(record, ["Trade Price"])),
+                "mark_price": parse_money(_first_available(record, ["Mark", "Mark Price", "Price"])),
+                "mark_change": parse_number(record.get("Mrk Chng")),
+                "delta": parse_number(record.get("Delta")),
+                "theta": parse_number(record.get("Theta")),
+                "gamma": parse_number(record.get("Gamma")),
+                "vega": parse_number(record.get("Vega")),
+                "pl_open": parse_money(record.get("P/L Open")),
+                "pl_day": parse_money(record.get("P/L Day")),
+                "bp_effect": parse_money(record.get("BP Effect")),
+                "is_weekly": bool(is_weekly),
+            }
+        )
+
+    details = pd.DataFrame(rows)
+    if not details.empty:
+        details["underlying"] = details["underlying"].ffill()
+    return details
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
@@ -464,6 +770,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             market_value REAL,
             theta REAL,
             delta REAL,
+            gamma REAL,
+            vega REAL,
             pl_open REAL,
             pl_day REAL,
             bp_effect REAL,
@@ -476,8 +784,45 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             ON pp_position_snapshots(run_id);
         CREATE INDEX IF NOT EXISTS idx_pp_positions_date_ticker
             ON pp_position_snapshots(snapshot_date, ticker);
+
+        CREATE TABLE IF NOT EXISTS pp_position_details (
+            run_id TEXT NOT NULL,
+            snapshot_ts TEXT NOT NULL,
+            snapshot_date TEXT NOT NULL,
+            source_file TEXT,
+            account_group TEXT,
+            underlying TEXT,
+            row_type TEXT NOT NULL,
+            strategy TEXT,
+            instrument TEXT NOT NULL,
+            quantity REAL,
+            days REAL,
+            expiration TEXT,
+            strike REAL,
+            call_put TEXT,
+            side TEXT,
+            trade_price REAL,
+            mark_price REAL,
+            mark_change REAL,
+            delta REAL,
+            theta REAL,
+            gamma REAL,
+            vega REAL,
+            pl_open REAL,
+            pl_day REAL,
+            bp_effect REAL,
+            is_weekly INTEGER,
+            FOREIGN KEY (run_id) REFERENCES pp_runs(run_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pp_details_run
+            ON pp_position_details(run_id);
+        CREATE INDEX IF NOT EXISTS idx_pp_details_underlying
+            ON pp_position_details(snapshot_date, underlying, row_type);
         """
     )
+    _ensure_column(conn, "pp_position_snapshots", "gamma", "REAL")
+    _ensure_column(conn, "pp_position_snapshots", "vega", "REAL")
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:
@@ -511,6 +856,8 @@ def _prepare_position_rows(
         "market_value",
         "theta",
         "delta",
+        "gamma",
+        "vega",
         "pl_open",
         "pl_day",
         "bp_effect",
@@ -523,6 +870,65 @@ def _prepare_position_rows(
         rows[column] = rows[column].astype("string")
 
     return rows[POSITION_COLUMNS].where(pd.notna(rows[POSITION_COLUMNS]), None)
+
+
+def _prepare_detail_rows(
+    df: pd.DataFrame,
+    run_id: str,
+    snapshot_ts: str,
+    snapshot_date: str,
+    source_file: str,
+) -> pd.DataFrame:
+    rows = df.copy()
+    rows["run_id"] = run_id
+    rows["snapshot_ts"] = snapshot_ts
+    rows["snapshot_date"] = snapshot_date
+    rows["source_file"] = source_file
+
+    for column in DETAIL_COLUMNS:
+        if column not in rows.columns:
+            rows[column] = None
+
+    numeric_cols = [
+        "quantity",
+        "days",
+        "strike",
+        "trade_price",
+        "mark_price",
+        "mark_change",
+        "delta",
+        "theta",
+        "gamma",
+        "vega",
+        "pl_open",
+        "pl_day",
+        "bp_effect",
+    ]
+    for column in numeric_cols:
+        rows[column] = pd.to_numeric(rows[column], errors="coerce")
+
+    text_cols = [
+        "source_file",
+        "account_group",
+        "underlying",
+        "row_type",
+        "strategy",
+        "instrument",
+        "expiration",
+        "call_put",
+        "side",
+    ]
+    for column in text_cols:
+        rows[column] = rows[column].astype("string")
+
+    rows["is_weekly"] = rows["is_weekly"].fillna(False).astype(bool).astype(int)
+    return rows[DETAIL_COLUMNS].where(pd.notna(rows[DETAIL_COLUMNS]), None)
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_type: str) -> None:
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
 
 
 def _decode_content(content: bytes | str) -> str:

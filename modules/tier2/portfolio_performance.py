@@ -21,9 +21,11 @@ from utils.tastytrade_provider import (
 )
 from utils.portfolio_performance_store import (
     get_database_status,
+    get_latest_portfolio_details,
     get_latest_portfolio_positions,
     get_portfolio_history,
     get_recent_portfolio_snapshots,
+    parse_schwab_position_details_csv,
     parse_schwab_positions_csv,
     save_portfolio_snapshot,
     summarize_positions,
@@ -295,7 +297,7 @@ class PortfolioPerformanceModule(FazDaneModule):
             "Upload Schwab positions, save daily snapshots, and monitor P/L, theta, and delta concentration.",
         )
 
-        positions, metadata, source_label = self._load_active_snapshot()
+        positions, details, metadata, source_label = self._load_active_snapshot()
         if positions.empty:
             self._render_welcome()
             self._render_history()
@@ -303,14 +305,14 @@ class PortfolioPerformanceModule(FazDaneModule):
 
         saved_info = None
         if self.uploaded_file is not None and self.auto_save:
-            saved_info = self._save_uploaded_snapshot_once(positions, metadata)
+            saved_info = self._save_uploaded_snapshot_once(positions, details, metadata)
 
         totals = summarize_positions(positions)
         self._render_source_banner(metadata, source_label, saved_info)
         self._render_metrics(totals, positions)
 
-        tab_overview, tab_risk, tab_history, tab_data = st.tabs(
-            ["Overview", "Risk Map", "Daily History", "Position Data"]
+        tab_overview, tab_risk, tab_history, tab_data, tab_details = st.tabs(
+            ["Overview", "Risk Map", "Daily History", "Position Data", "Raw Details"]
         )
         with tab_overview:
             self._render_overview(positions, totals)
@@ -320,28 +322,33 @@ class PortfolioPerformanceModule(FazDaneModule):
             self._render_history()
         with tab_data:
             self._render_data_tab(positions, metadata)
+        with tab_details:
+            self._render_details_tab(details, metadata)
 
-    def _load_active_snapshot(self) -> tuple[pd.DataFrame, dict, str]:
+    def _load_active_snapshot(self) -> tuple[pd.DataFrame, pd.DataFrame, dict, str]:
         if self.uploaded_file is not None:
             content = self.uploaded_file.getvalue()
             positions, metadata = parse_schwab_positions_csv(content, self.uploaded_file.name)
-            return positions, metadata, "Uploaded Schwab CSV"
+            details, detail_metadata = parse_schwab_position_details_csv(content, self.uploaded_file.name)
+            metadata.update({key: value for key, value in detail_metadata.items() if key.endswith("_count")})
+            return positions, details, metadata, "Uploaded Schwab CSV"
 
         if self.load_latest_saved:
             latest_positions, latest_metadata = get_latest_portfolio_positions()
             if latest_metadata:
-                return latest_positions, latest_metadata, "Latest saved snapshot"
+                latest_details, _ = get_latest_portfolio_details()
+                return latest_positions, latest_details, latest_metadata, "Latest saved snapshot"
 
-        return pd.DataFrame(), {}, "No snapshot"
+        return pd.DataFrame(), pd.DataFrame(), {}, "No snapshot"
 
-    def _save_uploaded_snapshot_once(self, positions: pd.DataFrame, metadata: dict) -> dict | None:
+    def _save_uploaded_snapshot_once(self, positions: pd.DataFrame, details: pd.DataFrame, metadata: dict) -> dict | None:
         file_hash = metadata.get("file_sha256")
         last_hash = st.session_state.get("pp_last_saved_hash")
         if file_hash and last_hash == file_hash:
             return st.session_state.get("pp_last_save_info")
 
         try:
-            saved = save_portfolio_snapshot(positions, metadata)
+            saved = save_portfolio_snapshot(positions, metadata, details=details)
             st.session_state["pp_last_saved_hash"] = file_hash
             st.session_state["pp_last_save_info"] = saved
             return saved
@@ -414,6 +421,21 @@ class PortfolioPerformanceModule(FazDaneModule):
             fig.add_vline(x=0, line_width=1, line_color=BRAND["muted"])
             fig.update_traces(texttemplate="%{x:,.0f}", textposition="outside", cliponaxis=False)
             style_figure(fig, height=max(380, 28 * len(chart_df) + 80))
+            fig.update_layout(
+                yaxis=dict(
+                    anchor="free",
+                    position=0.0,
+                ),
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.15,
+                    xanchor="center",
+                    x=0.5,
+                    title=None,
+                ),
+                margin=dict(l=24, r=24, t=56, b=85),
+            )
             st.plotly_chart(fig, use_container_width=True, theme=None)
             self._render_daily_net_change_chart(positions)
 
@@ -501,6 +523,21 @@ class PortfolioPerformanceModule(FazDaneModule):
         style_figure(fig, height=max(360, 26 * len(daily) + 96))
         fig.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
         fig.update_xaxes(ticksuffix="%", tickformat=".2f", separatethousands=False)
+        fig.update_layout(
+            yaxis=dict(
+                anchor="free",
+                position=0.0,
+            ),
+            legend=dict(
+                orientation="h",
+                yanchor="top",
+                y=-0.15,
+                xanchor="center",
+                x=0.5,
+                title=None,
+            ),
+            margin=dict(l=24, r=24, t=56, b=85),
+        )
         st.plotly_chart(fig, use_container_width=True, theme=None)
 
         total_estimate = daily["estimated_dollar_change"].sum()
@@ -706,6 +743,85 @@ class PortfolioPerformanceModule(FazDaneModule):
             "Download Parsed Snapshot CSV",
             data=csv_bytes,
             file_name=f"portfolio_performance_{date_part}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+    def _render_details_tab(self, details: pd.DataFrame, metadata: dict):
+        st.markdown("### Raw Broker Position Details")
+        if details.empty:
+            st.info("No raw detail rows were saved for this snapshot. Re-upload the Schwab CSV to persist option legs.")
+            return
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Detail Rows", f"{len(details):,}")
+        c2.metric("Option Legs", f"{int((details['row_type'] == 'option_leg').sum()):,}")
+        c3.metric("Strategies", f"{int((details['row_type'] == 'strategy').sum()):,}")
+        c4.metric("Tickers", f"{details['underlying'].dropna().nunique():,}")
+
+        row_types = sorted(details["row_type"].dropna().unique().tolist())
+        selected_types = st.multiselect(
+            "Detail Row Types",
+            row_types,
+            default=[row_type for row_type in ["ticker_summary", "strategy", "option_leg"] if row_type in row_types],
+            key="pp_detail_row_types",
+        )
+        underlyings = sorted(details["underlying"].dropna().unique().tolist())
+        selected_underlying = st.selectbox("Underlying", ["All"] + underlyings, key="pp_detail_underlying")
+
+        view = details.copy()
+        if selected_types:
+            view = view[view["row_type"].isin(selected_types)]
+        if selected_underlying != "All":
+            view = view[view["underlying"] == selected_underlying]
+
+        display_cols = [
+            "account_group",
+            "underlying",
+            "row_type",
+            "strategy",
+            "instrument",
+            "side",
+            "quantity",
+            "days",
+            "expiration",
+            "strike",
+            "call_put",
+            "trade_price",
+            "mark_price",
+            "delta",
+            "theta",
+            "gamma",
+            "vega",
+            "pl_open",
+            "pl_day",
+        ]
+        available = [column for column in display_cols if column in view.columns]
+        st.dataframe(
+            view[available],
+            use_container_width=True,
+            hide_index=True,
+            height=min(820, max(460, 34 * (len(view) + 1))),
+            column_config={
+                "quantity": st.column_config.NumberColumn("Contracts", format="%.0f"),
+                "trade_price": st.column_config.NumberColumn("Trade Price", format="$%.3f"),
+                "mark_price": st.column_config.NumberColumn("Mark", format="$%.3f"),
+                "strike": st.column_config.NumberColumn("Strike", format="%.2f"),
+                "delta": st.column_config.NumberColumn("Delta", format="%.2f"),
+                "theta": st.column_config.NumberColumn("Theta", format="%.2f"),
+                "gamma": st.column_config.NumberColumn("Gamma", format="%.2f"),
+                "vega": st.column_config.NumberColumn("Vega", format="%.2f"),
+                "pl_open": st.column_config.NumberColumn("P/L Open", format="$%.2f"),
+                "pl_day": st.column_config.NumberColumn("P/L Day", format="$%.2f"),
+            },
+        )
+
+        csv_bytes = view.to_csv(index=False).encode("utf-8")
+        date_part = str(metadata.get("snapshot_date") or datetime.now().date())
+        st.download_button(
+            "Download Raw Detail Rows CSV",
+            data=csv_bytes,
+            file_name=f"portfolio_details_{date_part}.csv",
             mime="text/csv",
             use_container_width=True,
         )

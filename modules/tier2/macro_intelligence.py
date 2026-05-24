@@ -488,6 +488,7 @@ def render_macro_dashboard(show_download: bool = True, module_tabs: list[dict] |
     with tab_raw:
         raw = pd.DataFrame([snapshot]).T.reset_index()
         raw.columns = ["Metric", "Value"]
+        raw["Value"] = raw["Value"].astype(str)
         st.dataframe(raw, use_container_width=True, hide_index=True)
         if show_download:
             st.download_button(
