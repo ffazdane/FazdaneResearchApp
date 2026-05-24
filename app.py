@@ -608,8 +608,8 @@ with st.sidebar:
         "ES Pivot Analysis",
         "Sector Rotation Monitor",
         ]
-        if "Option Search: High Volume Low Spread" not in tier1_options:
-            tier1_options.insert(1, "Option Search: High Volume Low Spread")
+        if "Option Search Universe Engine" not in tier1_options:
+            tier1_options.insert(1, "Option Search Universe Engine")
 
         tier1_sel = st.radio(
             "tier1",
@@ -754,11 +754,11 @@ if active_module.startswith("__MENU_TIER_"):
             if st.button(option, key=f"back_menu_{menu_tier}_{index}", use_container_width=True):
                 launch_module(option, menu_tier)
 
-elif active_module == "Option Search: High Volume Low Spread":
+elif active_module == "Option Search Universe Engine":
     from modules.tier1.option_search import OptionSearchModule
     module = OptionSearchModule()
     module.run()
-    logger.info(f"User {user['username']} -> Option Search")
+    logger.info(f"User {user['username']} -> Option Search Universe Engine")
 
 elif active_module == "Options Liquidity Discovery":
     from modules.tier1.options_liquidity import OptionsLiquidityModule
@@ -952,7 +952,7 @@ else:
         {
             "label": "Live Trading",
             "items": [
-                {"label": "Option Search: High Volume Low Spread", "module": "Option Search: High Volume Low Spread", "tier": 1, "key": "macro_option_search"},
+                {"label": "Option Search Universe Engine", "module": "Option Search Universe Engine", "tier": 1, "key": "macro_option_search"},
                 {"label": "Options Liquidity Discovery", "module": "Options Liquidity Discovery", "tier": 1, "key": "macro_options_liquidity"},
                 {"label": "Market Breadth Dashboard", "module": "Market Breadth Dashboard", "tier": 1, "key": "macro_market_breadth"},
                 {"label": "Sector Rotation Monitor", "module": "Sector Rotation Monitor", "tier": 1, "key": "macro_sector_rotation"},

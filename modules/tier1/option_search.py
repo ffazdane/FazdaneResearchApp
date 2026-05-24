@@ -320,7 +320,7 @@ def _ticker_summary(df: pd.DataFrame, min_oi: int) -> pd.DataFrame:
 
 
 class OptionSearchModule(FazDaneModule):
-    MODULE_NAME = "Option Search"
+    MODULE_NAME = "Option Search Universe Engine"
     MODULE_ICON = "OS"
     MODULE_DESCRIPTION = "Persistent options trading universe engine featuring SQLite history scans, multi-factor liquidity ranking, and flow bias analysis."
     TIER = 1
