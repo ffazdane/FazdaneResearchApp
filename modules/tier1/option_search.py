@@ -499,6 +499,11 @@ class OptionSearchModule(FazDaneModule):
                         )
                         save_ticker_summary(run_id, summary_df)
                         save_contract_history(run_id, filtered_df)
+                        try:
+                            from utils.persistence import backup_database
+                            backup_database("option_search", reason=f"Scan Run {run_id}")
+                        except Exception as e:
+                            logger.warning(f"Cloud backup failed for option_search: {e}")
                         st.session_state["os_save_status"] = f"✅ Database save successful! Run ID: {run_id}"
                     except Exception as e:
                         st.session_state["os_save_status"] = f"❌ Database save failed: {e}"

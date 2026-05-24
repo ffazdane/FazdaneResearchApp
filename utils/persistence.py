@@ -109,9 +109,7 @@ def initialize_volatility_cache_tables():
     """
     try:
         db_path = get_db_path("options_liquidity")
-        if not db_path.exists():
-            logger.info("options_liquidity database does not exist yet; skipping cache table init.")
-            return
+        db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(db_path, timeout=10)
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS volatility_page_snapshots (
@@ -227,8 +225,8 @@ def restore_database(db_name: str) -> Tuple[bool, str]:
     return ok, msg
 
 
-def restore_all_databases() -> Tuple[List[str], List[str]]:
-    """Scan and restore all configured databases that are empty or missing."""
+def restore_all_databases(force: bool = False) -> Tuple[List[str], List[str]]:
+    """Scan and restore all configured databases that are empty, missing, or when force is True."""
     restored = []
     failed = []
     
@@ -238,7 +236,7 @@ def restore_all_databases() -> Tuple[List[str], List[str]]:
         return restored, failed
 
     for db_name in DATABASES:
-        if not db_exists_and_has_data(db_name):
+        if force or not db_exists_and_has_data(db_name):
             ok, msg = restore_database(db_name)
             if ok:
                 restored.append(db_name)
@@ -329,8 +327,16 @@ def _restore_from_github(db_name: str, db_path: Path) -> Tuple[bool, str]:
         dl.raise_for_status()
 
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(db_path, "wb") as f:
+        temp_path = db_path.with_suffix(".tmp")
+        with open(temp_path, "wb") as f:
             f.write(dl.content)
+        
+        if db_path.exists():
+            try:
+                db_path.unlink()
+            except Exception as e:
+                logger.warning(f"Failed to remove old database file {db_path}: {e}")
+        temp_path.rename(db_path)
 
         return True, f"Database restored from GitHub release tag '{cfg['tag']}' ({len(dl.content):,} bytes)."
     except Exception as e:
@@ -440,7 +446,16 @@ def _restore_from_s3(db_name: str, db_path: Path) -> Tuple[bool, str]:
             aws_secret_access_key=cfg["secret_access_key"] or None,
         )
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        s3.download_file(cfg["bucket"], key, str(db_path))
+        temp_path = db_path.with_suffix(".tmp")
+        s3.download_file(cfg["bucket"], key, str(temp_path))
+        
+        if db_path.exists():
+            try:
+                db_path.unlink()
+            except Exception as e:
+                logger.warning(f"Failed to remove old database file {db_path}: {e}")
+        temp_path.rename(db_path)
+        
         size = db_path.stat().st_size
         return True, f"Database restored from s3://{cfg['bucket']}/{key} ({size:,} bytes)."
     except ClientError as exc:
@@ -529,7 +544,7 @@ def render_db_control_panel():
         with col2:
             if st.button("Restore DBs", key="db_manual_restore", use_container_width=True):
                 with st.spinner("Restoring..."):
-                    restored, failed = restore_all_databases()
+                    restored, failed = restore_all_databases(force=True)
                     if restored:
                         st.session_state["db_action_status"] = f"Restored: {', '.join(restored)}"
                     if failed:
