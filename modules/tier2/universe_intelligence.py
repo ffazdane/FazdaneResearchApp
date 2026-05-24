@@ -581,10 +581,10 @@ class UniverseIntelligenceModule(FazDaneModule):
                 sizes = []
                 if bubble_size_mode == "Portfolio Weight":
                     sizes = [max(12, int(w * 100) + 12) if w > 0 else 10 for w in stage_df["Weight"]]
-                    hover_text = stage_df.apply(lambda r: f"<b>{r['Ticker']}</b> ({r['Name']})<br>Weight: {r['Weight']*100:.2f}%<br>RS: {r['RS-Ratio']:.2f}<br>Mom: {r['RS-Momentum']:.2f}<br>FDTS Signal: {r['FDTS Signal']}", axis=1)
+                    hover_text = stage_df.apply(lambda r: f"<b>{r['Ticker']}</b> ({r['Name']})<br>Weight: {r['Weight']*100:.2f}%<br>RS: {r['RS-Ratio']:.2f}<br>Mom: {r['RS-Momentum']:.2f}<br>FDTS Signal: {'🟢 Buy' if r['FDTS Signal'] == 'Buy' else '🔴 Sell' if r['FDTS Signal'] == 'Sell' else '⚪ No Trade'}", axis=1)
                 else:
                     sizes = [max(10, int(np.sqrt(mc)) * 3) for mc in stage_df["Market Cap (B)"]]
-                    hover_text = stage_df.apply(lambda r: f"<b>{r['Ticker']}</b> ({r['Name']})<br>Mkt Cap: ${r['Market Cap (B)']:.1f}B<br>RS: {r['RS-Ratio']:.2f}<br>Mom: {r['RS-Momentum']:.2f}<br>FDTS Signal: {r['FDTS Signal']}", axis=1)
+                    hover_text = stage_df.apply(lambda r: f"<b>{r['Ticker']}</b> ({r['Name']})<br>Mkt Cap: ${r['Market Cap (B)']:.1f}B<br>RS: {r['RS-Ratio']:.2f}<br>Mom: {r['RS-Momentum']:.2f}<br>FDTS Signal: {'🟢 Buy' if r['FDTS Signal'] == 'Buy' else '🔴 Sell' if r['FDTS Signal'] == 'Sell' else '⚪ No Trade'}", axis=1)
 
                 fig_quad.add_trace(go.Scatter(
                     x=stage_df["RS-Ratio"],
