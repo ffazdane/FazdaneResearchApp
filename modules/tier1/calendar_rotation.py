@@ -82,11 +82,80 @@ def configure_universe(selected_universe):
         "tickers": list(uni["tickers"].keys()), "candidates": candidates,
     }
 
+def _ema(series: pd.Series, span: int) -> pd.Series:
+    return series.ewm(span=span, adjust=False).mean()
+
+def _tema(series: pd.Series, period: int) -> pd.Series:
+    ema1 = _ema(series, period)
+    ema2 = _ema(ema1, period)
+    ema3 = _ema(ema2, period)
+    return 3 * ema1 - 3 * ema2 + ema3
+
+def calculate_fdts_signal(symbol: str, ticker_df: pd.DataFrame, period: int = 20) -> str:
+    """Calculate the FDTS + MACD Trade Signal (Buy/No Trade/Sell)."""
+    required = {"Open", "High", "Low", "Close"}
+    if ticker_df.empty or not required.issubset(ticker_df.columns):
+        return "No Trade"
+
+    data = ticker_df[["Open", "High", "Low", "Close"]].dropna().copy()
+    if len(data) < 60:
+        return "No Trade"
+
+    price = (data["High"] + data["Low"] + data["Close"]) / 3
+    tma1 = _tema(price, period)
+    tma2 = _tema(tma1, period)
+    typical_tema = tma1 + (tma1 - tma2)
+
+    raw_ha_close = (data["Open"] + data["High"] + data["Low"] + data["Close"]) / 4
+    ha_open = pd.Series(index=data.index, dtype="float64")
+    ha_open.iloc[0] = (data["High"].iloc[0] + data["Low"].iloc[0]) / 2
+    for i in range(1, len(data)):
+        ha_open.iloc[i] = (raw_ha_close.iloc[i - 1] + ha_open.iloc[i - 1]) / 2
+
+    ha_close = (
+        raw_ha_close
+        + ha_open
+        + pd.concat([data["High"], ha_open], axis=1).max(axis=1)
+        + pd.concat([data["Low"], ha_open], axis=1).min(axis=1)
+    ) / 4
+
+    ha_tma1 = _tema(ha_close, period)
+    ha_tma2 = _tema(ha_tma1, period)
+    ha_tema = ha_tma1 + (ha_tma1 - ha_tma2)
+    fdts_dev = typical_tema - ha_tema
+
+    macd_long = _ema(data["Close"], 3) - _ema(data["Close"], 10)
+    macd_long_dev = macd_long - _ema(macd_long, 16)
+    macd_short = _ema(data["Close"], 12) - _ema(data["Close"], 26)
+    macd_short_dev = macd_short - _ema(macd_short, 9)
+
+    state = pd.Series(0, index=data.index, dtype="int64")
+    state[(fdts_dev > 0) & (macd_long_dev > 0)] = 1
+    state[(fdts_dev < 0) & (macd_short_dev < 0)] = -1
+
+    current_state = int(state.iloc[-1])
+    return "Buy" if current_state == 1 else "Sell" if current_state == -1 else "No Trade"
+
+def extract_ticker_df(raw, symbol):
+    if raw.empty:
+        return pd.DataFrame()
+    ticker_df = pd.DataFrame(index=raw.index)
+    if isinstance(raw.columns, pd.MultiIndex):
+        for col in ["Open", "High", "Low", "Close", "Volume"]:
+            if col in raw and symbol in raw[col].columns:
+                ticker_df[col] = raw[col][symbol]
+    else:
+        # If single symbol was downloaded
+        ticker_df = raw.copy()
+        if "Adj Close" in ticker_df.columns and "Close" not in ticker_df.columns:
+            ticker_df["Close"] = ticker_df["Adj Close"]
+    return ticker_df.dropna(how="all")
+
 def download_price_data(tickers, benchmark, period="6mo"):
     symbols = sorted(set(list(tickers) + [benchmark]))
     raw = yf.download(symbols, period=period, auto_adjust=True, progress=False, threads=True)
     if raw.empty:
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
         
     if isinstance(raw.columns, pd.MultiIndex):
         close = raw["Close"].copy()
@@ -94,7 +163,7 @@ def download_price_data(tickers, benchmark, period="6mo"):
     else:
         close = raw[["Close"]].rename(columns={"Close": symbols[0]})
         volume = raw[["Volume"]].rename(columns={"Volume": symbols[0]})
-    return close.dropna(how="all"), volume.reindex(close.index).fillna(0)
+    return close.dropna(how="all"), volume.reindex(close.index).fillna(0), raw
 
 def compute_rotation(close, benchmark, trail_days=TRAIL_DAYS):
     if benchmark not in close: return pd.DataFrame()
@@ -173,13 +242,22 @@ def analyze_universe(univ_name, tickers, benchmark):
         "tickers": ticker_list,
         "candidates": candidates,
     }
-    close, volume = download_price_data(ctx["candidates"], ctx["benchmark"])
+    close, volume, raw = download_price_data(ctx["candidates"], ctx["benchmark"])
     if close.empty: return None
     rotation = compute_rotation(close, ctx["benchmark"])
     price_feats = compute_price_features(close, volume, ctx["benchmark"])
     if rotation.empty or price_feats.empty: return None
     latest_rot = rotation.sort_values("date").groupby("ticker").tail(1)
+    
+    # Calculate FDTS signals for all candidates
+    fdts_signals = {}
+    for ticker in ctx["candidates"]:
+        ticker_df = extract_ticker_df(raw, ticker)
+        sig = calculate_fdts_signal(ticker, ticker_df)
+        fdts_signals[ticker] = {"Buy": "🟢 Buy", "Sell": "🔴 Sell", "No Trade": "⚪ No Trade"}.get(sig, "⚪ No Trade")
+
     final_scores = add_scores(price_feats, latest_rot)
+    final_scores["fdts_signal"] = final_scores["ticker"].map(fdts_signals).fillna("⚪ No Trade")
     final_scores["universe"] = univ_name
     return {
         "context": ctx, "rotation": rotation, "scores": final_scores,
@@ -315,11 +393,13 @@ class CalendarRotationModule(FazDaneModule):
                     textposition="top center",
                     textfont=dict(size=9, color="white"),
                     marker=dict(size=10, color=color, opacity=0.75, line=dict(color="white", width=1)),
+                    customdata=scores_top["fdts_signal"],
                     hovertemplate=(
                         "<b>%{text}</b><br>"
                         f"Universe: {univ_name}<br>"
                         "RS Ratio: %{x:.2f}<br>"
                         "RS Momentum: %{y:.2f}<br>"
+                        "FDTS Signal: %{customdata}<br>"
                         "<extra></extra>"
                     ),
                     legendgroup="rotation"
@@ -342,7 +422,8 @@ class CalendarRotationModule(FazDaneModule):
                 marker=dict(color=bar_colors, line=dict(color="white", width=1)),
                 text=top_scores["trend_score"].round(0).astype(int),
                 textposition="outside",
-                hovertemplate="<b>%{x}</b><br>Trend Score: %{y:.1f}<br><extra></extra>",
+                customdata=top_scores["fdts_signal"],
+                hovertemplate="<b>%{x}</b><br>Trend Score: %{y:.1f}<br>FDTS Signal: %{customdata}<br><extra></extra>",
                 showlegend=False
             ),
             row=1, col=2
@@ -363,9 +444,10 @@ class CalendarRotationModule(FazDaneModule):
                     textposition="top center",
                     textfont=dict(size=8, color="white"),
                     marker=dict(size=12, color=q_color, opacity=0.8, line=dict(color="white", width=1)),
+                    customdata=subset["fdts_signal"],
                     hovertemplate=(
                         "<b>%{text}</b><br>Score: %{x:.1f}<br>Spot: $%{y:.2f}<br>"
-                        f"Quality: {quality_type}<br><extra></extra>"
+                        f"Quality: {quality_type}<br>FDTS Signal: %{{customdata}}<br><extra></extra>"
                     ),
                     legendgroup="quality"
                 ),
@@ -390,7 +472,8 @@ class CalendarRotationModule(FazDaneModule):
                     y=["Liquidity Score", "Option OI", "Option Volume"],
                     colorscale=[[0, "#1E293B"], [0.2, "#3B82F6"], [0.6, "#10B981"], [1.0, "#F59E0B"]],
                     showscale=True,
-                    hovertemplate="<b>%{x}</b><br>%{y}: %{z:.0f}<extra></extra>",
+                    customdata=np.tile(heatmap_data["fdts_signal"].values, (3, 1)),
+                    hovertemplate="<b>%{x}</b><br>%{y}: %{z:.0f}<br>FDTS Signal: %{customdata}<br><extra></extra>",
                     colorbar=dict(x=1.02, len=0.4, y=0.22, thickness=15, tickfont=dict(color="white", size=10))
                 ),
                 row=2, col=2
@@ -431,7 +514,7 @@ class CalendarRotationModule(FazDaneModule):
     def _render_top_candidates(self, combined_scores):
         st.markdown("### 🏆 Top Rotation Candidates")
         display_cols = [
-            "ticker", "universe", "quality", "calendar_score", "trend_score",
+            "ticker", "universe", "quality", "fdts_signal", "calendar_score", "trend_score",
             "rs_ratio", "rs_momentum", "spot", "target_strike", "option_liquidity_score"
         ]
         display_df = combined_scores.head(15)[display_cols].copy()
@@ -441,6 +524,7 @@ class CalendarRotationModule(FazDaneModule):
             display_df,
             use_container_width=True,
             column_config={
+                "fdts_signal": st.column_config.TextColumn("FDTS Signal", width="small"),
                 "calendar_score": st.column_config.NumberColumn("Cal Score", format="%.1f"),
                 "trend_score": st.column_config.NumberColumn("Trend Score", format="%.1f"),
                 "rs_ratio": st.column_config.NumberColumn("RS Ratio", format="%.1f"),

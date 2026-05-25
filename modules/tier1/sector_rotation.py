@@ -27,6 +27,75 @@ def get_color(idx):
 # Logic functions
 # ============================================================
 
+def _ema(series: pd.Series, span: int) -> pd.Series:
+    return series.ewm(span=span, adjust=False).mean()
+
+def _tema(series: pd.Series, period: int) -> pd.Series:
+    ema1 = _ema(series, period)
+    ema2 = _ema(ema1, period)
+    ema3 = _ema(ema2, period)
+    return 3 * ema1 - 3 * ema2 + ema3
+
+def calculate_fdts_signal(symbol: str, ticker_df: pd.DataFrame, period: int = 20) -> str:
+    """Calculate the FDTS + MACD Trade Signal (Buy/No Trade/Sell)."""
+    required = {"Open", "High", "Low", "Close"}
+    if ticker_df.empty or not required.issubset(ticker_df.columns):
+        return "No Trade"
+
+    data = ticker_df[["Open", "High", "Low", "Close"]].dropna().copy()
+    if len(data) < 60:
+        return "No Trade"
+
+    price = (data["High"] + data["Low"] + data["Close"]) / 3
+    tma1 = _tema(price, period)
+    tma2 = _tema(tma1, period)
+    typical_tema = tma1 + (tma1 - tma2)
+
+    raw_ha_close = (data["Open"] + data["High"] + data["Low"] + data["Close"]) / 4
+    ha_open = pd.Series(index=data.index, dtype="float64")
+    ha_open.iloc[0] = (data["High"].iloc[0] + data["Low"].iloc[0]) / 2
+    for i in range(1, len(data)):
+        ha_open.iloc[i] = (raw_ha_close.iloc[i - 1] + ha_open.iloc[i - 1]) / 2
+
+    ha_close = (
+        raw_ha_close
+        + ha_open
+        + pd.concat([data["High"], ha_open], axis=1).max(axis=1)
+        + pd.concat([data["Low"], ha_open], axis=1).min(axis=1)
+    ) / 4
+
+    ha_tma1 = _tema(ha_close, period)
+    ha_tma2 = _tema(ha_tma1, period)
+    ha_tema = ha_tma1 + (ha_tma1 - ha_tma2)
+    fdts_dev = typical_tema - ha_tema
+
+    macd_long = _ema(data["Close"], 3) - _ema(data["Close"], 10)
+    macd_long_dev = macd_long - _ema(macd_long, 16)
+    macd_short = _ema(data["Close"], 12) - _ema(data["Close"], 26)
+    macd_short_dev = macd_short - _ema(macd_short, 9)
+
+    state = pd.Series(0, index=data.index, dtype="int64")
+    state[(fdts_dev > 0) & (macd_long_dev > 0)] = 1
+    state[(fdts_dev < 0) & (macd_short_dev < 0)] = -1
+
+    current_state = int(state.iloc[-1])
+    return "Buy" if current_state == 1 else "Sell" if current_state == -1 else "No Trade"
+
+def extract_ticker_df(raw, symbol):
+    if raw.empty:
+        return pd.DataFrame()
+    ticker_df = pd.DataFrame(index=raw.index)
+    if isinstance(raw.columns, pd.MultiIndex):
+        for col in ["Open", "High", "Low", "Close", "Volume"]:
+            if col in raw and symbol in raw[col].columns:
+                ticker_df[col] = raw[col][symbol]
+    else:
+        # If single symbol was downloaded
+        ticker_df = raw.copy()
+        if "Adj Close" in ticker_df.columns and "Close" not in ticker_df.columns:
+            ticker_df["Close"] = ticker_df["Adj Close"]
+    return ticker_df.dropna(how="all")
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def download_rotation_data(tickers, benchmark, period_type="weeks", period_number=12):
     if benchmark not in tickers:
@@ -45,7 +114,16 @@ def download_rotation_data(tickers, benchmark, period_type="weeks", period_numbe
     raw = yf.download(tickers, period=download_period, interval=interval, progress=False)
 
     if raw.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), {}
+
+    # Calculate FDTS signals for all tickers (except benchmark) using raw daily data
+    fdts_signals = {}
+    for ticker in tickers:
+        if ticker == benchmark:
+            continue
+        ticker_df = extract_ticker_df(raw, ticker)
+        sig = calculate_fdts_signal(ticker, ticker_df)
+        fdts_signals[ticker] = {"Buy": "🟢 Buy", "Sell": "🔴 Sell", "No Trade": "⚪ No Trade"}.get(sig, "⚪ No Trade")
 
     if isinstance(raw.columns, pd.MultiIndex):
         prices = raw["Close"].copy()
@@ -66,7 +144,7 @@ def download_rotation_data(tickers, benchmark, period_type="weeks", period_numbe
         prices = prices.resample("ME").last() # 'ME' is newer pandas equivalent to 'M'
 
     prices = prices.dropna(axis=1, how="all").dropna()
-    return prices
+    return prices, fdts_signals
 
 def calculate_rotation(prices, ticker_dict, benchmark, ema_span=4):
     benchmark_price = prices[benchmark]
@@ -178,7 +256,7 @@ class SectorRotationModule(FazDaneModule):
 
         with st.spinner("Fetching data and computing matrix..."):
             try:
-                prices = download_rotation_data(
+                prices, fdts_signals = download_rotation_data(
                     list(ticker_dict.keys()), 
                     state["benchmark"], 
                     state["period_type"], 
@@ -202,9 +280,9 @@ class SectorRotationModule(FazDaneModule):
         rs_ratio_df = rs_ratio_df.tail(max(period_number, tail_length))
         rs_momentum_df = rs_momentum_df.tail(max(period_number, tail_length))
         
-        self._render_plot(rs_ratio_df, rs_momentum_df, ticker_dict, tail_length)
+        self._render_plot(rs_ratio_df, rs_momentum_df, ticker_dict, tail_length, fdts_signals)
 
-    def _render_plot(self, ratio_df, mom_df, ticker_dict, tail_length):
+    def _render_plot(self, ratio_df, mom_df, ticker_dict, tail_length, fdts_signals):
         fig = go.Figure()
         
         all_x_vals, all_y_vals = [], []
@@ -260,7 +338,7 @@ class SectorRotationModule(FazDaneModule):
                 textposition="top right",
                 textfont=dict(color=color, size=13, family="Inter"),
                 marker=dict(size=14, color=color, line=dict(color="black", width=1)),
-                hovertemplate=f"<b>{asset_name} ({ticker})</b><br>RS-Ratio: %{{x:.2f}}<br>RS-Mom: %{{y:.2f}}<extra></extra>"
+                hovertemplate=f"<b>{asset_name} ({ticker})</b><br>RS-Ratio: %{{x:.2f}}<br>RS-Mom: %{{y:.2f}}<br>FDTS Signal: {fdts_signals.get(ticker, '⚪ No Trade')}<extra></extra>"
             ))
             
             quad = get_quadrant(latest_x, latest_y)
@@ -270,7 +348,8 @@ class SectorRotationModule(FazDaneModule):
                 "RS Ratio": latest_x,
                 "RS Momentum": latest_y,
                 "Quadrant": quad,
-                "Color": color
+                "Color": color,
+                "FDTS": fdts_signals.get(ticker, "⚪ No Trade")
             })
 
         if not all_x_vals:
@@ -316,7 +395,7 @@ class SectorRotationModule(FazDaneModule):
         
         for row in latest_rows:
             # Create a styled item
-            item = f"<span style='color:{row['Color']};font-weight:bold;'>■</span> <b>{row['Ticker']}</b> <span style='color:#94a3b8;font-size:12px;'>({row['Name']})</span>"
+            item = f"<span style='color:{row['Color']};font-weight:bold;'>■</span> <b>{row['Ticker']}</b> ({row['FDTS']}) <span style='color:#94a3b8;font-size:12px;'>({row['Name']})</span>"
             quad = row['Quadrant']
             if quad == "Leading": leading.append(item)
             elif quad == "Weakening": weakening.append(item)
