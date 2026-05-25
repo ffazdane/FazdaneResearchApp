@@ -222,6 +222,22 @@ def fetch_info_details(ticker: str) -> dict:
             "description": "Information unavailable."
         }
 
+def calculate_historical_beta(asset_series: pd.Series, index_series: pd.Series) -> float:
+    """Calculate historical beta of an asset relative to an index using daily returns."""
+    aligned = pd.concat([asset_series, index_series], axis=1).dropna()
+    if len(aligned) < 30:
+        return 1.0
+    returns = aligned.pct_change().dropna()
+    if returns.empty:
+        return 1.0
+    asset_ret = returns.iloc[:, 0]
+    index_ret = returns.iloc[:, 1]
+    cov = asset_ret.cov(index_ret)
+    var = index_ret.var()
+    if var == 0 or pd.isna(var) or pd.isna(cov):
+        return 1.0
+    return float(cov / var)
+
 # --- Core Calculations ---
 
 def compute_rrg_metrics(close_df: pd.DataFrame, benchmark_ticker: str) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -340,6 +356,9 @@ class UniverseIntelligenceModule(FazDaneModule):
         self.greek_pref = st.selectbox("Greeks Normalisation Type:", ["Both (Split View)", "Raw Dollar-Equivalent", "Normalized % of Portfolio"], index=0, key="ui_greek_pref")
         self.bubble_size_pref = st.selectbox("Default Bubble Sizing:", ["Both (Split / Toggle)", "Portfolio Weight", "Market Cap"], index=0, key="ui_bubble_size_pref")
 
+        st.markdown("**Beta Calculations**")
+        self.beta_index = st.selectbox("Beta Reference Index:", ["SPY", "QQQ"], index=0, key="ui_beta_index")
+
         if st.button("🔄 Refresh Market Data", use_container_width=True, type="primary"):
             fetch_historical_prices.clear()
             st.rerun()
@@ -389,6 +408,10 @@ class UniverseIntelligenceModule(FazDaneModule):
 
         # Merge target universe and portfolio underlying stocks for batch yfinance downloading
         all_download_tickers = list(self.tickers)
+        # Ensure SPY and QQQ are in all_download_tickers for beta weighting calculations
+        for index_ticker in ["SPY", "QQQ"]:
+            if index_ticker not in all_download_tickers:
+                all_download_tickers.append(index_ticker)
         for pt in portfolio_tickers:
             if pt not in all_download_tickers:
                 all_download_tickers.append(pt)
@@ -436,6 +459,13 @@ class UniverseIntelligenceModule(FazDaneModule):
 
             fdts_sig = fdts_signals.get(ticker, "No Trade")
 
+            # Calculate historical beta relative to selected SPY or QQQ index
+            ref_index = self.beta_index
+            if ref_index in close_df.columns and ticker in close_df.columns:
+                calculated_beta = calculate_historical_beta(close_df[ticker], close_df[ref_index])
+            else:
+                calculated_beta = meta.get("beta") or 1.0
+
             rows.append({
                 "Ticker": ticker,
                 "Name": meta["name"],
@@ -449,7 +479,7 @@ class UniverseIntelligenceModule(FazDaneModule):
                 "Bollinger Squeeze": "Squeeze" if tech["bollinger_sqz"] else "Normal",
                 "ATR": tech["atr"],
                 "CVD": tech["cvd"],
-                "Beta": meta["beta"],
+                "Beta": calculated_beta,
                 "FDTS Signal": fdts_sig
             })
             
@@ -989,7 +1019,8 @@ class UniverseIntelligenceModule(FazDaneModule):
                     hide_index=True,
                     column_config={
                         "RS Rank": st.column_config.ProgressColumn("RS Rank", format="%d", min_value=0, max_value=100),
-                        "FDTS Signal": st.column_config.TextColumn("FDTS Signal", width="small")
+                        "FDTS Signal": st.column_config.TextColumn("FDTS Signal", width="small"),
+                        "Beta": st.column_config.NumberColumn(f"Beta vs {self.beta_index}", format="%.2f")
                     }
                 )
                 
@@ -1175,7 +1206,15 @@ class UniverseIntelligenceModule(FazDaneModule):
             }).fillna("⚪ No Trade")
             vol_df["IV Rank (Sim)"] = vol_df["RSI"].map(lambda r: int(abs(r - 50) * 2))
             vol_df["Expected 5D Move %"] = (vol_df["Beta"] * 2.5).round(2)
-            st.dataframe(vol_df.sort_values("IV Rank (Sim)", ascending=False), use_container_width=True, hide_index=True)
+            st.dataframe(
+                vol_df.sort_values("IV Rank (Sim)", ascending=False),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "FDTS Signal": st.column_config.TextColumn("FDTS Signal", width="small"),
+                    "Beta": st.column_config.NumberColumn(f"Beta vs {self.beta_index}", format="%.2f")
+                }
+            )
 
         # --- TAB 5: CLUSTER ANALYSIS ---
         with tab_cluster:
@@ -1384,7 +1423,7 @@ class UniverseIntelligenceModule(FazDaneModule):
                         hover_text = f"<b>{t}</b> ({name})<br>"
                         hover_text += f"Theme: {theme}<br>"
                         hover_text += f"Cluster ID: {c_id}<br>"
-                        hover_text += f"Beta vs SPY: {beta:.2f}<br>"
+                        hover_text += f"Beta vs {self.beta_index}: {beta:.2f}<br>"
                         hover_text += f"RSI (14): {rsi:.1f}<br>"
                         hover_text += f"FDTS Signal: {fd_emoji}"
                         hover_texts.append(hover_text)
@@ -1503,7 +1542,10 @@ class UniverseIntelligenceModule(FazDaneModule):
                             theme_color = get_theme_color(theme_name)
                             
                             # Metrics
-                            c_betas = [fetch_info_details(t).get("beta", 1.0) for t in c_tickers]
+                            c_betas = []
+                            for t in c_tickers:
+                                row = data_df[data_df["Ticker"] == t]
+                                c_betas.append(row["Beta"].values[0] if not row.empty else fetch_info_details(t).get("beta", 1.0))
                             avg_beta = np.mean(c_betas) if c_betas else 1.0
                             
                             c_rsis = []
@@ -1588,7 +1630,14 @@ class UniverseIntelligenceModule(FazDaneModule):
                                     "RSI": round(rsi_val, 1),
                                     "FDTS Signal": fd_emoji
                                 })
-                            st.dataframe(pd.DataFrame(c_data), use_container_width=True, hide_index=True)
+                            st.dataframe(
+                                pd.DataFrame(c_data),
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "Beta": st.column_config.NumberColumn(f"Beta vs {self.beta_index}", format="%.2f")
+                                }
+                            )
 
                         # Cluster 2
                         if i + 1 < k_adjusted:
@@ -1600,7 +1649,10 @@ class UniverseIntelligenceModule(FazDaneModule):
                                 theme_color = get_theme_color(theme_name)
                                 
                                 # Metrics
-                                c_betas = [fetch_info_details(t).get("beta", 1.0) for t in c_tickers]
+                                c_betas = []
+                                for t in c_tickers:
+                                    row = data_df[data_df["Ticker"] == t]
+                                    c_betas.append(row["Beta"].values[0] if not row.empty else fetch_info_details(t).get("beta", 1.0))
                                 avg_beta = np.mean(c_betas) if c_betas else 1.0
                                 
                                 c_rsis = []
@@ -1685,7 +1737,14 @@ class UniverseIntelligenceModule(FazDaneModule):
                                         "RSI": round(rsi_val, 1),
                                         "FDTS Signal": fd_emoji
                                     })
-                                st.dataframe(pd.DataFrame(c_data), use_container_width=True, hide_index=True)
+                                st.dataframe(
+                                    pd.DataFrame(c_data),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    column_config={
+                                        "Beta": st.column_config.NumberColumn(f"Beta vs {self.beta_index}", format="%.2f")
+                                    }
+                                )
 
         # --- TAB 7: INTERACTIVE DRILL-DOWNS ---
         with tab_drilldowns:
@@ -1703,7 +1762,11 @@ class UniverseIntelligenceModule(FazDaneModule):
                     with dc1:
                         st.markdown(f"##### {tick_info['name']} ({sel_ticker})")
                         st.caption(f"**Sector:** {tick_info['sector']} | **Industry:** {tick_info['industry']}")
-                        st.write(f"• **Beta vs SPY:** `{tick_info['beta']}`")
+                        if "Beta" in data_df.columns:
+                            calc_beta_val = data_df.loc[data_df["Ticker"] == sel_ticker, "Beta"].values[0]
+                            st.write(f"• **Beta vs {self.beta_index}:** `{calc_beta_val:.2f}`")
+                        else:
+                            st.write(f"• **Beta vs SPY:** `{tick_info['beta']}`")
                         st.write(f"• **Market Capitalisation:** `${tick_info['market_cap'] / 1e9:.2f}B`")
                         
                         # Display FDTS Signal in Detail Profile
@@ -1790,7 +1853,7 @@ class UniverseIntelligenceModule(FazDaneModule):
                         sim_w = sim_cost / new_net_liq
                         new_port_beta = cur_port_beta * (net_liq / new_net_liq) + (data_df.loc[data_df["Ticker"] == sim_ticker, "Beta"].values[0] * sim_w)
                         
-                        st.metric("Portfolio Beta Shift", f"{new_port_beta:.3f}", f"{new_port_beta - cur_port_beta:+.3f} change")
+                        st.metric(f"Portfolio Beta Shift (vs {self.beta_index})", f"{new_port_beta:.3f}", f"{new_port_beta - cur_port_beta:+.3f} change")
                         
                         sim_sec = data_df.loc[data_df["Ticker"] == sim_ticker, "Sector"].values[0]
                         curr_sec_w = float(data_df[data_df["Sector"] == sim_sec]["Weight"].sum() * 100.0)
