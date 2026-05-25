@@ -1192,6 +1192,7 @@ class ElliottWaveAnalysisModule(FazDaneModule):
             if st.button("Run Universe Scan", type="primary", use_container_width=True):
                 progress = st.progress(0.0)
                 ranked_rows = []
+                scanned_plots = []
                 for i, t in enumerate(self.tickers):
                     progress.progress((i + 1) / len(self.tickers))
                     tsym = _normalize_symbol(t)
@@ -1215,6 +1216,7 @@ class ElliottWaveAnalysisModule(FazDaneModule):
                             "Option Strategy Bias": recomm["strategy"],
                             "_score": prim.quality_score
                         })
+                        scanned_plots.append((tsym, tdf, tswings, prim))
                     else:
                         ranked_rows.append({
                             "Ticker": tsym,
@@ -1234,6 +1236,15 @@ class ElliottWaveAnalysisModule(FazDaneModule):
                 if not ranked_df.empty:
                     ranked_df = ranked_df.sort_values(by="_score", ascending=False).drop(columns=["_score"])
                     st.dataframe(ranked_df, use_container_width=True, hide_index=True)
+
+                    # Sort plots by score descending
+                    scanned_plots.sort(key=lambda x: x[3].quality_score, reverse=True)
+
+                    st.markdown("### 📈 Scanned Wave Charts")
+                    for tsym, tdf, tswings, prim in scanned_plots:
+                        with st.expander(f"📊 Chart for {tsym} — {prim.phase.value} ({prim.direction}) | Confidence: {prim.quality_score:.1f}%", expanded=False):
+                            fig = build_chart(tdf, tswings, prim, tsym, self.show_minor, self.show_fib, self.plot_last_n)
+                            st.plotly_chart(fig, use_container_width=True, key=f"universe_chart_{tsym}")
                 else:
                     st.info("No tickers scanned successfully.")
             else:
