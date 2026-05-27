@@ -308,10 +308,12 @@ st.markdown(
         /* Permanently hide sidebar collapse and expand controls */
         [data-testid="collapsedControl"],
         [data-testid="stSidebarCollapseButton"] {{
-            display: none !important;
-            visibility: hidden !important;
-            height: 0 !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+            position: absolute !important;
             width: 0 !important;
+            height: 0 !important;
+            overflow: hidden !important;
         }}
 
         /* Hide decorative bar, toolbar, hamburger menu, deploy button, and footer */
@@ -615,6 +617,20 @@ st.markdown(
         }}
 
     </style>
+    <script>
+        (function() {{
+            function expandSidebar() {{
+                const sidebar = document.querySelector('[data-testid="stSidebar"]');
+                const expandButton = document.querySelector('[data-testid="collapsedControl"] button');
+                if (sidebar && sidebar.getAttribute('data-collapsed') === 'true' && expandButton) {{
+                    expandButton.click();
+                }}
+            }}
+            expandSidebar();
+            const interval = setInterval(expandSidebar, 100);
+            setTimeout(() => clearInterval(interval), 3000);
+        }})();
+    </script>
     """,
     unsafe_allow_html=True,
 )
