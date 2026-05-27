@@ -23,6 +23,159 @@ st.set_page_config(
 )
 
 #
+# THEMES CONFIGURATION
+#
+
+THEMES = {
+    "Classic Navy (Default)": {
+        "bg_color": "#0d1b2e",
+        "sidebar_bg": "linear-gradient(180deg, #0d1b2e 0%, #152847 60%, #0d1b2e 100%)",
+        "sidebar_bg_solid": "#152847",
+        "card_bg": "linear-gradient(135deg, #152847 0%, #0d1b2e 100%)",
+        "card_bg_solid": "#152847",
+        "widget_bg": "rgba(21, 40, 71, 0.9)",
+        "text_color": "#e2e8f0",
+        "text_muted": "#94a3b8",
+        "border_color": "#1e3a5f",
+        "accent_color": "#3ab54a",
+        "accent_hover": "rgba(58, 181, 74, 0.15)",
+        "tab_bg": "rgba(21, 40, 71, 0.6)",
+        "table_bg": "#0b1628",
+        "table_even_bg": "#0d1b2e",
+        "input_border": "#1e3a5f",
+        "plotly_template": "plotly_dark"
+    },
+    "Obsidian / Onyx": {
+        "bg_color": "#0f0f11",
+        "sidebar_bg": "linear-gradient(180deg, #0f0f11 0%, #1c1c1f 60%, #0f0f11 100%)",
+        "sidebar_bg_solid": "#1c1c1f",
+        "card_bg": "linear-gradient(135deg, #1c1c1f 0%, #0f0f11 100%)",
+        "card_bg_solid": "#1c1c1f",
+        "widget_bg": "rgba(28, 28, 31, 0.9)",
+        "text_color": "#f3f4f6",
+        "text_muted": "#9ca3af",
+        "border_color": "#2d2d34",
+        "accent_color": "#8b5cf6",
+        "accent_hover": "rgba(139, 92, 246, 0.15)",
+        "tab_bg": "rgba(28, 28, 31, 0.6)",
+        "table_bg": "#141416",
+        "table_even_bg": "#0f0f11",
+        "input_border": "#2d2d34",
+        "plotly_template": "plotly_dark"
+    },
+    "Cyberpunk Gold / Amber": {
+        "bg_color": "#120e16",
+        "sidebar_bg": "linear-gradient(180deg, #120e16 0%, #1f1a24 60%, #120e16 100%)",
+        "sidebar_bg_solid": "#1f1a24",
+        "card_bg": "linear-gradient(135deg, #1f1a24 0%, #120e16 100%)",
+        "card_bg_solid": "#1f1a24",
+        "widget_bg": "rgba(31, 26, 36, 0.9)",
+        "text_color": "#f8f6f9",
+        "text_muted": "#a098a6",
+        "border_color": "#3d2d4c",
+        "accent_color": "#ffb800",
+        "accent_hover": "rgba(255, 184, 0, 0.15)",
+        "tab_bg": "rgba(31, 26, 36, 0.6)",
+        "table_bg": "#18141d",
+        "table_even_bg": "#120e16",
+        "input_border": "#3d2d4c",
+        "plotly_template": "plotly_dark"
+    },
+    "Emerald Forest": {
+        "bg_color": "#0a1410",
+        "sidebar_bg": "linear-gradient(180deg, #0a1410 0%, #12241e 60%, #0a1410 100%)",
+        "sidebar_bg_solid": "#12241e",
+        "card_bg": "linear-gradient(135deg, #12241e 0%, #0a1410 100%)",
+        "card_bg_solid": "#12241e",
+        "widget_bg": "rgba(18, 36, 30, 0.9)",
+        "text_color": "#ecfdf5",
+        "text_muted": "#a7f3d0",
+        "border_color": "#1b3d32",
+        "accent_color": "#10b981",
+        "accent_hover": "rgba(16, 185, 129, 0.15)",
+        "tab_bg": "rgba(18, 36, 30, 0.6)",
+        "table_bg": "#0d1f19",
+        "table_even_bg": "#0a1410",
+        "input_border": "#1b3d32",
+        "plotly_template": "plotly_dark"
+    },
+    "Nordic Frost (Light Mode)": {
+        "bg_color": "#f3f7fa",
+        "sidebar_bg": "linear-gradient(180deg, #e4ecf2 0%, #f3f7fa 100%)",
+        "sidebar_bg_solid": "#e4ecf2",
+        "card_bg": "linear-gradient(135deg, #ffffff 0%, #f3f7fa 100%)",
+        "card_bg_solid": "#ffffff",
+        "widget_bg": "rgba(255, 255, 255, 0.9)",
+        "text_color": "#1e293b",
+        "text_muted": "#64748b",
+        "border_color": "#cbd5e1",
+        "accent_color": "#0284c7",
+        "accent_hover": "rgba(2, 132, 199, 0.15)",
+        "tab_bg": "rgba(228, 236, 242, 0.6)",
+        "table_bg": "#ffffff",
+        "table_even_bg": "#f8fafc",
+        "input_border": "#cbd5e1",
+        "plotly_template": "plotly_white"
+    }
+}
+
+if "app_theme_selection" not in st.session_state:
+    st.session_state["app_theme_selection"] = "Classic Navy (Default)"
+
+theme_colors = THEMES[st.session_state["app_theme_selection"]]
+st.session_state["theme_colors"] = theme_colors
+
+#
+# PLOTLY THEME MONKEY-PATCHING
+#
+try:
+    import plotly.graph_objects as go
+    
+    _original_init = go.Figure.__init__
+    _original_update_layout = go.Figure.update_layout
+
+    def custom_init(self, *args, **kwargs):
+        _original_init(self, *args, **kwargs)
+        theme = st.session_state.get("theme_colors")
+        if theme and hasattr(self, "layout") and self.layout is not None:
+            bg_color = theme.get("bg_color")
+            template = theme.get("plotly_template", "plotly_dark")
+            self.layout.template = template
+            if self.layout.paper_bgcolor == "#0d1b2e":
+                self.layout.paper_bgcolor = bg_color
+            if self.layout.plot_bgcolor == "#0d1b2e":
+                self.layout.plot_bgcolor = bg_color
+
+    def custom_update_layout(self, *args, **kwargs):
+        theme = st.session_state.get("theme_colors")
+        if theme:
+            bg_color = theme.get("bg_color")
+            template = theme.get("plotly_template", "plotly_dark")
+            
+            if "template" in kwargs:
+                kwargs["template"] = template
+                
+            for key in ["paper_bgcolor", "plot_bgcolor"]:
+                if key in kwargs and kwargs[key] == "#0d1b2e":
+                    kwargs[key] = bg_color
+                    
+            for arg in args:
+                if isinstance(arg, dict):
+                    if arg.get("template") is not None:
+                        arg["template"] = template
+                    for key in ["paper_bgcolor", "plot_bgcolor"]:
+                        if arg.get(key) == "#0d1b2e":
+                            arg[key] = bg_color
+                            
+        return _original_update_layout(self, *args, **kwargs)
+
+    go.Figure.__init__ = custom_init
+    go.Figure.update_layout = custom_update_layout
+except Exception as e:
+    pass
+
+
+#
 # LOGGING SETUP
 #
 
@@ -114,314 +267,387 @@ def back_to_current_menu() -> None:
 #
 
 st.markdown(
-    """
-    <link href="https://fonts.googleapis.com/css2-family=Inter:wght@300;400;500;600;700&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+    f"""
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
     <style>
+        :root {{
+            --bg-color: {theme_colors['bg_color']};
+            --sidebar-bg: {theme_colors['sidebar_bg']};
+            --sidebar-bg-solid: {theme_colors['sidebar_bg_solid']};
+            --card-bg: {theme_colors['card_bg']};
+            --card-bg-solid: {theme_colors['card_bg_solid']};
+            --widget-bg: {theme_colors['widget_bg']};
+            --text-color: {theme_colors['text_color']};
+            --text-muted: {theme_colors['text_muted']};
+            --border-color: {theme_colors['border_color']};
+            --accent-color: {theme_colors['accent_color']};
+            --accent-hover: {theme_colors['accent_hover']};
+            --tab-bg: {theme_colors['tab_bg']};
+            --table-bg: {theme_colors['table_bg']};
+            --table-even-bg: {theme_colors['table_even_bg']};
+            --input-border: {theme_colors['input_border']};
+        }}
+
         /* Base */
-        html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+        html, body, [class*="css"] {{ font-family: 'Inter', sans-serif; }}
 
         /* Background */
-        .stApp { background: #0d1b2e; color: #e2e8f0; }
+        .stApp {{ background: var(--bg-color); color: var(--text-color); }}
 
-        /* Hide Streamlit header/banner chrome */
-        header[data-testid="stHeader"],
-        [data-testid="stToolbar"],
+        /* Make default Streamlit header bar transparent and click-through */
+        header[data-testid="stHeader"] {{
+            background-color: transparent !important;
+            border-bottom: none !important;
+            height: 40px !important;
+            pointer-events: none !important;
+        }}
+        header[data-testid="stHeader"] * {{
+            pointer-events: auto !important;
+        }}
+
+        /* Force collapsedControl (maximize arrow) to float and be visible & clickable */
+        [data-testid="collapsedControl"] {{
+            visibility: visible !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            position: fixed !important;
+            left: 12px !important;
+            top: 12px !important;
+            z-index: 999999 !important;
+            background-color: var(--sidebar-bg-solid) !important;
+            border: 1px solid var(--border-color) !important;
+            border-radius: 8px !important;
+            width: 36px !important;
+            height: 36px !important;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
+            transition: all 0.2s ease-in-out !important;
+            cursor: pointer !important;
+        }}
+        [data-testid="collapsedControl"]:hover {{
+            background-color: var(--accent-color) !important;
+            border-color: var(--accent-color) !important;
+        }}
+        [data-testid="collapsedControl"] button {{
+            background: transparent !important;
+            border: none !important;
+            color: var(--text-color) !important;
+            width: 100% !important;
+            height: 100% !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            cursor: pointer !important;
+        }}
+        [data-testid="collapsedControl"] svg {{
+            fill: var(--text-color) !important;
+            color: var(--text-color) !important;
+        }}
+        [data-testid="collapsedControl"]:hover svg {{
+            fill: #ffffff !important;
+            color: #ffffff !important;
+        }}
+
+        /* Hide decorative bar, toolbar, hamburger menu, deploy button, and footer */
         [data-testid="stDecoration"],
+        [data-testid="stToolbar"],
+        header[data-testid="stHeader"] [data-testid="stHeaderDeployButton"],
+        header[data-testid="stHeader"] button:not([data-testid="collapsedControl"] button),
         #MainMenu,
-        footer {
+        footer {{
             visibility: hidden !important;
+            display: none !important;
             height: 0 !important;
             min-height: 0 !important;
-            display: none !important;
-        }
+        }}
 
         /* ALL text */
         p, li, span, label, small,
-        .stMarkdown p, .stMarkdown li, .stMarkdown span { color: #e2e8f0; }
+        .stMarkdown p, .stMarkdown li, .stMarkdown span {{ color: var(--text-color); }}
 
         /* Widget labels */
         .stTextInput label, .stTextArea label, .stSelectbox label,
         .stMultiSelect label, .stSlider label, .stRadio label,
         .stCheckbox label, .stNumberInput label, .stDateInput label,
-        [data-testid="stWidgetLabel"] p {
-            color: #cbd5e1 !important; font-size: 13px !important; font-weight: 500 !important;
-        }
+        [data-testid="stWidgetLabel"] p {{
+            color: var(--text-muted) !important; font-size: 13px !important; font-weight: 500 !important;
+        }}
 
         /* Radio / checkbox text */
         .stRadio div[role="radiogroup"] label p,
         .stRadio div[role="radiogroup"] label span,
-        .stCheckbox label p { color: #e2e8f0 !important; }
-        .stRadio div[role="radiogroup"] label {
+        .stCheckbox label p {{ color: var(--text-color) !important; }}
+        .stRadio div[role="radiogroup"] label {{
             display: flex !important;
             align-items: center !important;
             gap: 8px !important;
             min-height: 28px !important;
-        }
-        .stRadio div[role="radiogroup"] label > div:first-child {
+        }}
+        .stRadio div[role="radiogroup"] label > div:first-child {{
             margin-top: 0 !important;
             align-self: center !important;
-        }
-        .stRadio div[role="radiogroup"] label p {
+        }}
+        .stRadio div[role="radiogroup"] label p {{
             margin: 0 !important;
             line-height: 1.25 !important;
-        }
+        }}
 
         /* Selectbox */
         .stSelectbox [data-baseweb="select"] span,
         .stSelectbox [data-baseweb="select"] div,
-        [data-baseweb="select"] span {
-            color: #e2e8f0 !important; background-color: rgba(21,40,71,0.9) !important;
-        }
+        [data-baseweb="select"] span {{
+            color: var(--text-color) !important; background-color: var(--widget-bg) !important;
+        }}
 
         /* Multiselect tags */
-        .stMultiSelect [data-baseweb="tag"] {
+        .stMultiSelect [data-baseweb="tag"] {{
             background: rgba(26,58,143,0.75) !important;
-            border: 1px solid #3ab54a !important;
+            border: 1px solid var(--accent-color) !important;
             border-radius: 6px !important;
             padding: 4px 8px !important;
-        }
-        .stMultiSelect [data-baseweb="tag"] span {
+        }}
+        .stMultiSelect [data-baseweb="tag"] span {{
             color: #ffffff !important;
             font-size: 13px !important;
             font-weight: 600 !important;
-        }
+        }}
         .stMultiSelect [data-baseweb="tag"] [data-testid="stMultiSelectClearButton"],
         .stMultiSelect [data-baseweb="tag"] button,
-        .stMultiSelect [data-baseweb="tag"] svg { color: #94a3b8 !important; fill: #94a3b8 !important; }
+        .stMultiSelect [data-baseweb="tag"] svg {{ color: var(--text-muted) !important; fill: var(--text-muted) !important; }}
         .stMultiSelect [data-baseweb="select"] span,
-        .stMultiSelect [data-baseweb="select"] div { color: #e2e8f0 !important; }
-        .stMultiSelect [data-baseweb="select"] input { color: #e2e8f0 !important; }
+        .stMultiSelect [data-baseweb="select"] div {{ color: var(--text-color) !important; }}
+        .stMultiSelect [data-baseweb="select"] input {{ color: var(--text-color) !important; }}
 
         /* Dropdown option lists */
         [data-baseweb="popover"] li, [data-baseweb="menu"] li,
-        [role="option"], [role="listbox"] li {
-            color: #e2e8f0 !important; background: #152847 !important;
-        }
+        [role="option"], [role="listbox"] li {{
+            color: var(--text-color) !important; background: var(--sidebar-bg-solid) !important;
+        }}
         [data-baseweb="popover"] li:hover, [data-baseweb="menu"] li:hover,
-        [role="option"]:hover { background: rgba(58,181,74,0.15) !important; }
+        [role="option"]:hover {{ background: var(--accent-hover) !important; }}
 
         /* Text input & textarea */
-        .stTextInput > div > div > input, .stTextArea textarea, .stNumberInput input {
-            background: rgba(21,40,71,0.9) !important; border-color: #1e3a5f !important;
-            color: #e2e8f0 !important; border-radius: 8px !important;
-        }
+        .stTextInput > div > div > input, .stTextArea textarea, .stNumberInput input {{
+            background: var(--widget-bg) !important; border-color: var(--input-border) !important;
+            color: var(--text-color) !important; border-radius: 8px !important;
+        }}
         .stTextInput > div > div > input::placeholder,
         .stTextArea textarea::placeholder,
-        .stNumberInput input::placeholder { color: #475569 !important; }
+        .stNumberInput input::placeholder {{ color: var(--text-muted) !important; }}
 
         /* Slider */
-        .stSlider > div > div > div > div { background: #3ab54a !important; }
+        .stSlider > div > div > div > div {{ background: var(--accent-color) !important; }}
         .stSlider [data-testid="stTickBarMin"],
-        .stSlider [data-testid="stTickBarMax"] { color: #94a3b8 !important; }
+        .stSlider [data-testid="stTickBarMax"] {{ color: var(--text-muted) !important; }}
 
         /* Sidebar */
-        [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #0d1b2e 0%, #152847 60%, #0d1b2e 100%);
-            border-right: 1px solid #1e3a5f;
-        }
-        [data-testid="stSidebar"] * { color: #e2e8f0 !important; }
-        [data-testid="stSidebar"] .stButton > button {
+        [data-testid="stSidebar"] {{
+            background: var(--sidebar-bg);
+            border-right: 1px solid var(--border-color);
+        }}
+        [data-testid="stSidebar"] * {{ color: var(--text-color) !important; }}
+        [data-testid="stSidebar"] .stButton > button {{
             min-height: 36px;
             padding: 7px 10px !important;
             font-size: 13px !important;
             font-weight: 600 !important;
             line-height: 1.25 !important;
-        }
-        [data-testid="stSidebar"] [data-testid="column"] .stButton > button {
+        }}
+        [data-testid="stSidebar"] [data-testid="column"] .stButton > button {{
             min-height: 34px;
             padding: 6px 4px !important;
             font-size: 12px !important;
             line-height: 1.15 !important;
             white-space: nowrap;
-        }
-        [data-testid="stSidebar"] [data-testid="stExpander"] summary {
+        }}
+        [data-testid="stSidebar"] [data-testid="stExpander"] summary {{
             min-height: 34px;
             padding: 7px 8px !important;
-        }
-        [data-testid="stSidebar"] [data-testid="stExpander"] summary p {
+        }}
+        [data-testid="stSidebar"] [data-testid="stExpander"] summary p {{
             font-size: 13px !important;
             font-weight: 600 !important;
             line-height: 1.25 !important;
-        }
-        [data-testid="stSidebar"] .stRadio label {
+        }}
+        [data-testid="stSidebar"] .stRadio label {{
             padding: 5px 7px;
             border-radius: 6px;
             transition: background 0.2s;
             min-height: 30px;
-        }
+        }}
         [data-testid="stSidebar"] .stRadio label p,
-        [data-testid="stSidebar"] .stRadio label span {
+        [data-testid="stSidebar"] .stRadio label span {{
             font-size: 12.5px !important;
             font-weight: 500 !important;
             line-height: 1.25 !important;
-        }
-        [data-testid="stSidebar"] .stRadio label:hover { background: rgba(58,181,74,0.12) !important; }
-        [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p { color: #94a3b8 !important; }
-        [data-testid="stSidebar"] [data-testid="stExpander"] {
+        }}
+        [data-testid="stSidebar"] .stRadio label:hover {{ background: var(--accent-hover) !important; }}
+        [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {{ color: var(--text-muted) !important; }}
+        [data-testid="stSidebar"] [data-testid="stExpander"] {{
             background: rgba(13,27,46,0.24);
-            border: 1px solid rgba(30,58,95,0.72);
+            border: 1px solid var(--border-color);
             border-radius: 10px;
             margin-bottom: 8px;
             overflow: hidden;
-        }
-        [data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
-            background: rgba(26,58,143,0.18) !important;
-        }
+        }}
+        [data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {{
+            background: var(--accent-hover) !important;
+        }}
 
         /* Main content */
-        .stMainBlockContainer { background: #0d1b2e !important; padding-top: 0.75rem; }
+        .stMainBlockContainer {{ background: var(--bg-color) !important; padding-top: 0.75rem; }}
 
         /* Headings */
-        h1, h2, h3 { font-family: 'Courier Prime', monospace !important; color: #3ab54a !important; }
-        h4, h5, h6 { color: #93c5fd !important; }
+        h1, h2, h3 {{ font-family: 'Courier Prime', monospace !important; color: var(--accent-color) !important; }}
+        h4, h5, h6 {{ color: var(--text-muted) !important; }}
 
         /* Metrics */
-        [data-testid="metric-container"] {
-            background: linear-gradient(135deg, #152847 0%, #0d1b2e 100%);
-            border: 1px solid #1e3a5f; border-radius: 10px; padding: 16px 20px;
+        [data-testid="metric-container"] {{
+            background: var(--card-bg);
+            border: 1px solid var(--border-color); border-radius: 10px; padding: 16px 20px;
             transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        [data-testid="metric-container"]:hover { border-color: #3ab54a; box-shadow: 0 0 16px rgba(58,181,74,0.12); }
-        [data-testid="metric-container"] [data-testid="stMetricLabel"] p {
-            color: #94a3b8 !important; font-size: 12px !important; text-transform: uppercase; letter-spacing: 1px;
-        }
-        [data-testid="metric-container"] [data-testid="stMetricValue"] { color: #e2e8f0 !important; font-size: 24px !important; font-weight: 700; }
-        [data-testid="metric-container"] [data-testid="stMetricDelta"] { font-size: 13px !important; }
+        }}
+        [data-testid="metric-container"]:hover {{ border-color: var(--accent-color); box-shadow: 0 0 16px var(--accent-hover); }}
+        [data-testid="metric-container"] [data-testid="stMetricLabel"] p {{
+            color: var(--text-muted) !important; font-size: 12px !important; text-transform: uppercase; letter-spacing: 1px;
+        }}
+        [data-testid="metric-container"] [data-testid="stMetricValue"] {{ color: var(--text-color) !important; font-size: 24px !important; font-weight: 700; }}
+        [data-testid="metric-container"] [data-testid="stMetricDelta"] {{ font-size: 13px !important; }}
 
         /* Buttons */
-        .stButton > button[kind="primary"] {
-            background: linear-gradient(135deg, #1a3a8f 0%, #3ab54a 100%);
+        .stButton > button[kind="primary"] {{
+            background: linear-gradient(135deg, var(--sidebar-bg-solid) 0%, var(--accent-color) 100%);
             color: #ffffff !important; font-weight: 600; border: none;
             border-radius: 8px; padding: 10px 20px; transition: all 0.25s ease;
-            box-shadow: 0 2px 8px rgba(58,181,74,0.2);
-        }
-        .stButton > button[kind="primary"]:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(58,181,74,0.35); }
-        .stButton > button[kind="secondary"] {
-            background: rgba(26,58,143,0.25); color: #93c5fd !important;
-            border: 1px solid #1e3a5f; border-radius: 8px; transition: all 0.2s;
-        }
-        .stButton > button[kind="secondary"]:hover { background: rgba(26,58,143,0.45); border-color: #3ab54a; }
+            box-shadow: 0 2px 8px var(--accent-hover);
+        }}
+        .stButton > button[kind="primary"]:hover {{ transform: translateY(-1px); box-shadow: 0 4px 20px var(--accent-hover); }}
+        .stButton > button[kind="secondary"] {{
+            background: rgba(26,58,143,0.25); color: var(--text-color) !important;
+            border: 1px solid var(--border-color); border-radius: 8px; transition: all 0.2s;
+        }}
+        .stButton > button[kind="secondary"]:hover {{ background: var(--accent-hover); border-color: var(--accent-color); }}
 
         /* Tabs */
-        .stTabs [data-baseweb="tab-list"] {
-            background: rgba(21,40,71,0.6); border-radius: 10px; padding: 4px; gap: 4px;
-        }
-        .stTabs [data-baseweb="tab"] {
-            border-radius: 8px !important; color: #94a3b8 !important;
+        .stTabs [data-baseweb="tab-list"] {{
+            background: var(--tab-bg); border-radius: 10px; padding: 4px; gap: 4px;
+        }}
+        .stTabs [data-baseweb="tab"] {{
+            border-radius: 8px !important; color: var(--text-muted) !important;
             padding: 8px 20px !important; font-weight: 500; transition: all 0.2s;
-        }
-        .stTabs [data-baseweb="tab"] p { color: #94a3b8 !important; }
-        .stTabs [data-baseweb="tab"][aria-selected="true"] {
-            background: rgba(58,181,74,0.15) !important; color: #3ab54a !important; border-bottom: 2px solid #3ab54a !important;
-        }
-        .stTabs [data-baseweb="tab"][aria-selected="true"] p { color: #3ab54a !important; }
+        }}
+        .stTabs [data-baseweb="tab"] p {{ color: var(--text-muted) !important; }}
+        .stTabs [data-baseweb="tab"][aria-selected="true"] {{
+            background: var(--accent-hover) !important; color: var(--accent-color) !important; border-bottom: 2px solid var(--accent-color) !important;
+        }}
+        .stTabs [data-baseweb="tab"][aria-selected="true"] p {{ color: var(--accent-color) !important; }}
 
         /* Dataframe */
-        [data-testid="stDataFrameContainer"] {
-            background: #0b1628 !important;
-            border: 1px solid #1e3a5f;
+        [data-testid="stDataFrameContainer"] {{
+            background: var(--table-bg) !important;
+            border: 1px solid var(--border-color);
             border-radius: 10px;
             overflow: hidden;
-        }
+        }}
         [data-testid="stDataFrameContainer"] *,
         [data-testid="stDataFrame"] *,
         .stDataFrame *,
-        .stTable * {
-            color: #e2e8f0 !important;
-        }
+        .stTable * {{
+            color: var(--text-color) !important;
+        }}
         [data-testid="stDataFrameContainer"] > div,
         [data-testid="stDataFrameContainer"] section,
         [data-testid="stDataFrame"] > div,
-        .stDataFrame > div {
-            background-color: #0b1628 !important;
-        }
-        [data-testid="stDataFrameContainer"] canvas {
+        .stDataFrame > div {{
+            background-color: var(--table-bg) !important;
+        }}
+        [data-testid="stDataFrameContainer"] canvas {{
             background-color: transparent !important;
-        }
+        }}
         [data-testid="stDataFrameContainer"] th,
         [data-testid="stDataFrameContainer"] thead tr,
         [data-testid="stDataFrame"] th,
         .stDataFrame th,
-        .stTable th {
-            background: #152847 !important;
-            color: #94a3b8 !important;
-        }
+        .stTable th {{
+            background: var(--sidebar-bg-solid) !important;
+            color: var(--text-muted) !important;
+        }}
         [data-testid="stDataFrameContainer"] td,
         [data-testid="stDataFrame"] td,
         .stDataFrame td,
-        .stTable td {
-            background: #0b1628 !important;
-            color: #e2e8f0 !important;
-            border-color: #1e3a5f !important;
-        }
+        .stTable td {{
+            background: var(--table-bg) !important;
+            color: var(--text-color) !important;
+            border-color: var(--border-color) !important;
+        }}
         [data-testid="stDataFrameContainer"] tbody tr:nth-child(even) td,
         [data-testid="stDataFrame"] tbody tr:nth-child(even) td,
         .stDataFrame tbody tr:nth-child(even) td,
-        .stTable tbody tr:nth-child(even) td {
-            background: #0d1b2e !important;
-        }
+        .stTable tbody tr:nth-child(even) td {{
+            background: var(--table-even-bg) !important;
+        }}
 
         /* Pandas Styler / markdown tables */
-        table {
-            background: #0b1628 !important;
-            color: #e2e8f0 !important;
-            border-color: #1e3a5f !important;
-        }
-        table th {
-            background: #152847 !important;
-            color: #94a3b8 !important;
-            border-color: #1e3a5f !important;
-        }
-        table td {
-            background: #0b1628 !important;
-            color: #e2e8f0 !important;
-            border-color: #1e3a5f !important;
-        }
+        table {{
+            background: var(--table-bg) !important;
+            color: var(--text-color) !important;
+            border-color: var(--border-color) !important;
+        }}
+        table th {{
+            background: var(--sidebar-bg-solid) !important;
+            color: var(--text-muted) !important;
+            border-color: var(--border-color) !important;
+        }}
+        table td {{
+            background: var(--table-bg) !important;
+            color: var(--text-color) !important;
+            border-color: var(--border-color) !important;
+        }}
 
         /* Misc */
-        .stMarkdown em, .stCaption { color: #94a3b8 !important; }
-        hr { border-color: #1e3a5f !important; }
-        .stAlert { border-radius: 10px !important; }
-        .stAlert p, .stAlert span { color: #e2e8f0 !important; }
-        [data-testid="stExpander"] summary p { color: #93c5fd !important; }
-        .stSpinner p { color: #94a3b8 !important; }
+        .stMarkdown em, .stCaption {{ color: var(--text-muted) !important; }}
+        hr {{ border-color: var(--border-color) !important; }}
+        .stAlert {{ border-radius: 10px !important; }}
+        .stAlert p, .stAlert span {{ color: var(--text-color) !important; }}
+        [data-testid="stExpander"] summary p {{ color: var(--accent-color) !important; }}
+        .stSpinner p {{ color: var(--text-muted) !important; }}
 
         /* Scrollbar */
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: #0d1b2e; }
-        ::-webkit-scrollbar-thumb { background: #1e3a5f; border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: #3ab54a; }
+        ::-webkit-scrollbar {{ width: 6px; }}
+        ::-webkit-scrollbar-track {{ background: var(--bg-color); }}
+        ::-webkit-scrollbar-thumb {{ background: var(--border-color); border-radius: 3px; }}
+        ::-webkit-scrollbar-thumb:hover {{ background: var(--accent-color); }}
 
         /*  Sidebar multiselect & selectbox  remove white box  */
         [data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"] > div,
         [data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"],
-        [data-testid="stSidebar"] [data-baseweb="select"] > div:first-child {
+        [data-testid="stSidebar"] [data-baseweb="select"] > div:first-child {{
             background-color: rgba(13, 27, 46, 0.0) !important;
-            border-color: #1e3a5f !important;
-        }
+            border-color: var(--border-color) !important;
+        }}
         [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div,
-        [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] {
-            background-color: #152847 !important;
-            border-color: #1e3a5f !important;
-        }
+        [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] {{
+            background-color: var(--sidebar-bg-solid) !important;
+            border-color: var(--border-color) !important;
+        }}
 
         /*  All multiselect containers  transparent bg in sidebar  */
-        [data-testid="stSidebar"] div[data-baseweb="select"] {
+        [data-testid="stSidebar"] div[data-baseweb="select"] {{
             background: transparent !important;
-        }
-        [data-testid="stSidebar"] div[data-baseweb="select"] > div {
-            background: rgba(21, 40, 71, 0.6) !important;
-            border: 1px solid #1e3a5f !important;
+        }}
+        [data-testid="stSidebar"] div[data-baseweb="select"] > div {{
+            background: var(--tab-bg) !important;
+            border: 1px solid var(--border-color) !important;
             border-radius: 8px !important;
-        }
+        }}
 
         /*  Selectbox dropdown in sidebar  */
-        [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
-            background: #152847 !important;
-            border: 1px solid #1e3a5f !important;
+        [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {{
+            background: var(--sidebar-bg-solid) !important;
+            border: 1px solid var(--border-color) !important;
             border-radius: 8px !important;
-            color: #e2e8f0 !important;
-        }
+            color: var(--text-color) !important;
+        }}
 
     </style>
     """,
@@ -548,6 +774,28 @@ with st.sidebar:
     with top_nav_col3:
         if st.button("Refresh", use_container_width=True, key="refresh_data_nav"):
             refresh_live_data()
+
+    # Theme Selector Widget
+    st.markdown(
+        """
+        <div style="color:#94a3b8;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;margin:12px 0 6px 0;">
+            Theme / Display
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    theme_names = list(THEMES.keys())
+    selected_theme = st.selectbox(
+        "Theme",
+        options=theme_names,
+        index=theme_names.index(st.session_state.get("app_theme_selection", "Classic Navy (Default)")),
+        key="app_theme_selection_widget",
+        label_visibility="collapsed"
+    )
+    if selected_theme != st.session_state.get("app_theme_selection"):
+        st.session_state["app_theme_selection"] = selected_theme
+        st.session_state["theme_colors"] = THEMES[selected_theme]
+        st.rerun()
 
     role_color = "#3ab54a" if user["role"] == "admin" else "#93c5fd"
     st.markdown(
