@@ -43,7 +43,8 @@ THEMES = {
         "table_bg": "#0b1628",
         "table_even_bg": "#0d1b2e",
         "input_border": "#1e3a5f",
-        "plotly_template": "plotly_dark"
+        "plotly_template": "plotly_dark",
+        "color_scheme": "dark"
     },
     "Obsidian / Onyx": {
         "bg_color": "#0f0f11",
@@ -61,7 +62,8 @@ THEMES = {
         "table_bg": "#141416",
         "table_even_bg": "#0f0f11",
         "input_border": "#2d2d34",
-        "plotly_template": "plotly_dark"
+        "plotly_template": "plotly_dark",
+        "color_scheme": "dark"
     },
     "Cyberpunk Gold / Amber": {
         "bg_color": "#120e16",
@@ -79,7 +81,8 @@ THEMES = {
         "table_bg": "#18141d",
         "table_even_bg": "#120e16",
         "input_border": "#3d2d4c",
-        "plotly_template": "plotly_dark"
+        "plotly_template": "plotly_dark",
+        "color_scheme": "dark"
     },
     "Emerald Forest": {
         "bg_color": "#0a1410",
@@ -97,7 +100,8 @@ THEMES = {
         "table_bg": "#0d1f19",
         "table_even_bg": "#0a1410",
         "input_border": "#1b3d32",
-        "plotly_template": "plotly_dark"
+        "plotly_template": "plotly_dark",
+        "color_scheme": "dark"
     },
     "Nordic Frost (Light Mode)": {
         "bg_color": "#f3f7fa",
@@ -115,7 +119,8 @@ THEMES = {
         "table_bg": "#ffffff",
         "table_even_bg": "#f8fafc",
         "input_border": "#cbd5e1",
-        "plotly_template": "plotly_white"
+        "plotly_template": "plotly_white",
+        "color_scheme": "light"
     }
 }
 
@@ -271,6 +276,7 @@ st.markdown(
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
     <style>
         :root {{
+            color-scheme: {theme_colors['color_scheme']} !important;
             --bg-color: {theme_colors['bg_color']};
             --sidebar-bg: {theme_colors['sidebar_bg']};
             --sidebar-bg-solid: {theme_colors['sidebar_bg_solid']};
@@ -286,6 +292,18 @@ st.markdown(
             --table-bg: {theme_colors['table_bg']};
             --table-even-bg: {theme_colors['table_even_bg']};
             --input-border: {theme_colors['input_border']};
+
+            /* Override Streamlit native theme variables on root for canvas dataframes & UI widgets */
+            --primary-color: {theme_colors['accent_color']} !important;
+            --background-color: {theme_colors['bg_color']} !important;
+            --secondary-background-color: {theme_colors['sidebar_bg_solid']} !important;
+            --text-color: {theme_colors['text_color']} !important;
+
+            /* Override Streamlit prefixed native variables */
+            --st-color-background: {theme_colors['bg_color']} !important;
+            --st-color-text: {theme_colors['text_color']} !important;
+            --st-color-primary: {theme_colors['accent_color']} !important;
+            --st-color-secondary-background: {theme_colors['sidebar_bg_solid']} !important;
         }}
 
         /* Base */
