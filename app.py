@@ -305,50 +305,13 @@ st.markdown(
             pointer-events: auto !important;
         }}
 
-        /* Force collapsedControl (maximize arrow) to float and be visible & clickable */
-        [data-testid="collapsedControl"] {{
-            visibility: visible !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            position: fixed !important;
-            left: 12px !important;
-            top: 12px !important;
-            z-index: 999999 !important;
-            background-color: var(--sidebar-bg-solid) !important;
-            border: 1px solid var(--border-color) !important;
-            border-radius: 8px !important;
-            width: 36px !important;
-            height: 36px !important;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
-            transition: all 0.2s ease-in-out !important;
-            cursor: pointer !important;
-        }}
-        [data-testid="collapsedControl"]:hover {{
-            background-color: var(--accent-color) !important;
-            border-color: var(--accent-color) !important;
-        }}
-        [data-testid="collapsedControl"] button {{
-            display: flex !important;
-            visibility: visible !important;
-            background: transparent !important;
-            border: none !important;
-            color: var(--text-color) !important;
-            width: 100% !important;
-            height: 100% !important;
-            align-items: center !important;
-            justify-content: center !important;
-            cursor: pointer !important;
-        }}
-        [data-testid="collapsedControl"] svg {{
-            display: inline-block !important;
-            visibility: visible !important;
-            fill: var(--text-color) !important;
-            color: var(--text-color) !important;
-        }}
-        [data-testid="collapsedControl"]:hover svg {{
-            fill: #ffffff !important;
-            color: #ffffff !important;
+        /* Permanently hide sidebar collapse and expand controls */
+        [data-testid="collapsedControl"],
+        [data-testid="stSidebarCollapseButton"] {{
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+            width: 0 !important;
         }}
 
         /* Hide decorative bar, toolbar, hamburger menu, deploy button, and footer */
