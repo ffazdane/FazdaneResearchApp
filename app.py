@@ -329,17 +329,20 @@ st.markdown(
             border-color: var(--accent-color) !important;
         }}
         [data-testid="collapsedControl"] button {{
+            display: flex !important;
+            visibility: visible !important;
             background: transparent !important;
             border: none !important;
             color: var(--text-color) !important;
             width: 100% !important;
             height: 100% !important;
-            display: flex !important;
             align-items: center !important;
             justify-content: center !important;
             cursor: pointer !important;
         }}
         [data-testid="collapsedControl"] svg {{
+            display: inline-block !important;
+            visibility: visible !important;
             fill: var(--text-color) !important;
             color: var(--text-color) !important;
         }}
@@ -351,8 +354,7 @@ st.markdown(
         /* Hide decorative bar, toolbar, hamburger menu, deploy button, and footer */
         [data-testid="stDecoration"],
         [data-testid="stToolbar"],
-        header[data-testid="stHeader"] [data-testid="stHeaderDeployButton"],
-        header[data-testid="stHeader"] button:not([data-testid="collapsedControl"] button),
+        [data-testid="stHeaderDeployButton"],
         #MainMenu,
         footer {{
             visibility: hidden !important;
