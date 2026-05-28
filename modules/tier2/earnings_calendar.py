@@ -529,6 +529,8 @@ def build_next_week_earnings_html(records: pd.DataFrame, min_price: float) -> st
         .ticker-cell {{
             color: #f87171;
             font-weight: 800;
+            font-size: 9.5px;
+            white-space: nowrap;
         }}
         .price-cell {{
             color: #86efac;
