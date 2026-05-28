@@ -3,6 +3,7 @@ import os
 
 # Add project root to python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+os.environ["CALENDAR_SCORING_DB_PATH"] = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data", "calendar_scoring_test.sqlite"))
 
 import logging
 from modules.calendar_scoring.database import create_tables, get_active_model_weights, save_model_weights
@@ -116,7 +117,7 @@ def run_verification_tests():
         "option_setup": setup
     }
     
-    count = log_daily_run("2026-05-28", [candidate], "MVP v2.04")
+    count = log_daily_run("2026-05-28", [candidate], "MVP v2.05")
     logger.info(f"Decision logger completed. Logged {count} entries.")
     
     # 9. Outcomes

@@ -35,4 +35,5 @@ HARD_FILTERS = {
 }
 
 # Model Metadata
-MODEL_VERSION = "Phase 1 - MVP v2.04"
+MODEL_VERSION = "Phase 1 - MVP v2.05"
+

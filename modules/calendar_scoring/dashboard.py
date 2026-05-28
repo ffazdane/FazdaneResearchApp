@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import logging
 
 from modules.base_module import FazDaneModule
@@ -178,7 +178,10 @@ class CalendarOpportunityScoringModule(FazDaneModule):
     def prepopulate_db_with_mock_run(self) -> bool:
         """Seed the SQLite database with a realistic daily scan run if it is completely empty."""
         try:
-            from modules.calendar_scoring.database import insert_decision_log, insert_option_setup, insert_outcome_log, MODEL_VERSION
+            from modules.calendar_scoring.database import create_tables, insert_decision_log, insert_option_setup, insert_outcome_log, MODEL_VERSION
+            
+            # Ensure tables exist first
+            create_tables()
             
             # Clear old records to prevent duplicate seeding
             conn = get_connection()
@@ -896,7 +899,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         
         # Get active weights from DB
         weights = get_active_model_weights()
-        model_version = weights.get("model_version", "MVP v2.04")
+        model_version = weights.get("model_version", "MVP v2.05")
         
         regime_info = detect_market_regime()
         market_regime = regime_info["regime"]

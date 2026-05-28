@@ -1,2 +1,3 @@
 # Application version definition
-VERSION = "2.04"
+VERSION = "2.05"
+
