@@ -13,7 +13,7 @@ from utils.universe_manager import render_universe_manager, get_tickers
 # Import engine components
 from modules.calendar_scoring.config import STRATEGY_CONFIG, STRATEGY_CONFIG as STR_CONF
 from modules.calendar_scoring.database import get_active_model_weights, save_model_weights, get_connection
-from modules.calendar_scoring.data_loader import fetch_technical_data, fetch_option_chain_data, black_scholes_call
+# data_loader imports are consolidated below with the scoring engine imports
 from modules.calendar_scoring.market_regime import detect_market_regime
 from modules.calendar_scoring.fdts_engine import calculate_fdts_signal
 from modules.calendar_scoring.trade_setup_engine import select_calendar_setup
@@ -21,7 +21,10 @@ from modules.calendar_scoring.scoring_engine import (
     calculate_trend_score, calculate_option_structure_score, calculate_volatility_score,
     calculate_fdts_score, calculate_pca_score, calculate_cluster_score,
     calculate_leading_lagging_score, calculate_liquidity_score, calculate_event_risk_score,
-    apply_hard_filters
+    calculate_institutional_flow_score, apply_hard_filters
+)
+from modules.calendar_scoring.data_loader import (
+    fetch_technical_data, fetch_option_chain_data, black_scholes_call, fetch_benchmark_data
 )
 from modules.calendar_scoring.decision_logger import log_daily_run
 from modules.calendar_scoring.outcome_tracker import update_decision_outcomes
@@ -819,12 +822,13 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         with col2:
             st.write("#### Factor Score Breakdown")
             scores = {
-                "Trend Score (20%)": c.get("trend_score", 0.0),
-                "Option Structure (20%)": c.get("option_structure_score", 0.0),
+                "Trend Score (17.5%)": c.get("trend_score", 0.0),
+                "Option Structure (17.5%)": c.get("option_structure_score", 0.0),
                 "Volatility Score (15%)": c.get("volatility_score", 0.0),
                 "FDTS Score (15%)": c.get("fdts_score", 0.0),
                 "PCA Score (10%)": c.get("pca_score", 0.0),
                 "Cluster Score (10%)": c.get("cluster_score", 0.0),
+                "Institutional Flow (5%)": c.get("institutional_flow_score", 0.0),
                 "Leading/Lagging Score (5%)": c.get("leading_lagging_score", 0.0),
                 "Liquidity Score (3%)": c.get("liquidity_score", 0.0),
                 "Event Risk Score (2%)": c.get("event_risk_score", 0.0)
@@ -1038,12 +1042,13 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             
         with col3:
             lead_w = st.slider("Leading/Lagging Weight", 0.0, 0.30, float(active_weights.get("leading_lagging_weight", 0.05)), 0.01)
-            liq_w = st.slider("Liquidity Weight", 0.0, 0.20, float(active_weights.get("liquidity_weight", 0.03)), 0.01)
-            evt_w = st.slider("Event Risk Weight", 0.0, 0.20, float(active_weights.get("event_risk_weight", 0.02)), 0.01)
-            
-        total_w = trend_w + opt_w + vol_w + fdts_w + pca_w + clus_w + lead_w + liq_w + evt_w
+            liq_w  = st.slider("Liquidity Weight", 0.0, 0.20, float(active_weights.get("liquidity_weight", 0.03)), 0.01)
+            evt_w  = st.slider("Event Risk Weight", 0.0, 0.20, float(active_weights.get("event_risk_weight", 0.02)), 0.01)
+            inst_w = st.slider("Institutional Flow Weight", 0.0, 0.20, float(active_weights.get("institutional_flow_weight", 0.05)), 0.01)
+
+        total_w = trend_w + opt_w + vol_w + fdts_w + pca_w + clus_w + lead_w + liq_w + evt_w + inst_w
         st.write(f"**Total Weight Sum**: {total_w * 100:.1f}%")
-        
+
         if abs(total_w - 1.0) > 0.001:
             st.error("⚠️ Scoring weights must sum to exactly 100% before saving.")
         else:
@@ -1058,7 +1063,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                     "leading_lagging_weight": lead_w,
                     "liquidity_weight": liq_w,
                     "event_risk_weight": evt_w,
-                    "institutional_flow_weight": 0.0
+                    "institutional_flow_weight": inst_w
                 })
                 st.success("New active weights saved successfully.")
                 st.rerun()
@@ -1144,19 +1149,24 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         """Execute calculations and scoring over the complete ticker universe."""
         st.session_state.cal_candidates = []
         progress_bar = st.progress(0)
-        
+
         # Get active weights from DB
         weights = get_active_model_weights()
-        model_version = weights.get("model_version", "MVP v2.05")
-        
+        model_version = weights.get("model_version", "Phase 1 - v3.0")
+
         regime_info = detect_market_regime()
         market_regime = regime_info["regime"]
-        
-        scanned_count = 0
-        total_tickers = len(self.tickers)
-        
+
+        # ── Pre-fetch benchmark data ONCE before the ticker loop ──────────────
+        # Avoids repeated SPY/QQQ API calls inside calculate_pca_score() and
+        # calculate_leading_lagging_score() for every ticker.
         status_text = st.empty()
-        
+        status_text.text("Fetching benchmark data (SPY, QQQ)...")
+        spy_df, benchmark_returns = fetch_benchmark_data()
+
+        scanned_count  = 0
+        total_tickers  = len(self.tickers)
+
         temp_candidates = []
         
         for idx, ticker in enumerate(self.tickers):
@@ -1196,27 +1206,38 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                     earnings_date = (datetime.now() + timedelta(days=45)).strftime("%Y-%m-%d")
                 
                 # 6. Apply individual Scoring Engines
-                trend_score = calculate_trend_score(tech["spot_price"], tech["ema_20"], tech["ema_50"], tech["ema_200"], tech["adx_14"])
+                trend_score      = calculate_trend_score(tech["spot_price"], tech["ema_20"], tech["ema_50"], tech["ema_200"], tech["adx_14"])
                 opt_struct_score = calculate_option_structure_score(setup["front_iv"], setup["back_iv"])
-                vol_score = calculate_volatility_score(iv_rank, iv_pct)
-                fdts_score_val = calculate_fdts_score(fdts["score"])
-                pca_score = calculate_pca_score(ticker, tech["df_history"])
+                vol_score        = calculate_volatility_score(iv_rank, iv_pct)
+                fdts_score_val   = calculate_fdts_score(fdts["score"])
+
+                # PCA: pass pre-fetched benchmark returns to avoid redundant API call
+                pca_score = calculate_pca_score(ticker, tech["df_history"], benchmark_returns)
+
+                # K-Means cluster classification
                 clus_score, clus_lbl = calculate_cluster_score(ticker, tech["df_history"])
-                lead_score, lead_state = calculate_leading_lagging_score(ticker, tech["df_history"])
-                liq_score = calculate_liquidity_score(setup["bid_ask_spread_pct"], setup["avg_option_volume"])
+
+                # Multi-timeframe relative strength vs SPY (pass pre-fetched SPY)
+                lead_score, lead_state = calculate_leading_lagging_score(ticker, tech["df_history"], spy_df)
+
+                liq_score  = calculate_liquidity_score(setup["bid_ask_spread_pct"], setup["avg_option_volume"])
                 evt_score, evt_flag = calculate_event_risk_score(earnings_date, setup["short_dte"])
-                
-                # Compute Final Score
+
+                # Institutional flow (uses live options chain if available)
+                inst_flow_score = calculate_institutional_flow_score(ticker, option_chain)
+
+                # Compute Final Score (10 factors, weights sum to 100%)
                 final_score = (
-                    trend_score * weights.get("trend_weight", 0.20) +
-                    opt_struct_score * weights.get("option_structure_weight", 0.20) +
-                    vol_score * weights.get("volatility_weight", 0.15) +
-                    fdts_score_val * weights.get("fdts_weight", 0.15) +
-                    pca_score * weights.get("pca_weight", 0.10) +
-                    clus_score * weights.get("cluster_weight", 0.10) +
-                    lead_score * weights.get("leading_lagging_weight", 0.05) +
-                    liq_score * weights.get("liquidity_weight", 0.03) +
-                    evt_score * weights.get("event_risk_weight", 0.02)
+                    trend_score      * weights.get("trend_weight", 0.175) +
+                    opt_struct_score * weights.get("option_structure_weight", 0.175) +
+                    vol_score        * weights.get("volatility_weight", 0.15) +
+                    fdts_score_val   * weights.get("fdts_weight", 0.15) +
+                    pca_score        * weights.get("pca_weight", 0.10) +
+                    clus_score       * weights.get("cluster_weight", 0.10) +
+                    lead_score       * weights.get("leading_lagging_weight", 0.05) +
+                    inst_flow_score  * weights.get("institutional_flow_weight", 0.05) +
+                    liq_score        * weights.get("liquidity_weight", 0.03) +
+                    evt_score        * weights.get("event_risk_weight", 0.02)
                 )
                 
                 # recommendation
@@ -1258,6 +1279,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                     "leading_lagging_state": lead_state,
                     "liquidity_score": liq_score,
                     "event_risk_score": evt_score,
+                    "institutional_flow_score": inst_flow_score,
                     "spot_price": tech["spot_price"],
                     "ema_20": tech["ema_20"],
                     "ema_50": tech["ema_50"],

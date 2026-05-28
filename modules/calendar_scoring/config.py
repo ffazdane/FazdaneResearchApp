@@ -2,8 +2,8 @@
 
 # Default Scoring Weights (sum to 100%)
 DEFAULT_WEIGHTS = {
-    "trend_weight": 0.20,
-    "option_structure_weight": 0.20,
+    "trend_weight": 0.175,             # Reduced from 0.20 to fund institutional flow
+    "option_structure_weight": 0.175,   # Reduced from 0.20 to fund institutional flow
     "volatility_weight": 0.15,
     "fdts_weight": 0.15,
     "pca_weight": 0.10,
@@ -11,7 +11,7 @@ DEFAULT_WEIGHTS = {
     "leading_lagging_weight": 0.05,
     "liquidity_weight": 0.03,
     "event_risk_weight": 0.02,
-    "institutional_flow_weight": 0.00,  # Labeled as Phase 2
+    "institutional_flow_weight": 0.05,  # Phase 1 v3.0 — activated
 }
 
 # Core Strategy Assumptions
@@ -35,5 +35,5 @@ HARD_FILTERS = {
 }
 
 # Model Metadata
-MODEL_VERSION = "Phase 1 - MVP v2.05"
+MODEL_VERSION = "Phase 1 - v3.0"
 

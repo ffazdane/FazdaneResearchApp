@@ -282,3 +282,47 @@ def generate_synthetic_chain(ticker_symbol: str, spot_price: float) -> dict:
         "long_calls": pd.DataFrame(long_rows),
         "is_synthetic": True
     }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# BENCHMARK DATA LOADER (pre-fetch once per scan run)
+# ══════════════════════════════════════════════════════════════════════
+
+def fetch_benchmark_data() -> tuple:
+    """
+    Fetch SPY and QQQ market data for PCA and relative-strength calculations.
+
+    Should be called ONCE before the ticker loop in execute_engine_scan() and
+    the results passed down to calculate_pca_score() and
+    calculate_leading_lagging_score() to avoid redundant API calls per ticker.
+
+    Returns:
+        tuple: (spy_df, benchmark_returns_df)
+            - spy_df: Raw SPY history DataFrame (columns: Open, High, Low, Close, Volume, …)
+            - benchmark_returns_df: DataFrame with columns ['SPY', 'QQQ'] of daily pct returns.
+              Empty DataFrame on failure.
+    """
+    spy_df = pd.DataFrame()
+    benchmark_returns = pd.DataFrame()
+
+    try:
+        spy_raw = yf.Ticker("SPY").history(period="1y")
+        qqq_raw = yf.Ticker("QQQ").history(period="1y")
+
+        if not spy_raw.empty:
+            spy_df = spy_raw
+
+        if not spy_raw.empty and not qqq_raw.empty:
+            benchmark_returns = pd.concat(
+                [
+                    spy_raw['Close'].pct_change().rename("SPY"),
+                    qqq_raw['Close'].pct_change().rename("QQQ"),
+                ],
+                axis=1,
+            ).dropna()
+
+        logger.info("Benchmark data (SPY, QQQ) fetched successfully.")
+    except Exception as e:
+        logger.warning(f"Could not fetch benchmark data: {e}. PCA and leading/lagging will use fallback.")
+
+    return spy_df, benchmark_returns
