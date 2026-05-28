@@ -28,6 +28,7 @@ Cluster: {cand.get('cluster_label')} (Score: {cand.get('cluster_score', 0.0):.1f
 Leading/Lagging: {cand.get('leading_lagging_state')} (Score: {cand.get('leading_lagging_score', 0.0):.1f})
 Liquidity: {cand.get('liquidity_score', 0.0):.1f}
 Event Risk: {cand.get('event_risk_score', 0.0):.1f}
+Earnings Date: {cand.get('earnings_date', 'N/A')}
 Selected Calendar Setup: {setup_str}
 Market Regime: {cand.get('market_regime')}
 
