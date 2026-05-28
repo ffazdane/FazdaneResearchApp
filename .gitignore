@@ -57,4 +57,6 @@ data/backups/
 # Local database files
 data/option_search.db
 data/option_search.db-*
+data/calendar_scoring.sqlite
+data/calendar_scoring.sqlite-*
 

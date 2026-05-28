@@ -37,6 +37,10 @@ DATABASES = {
         "env_var": "OPTION_SEARCH_DB_PATH",
         "default_path": REPO_ROOT / "data" / "option_search.db",
     },
+    "calendar_scoring": {
+        "env_var": "CALENDAR_SCORING_DB_PATH",
+        "default_path": REPO_ROOT / "data" / "calendar_scoring.sqlite",
+    },
 }
 
 BACKUP_DIR = REPO_ROOT / "data" / "backups"

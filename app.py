@@ -885,6 +885,7 @@ with st.sidebar:
             "Equity / Index Seasonality",
             "Stock Sentiment Analysis",
             "Social Stock Stories",
+            "Calendar Opportunity Scoring Engine",
         ]
         tier2_sel = st.radio(
             "tier2",
@@ -1130,6 +1131,17 @@ elif active_module == "Universe Intelligence System":
         st.error(f"Failed to load Universe Intelligence System: {e}")
         st.code(traceback.format_exc())
 
+elif active_module == "Calendar Opportunity Scoring Engine":
+    try:
+        from modules.calendar_scoring.dashboard import CalendarOpportunityScoringModule
+        module = CalendarOpportunityScoringModule()
+        module.run()
+        logger.info("Calendar Opportunity Scoring Engine")
+    except Exception as e:
+        import traceback
+        st.error(f"Failed to load Calendar Opportunity Scoring Engine: {e}")
+        st.code(traceback.format_exc())
+
 elif "Bradley Siderograph" in active_module:
     from modules.tier3.bradley_siderograph import BradleySiderographModule
     module = BradleySiderographModule()
@@ -1228,6 +1240,7 @@ else:
                 {"label": "Equity / Index Seasonality", "module": "Equity / Index Seasonality", "tier": 2, "key": "macro_seasonality"},
                 {"label": "Stock Sentiment Analysis", "module": "Stock Sentiment Analysis", "tier": 2, "key": "macro_sentiment"},
                 {"label": "Social Stock Stories", "module": "Social Stock Stories", "tier": 2, "key": "macro_social_stories"},
+                {"label": "Calendar Opportunity Scoring Engine", "module": "Calendar Opportunity Scoring Engine", "tier": 2, "key": "macro_calendar_scoring"},
             ],
         },
         {
