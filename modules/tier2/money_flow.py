@@ -285,7 +285,7 @@ class MoneyFlowModule(FazDaneModule):
         plt.title(title_str, fontsize=18, fontweight='bold', pad=60, color='black')
         
         plt.text(
-            1.0, -0.155, '© FazDane Analytics',
+            1.0, -0.155, '© Research & Trading Intelligence Platform',
             transform=ax.transAxes,
             ha='right', va='top',
             fontsize=14, fontweight='bold',

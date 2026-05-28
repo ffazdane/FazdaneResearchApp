@@ -1,5 +1,5 @@
 """
-FazDane Analytics  Main Application Entry Point
+Research & Trading Intelligence Platform  Main Application Entry Point
 Authentication-gated Streamlit dashboard.
 """
 
@@ -14,12 +14,12 @@ from utils.version import VERSION
 #
 
 st.set_page_config(
-    page_title="FazDane Analytics | Trading Intelligence",
+    page_title="Research & Trading Intelligence Platform",
     page_icon="FD",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
-        "About": f"FazDane Analytics v{VERSION}  Research & Trading Intelligence Platform",
+        "About": f"Research & Trading Intelligence Platform {VERSION}",
     },
 )
 
@@ -268,7 +268,7 @@ def back_to_current_menu() -> None:
     st.rerun()
 
 #
-# GLOBAL CSS  FazDane Analytics Brand
+# GLOBAL CSS  Research & Trading Intelligence Platform Brand
 # Colors: navy #0d1b2e, blue #1a3a8f, green #3ab54a
 #
 
@@ -749,7 +749,7 @@ with st.sidebar:
         st.image("assets/logo.png", use_container_width=True)
     except Exception:
         st.markdown(
-            "<h2 style='color:#3ab54a;text-align:center;'>FazDane Analytics</h2>",
+            "<h2 style='color:#3ab54a;text-align:center;'>Research & Trading Intelligence Platform</h2>",
             unsafe_allow_html=True,
         )
 
@@ -935,7 +935,7 @@ with st.sidebar:
         logout()
 
     st.markdown(
-        f"<div style='text-align:center;color:#475569;font-size:11px;margin-top:12px;'>FazDane Analytics v{VERSION}</div>",
+        f"<div style='text-align:center;color:#475569;font-size:11px;margin-top:12px;'>Research & Trading Intelligence Platform {VERSION}</div>",
         unsafe_allow_html=True
     )
 
@@ -971,7 +971,7 @@ if active_module.startswith("__MENU_TIER_"):
     try:
         st.image("assets/logo.png", width=240)
     except Exception:
-        st.title("FazDane Analytics")
+        st.title("Research & Trading Intelligence Platform")
 
     title, subtitle, options = menu_config.get(menu_tier, ("Module Menu", "Choose a module to open.", []))
     st.markdown(
@@ -1170,7 +1170,7 @@ else:
     try:
         st.image("assets/logo.png", width=280)
     except Exception:
-        st.title("FazDane Analytics")
+        st.title("Research & Trading Intelligence Platform")
 
     st.markdown(
         "<p style='color:#64748b;font-size:16px;margin-top:-8px;'>Research & Trading Intelligence Platform</p>",
@@ -1251,6 +1251,6 @@ else:
 
     st.divider()
     st.markdown(
-        "<p style='text-align:center;color:#334155;font-size:12px;'>FazDane Analytics v1.0   2026 All Rights Reserved  Built on Streamlit</p>",
+        f"<p style='text-align:center;color:#334155;font-size:12px;'>Research & Trading Intelligence Platform {VERSION}   2026 All Rights Reserved  Built on Streamlit</p>",
         unsafe_allow_html=True,
     )

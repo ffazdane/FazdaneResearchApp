@@ -781,7 +781,7 @@ class VolatilityEngineModule(FazDaneModule):
         type_icon   = {"Index": "Index", "ETF": "ETF", "Stock": "Stock"}.get(asset_type, "Asset")
 
         # HEADER
-        st.title("FazDane Analytics: Volatility Engine")
+        st.title("Research & Trading Intelligence Platform: Volatility Engine")
         st.markdown("*Professional options premium selling decision platform*")
         b1, b2 = st.columns([1, 6])
         _ticker_name = TICKER_NAMES.get(display_ticker, "")

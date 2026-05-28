@@ -178,9 +178,9 @@ def test_yfinance_connectivity():
     return True
 
 def main():
-    print(f"\n{BOLD}{GREEN}============================================================{RESET}")
-    print(f"{BOLD}{GREEN}       FAZDANE ANALYTICS PRE-RELEASE CHECK SUITE            {RESET}")
-    print(f"{BOLD}{GREEN}============================================================{RESET}")
+    print(f"\n{BOLD}{GREEN}========================================================================{RESET}")
+    print(f"{BOLD}{GREEN}    RESEARCH & TRADING INTELLIGENCE PLATFORM PRE-RELEASE CHECK SUITE    {RESET}")
+    print(f"{BOLD}{GREEN}========================================================================{RESET}")
     
     imports_ok = test_imports()
     db_ok = test_database_connections()

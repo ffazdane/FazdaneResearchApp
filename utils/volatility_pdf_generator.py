@@ -119,7 +119,7 @@ class PDFReport(FPDF):
         self.set_font("Helvetica", style="B", size=14)
         self.set_text_color(255, 255, 255)
         self.set_xy(10, 1)
-        self.cell(0, 10, "FazDane Analytics  |  Volatility Strategy Report", align="L")
+        self.cell(0, 10, "Research & Trading Intelligence Platform  |  Volatility Strategy Report", align="L")
 
         # Sub-header bar
         self.set_fill_color(20, 25, 35)
@@ -141,7 +141,7 @@ class PDFReport(FPDF):
         self.set_text_color(150, 150, 150)
         self.cell(
             0, 5,
-            "FazDane Analytics - Confidential | For informational purposes only. Not financial advice.",
+            "Research & Trading Intelligence Platform - Confidential | For informational purposes only. Not financial advice.",
             align="C"
         )
 

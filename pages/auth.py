@@ -1,5 +1,5 @@
 """
-FazDane Analytics — Authentication System
+Research & Trading Intelligence Platform — Authentication System
 Secure Login with bcrypt + Session Management
 """
 
@@ -8,6 +8,7 @@ import bcrypt
 import time
 import logging
 from datetime import datetime
+from utils.version import VERSION
 
 logger = logging.getLogger("FazDaneAuth")
 
@@ -96,7 +97,7 @@ class FazDaneAuthenticator:
         self.credentials = CredentialsManager()
 
     def render_login_screen(self):
-        """Full-page branded login with FazDane Analytics logo"""
+        """Full-page branded login with logo"""
 
         # Center column layout
         _, col, _ = st.columns([1, 1.6, 1])
@@ -107,7 +108,7 @@ class FazDaneAuthenticator:
                 st.image("assets/logo.png", use_container_width=True)
             except Exception:
                 st.markdown(
-                    "<h1 style='text-align:center;color:#3ab54a;font-size:42px;'>FazDane Analytics</h1>",
+                    "<h1 style='text-align:center;color:#3ab54a;font-size:42px;'>Research & Trading Intelligence Platform</h1>",
                     unsafe_allow_html=True,
                 )
 
@@ -183,9 +184,9 @@ class FazDaneAuthenticator:
 
             # ── Footer ────────────────────────────────────────────
             st.markdown(
-                """
+                f"""
                 <p style="text-align:center;color:#334155;font-size:11px;margin-top:20px;">
-                    FazDane Analytics v1.0 · © 2026 All Rights Reserved
+                    Research & Trading Intelligence Platform {VERSION} · © 2026 All Rights Reserved
                 </p>
                 """,
                 unsafe_allow_html=True,
