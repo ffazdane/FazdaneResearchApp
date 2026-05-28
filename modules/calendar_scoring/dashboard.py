@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, date, timedelta
 import logging
+from modules.tier4.volatility_engine import get_earnings_date as _get_real_earnings_date
 
 from modules.base_module import FazDaneModule
 from utils.universe_manager import render_universe_manager, get_tickers
@@ -282,6 +283,16 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 }
             ]
             
+            # Try to fetch real earnings dates for mock tickers
+            _mock_earnings_dates = {}
+            for _mt in ["NVDA", "AVGO", "AAPL", "MSFT", "SPY", "QQQ", "TSLA"]:
+                try:
+                    _red = _get_real_earnings_date(_mt)
+                    if _red:
+                        _mock_earnings_dates[_mt] = _red.strftime("%Y-%m-%d") if hasattr(_red, "strftime") else str(_red)[:10]
+                except Exception:
+                    pass
+
             for rank_idx, item in enumerate(mock_data):
                 decision_data = {
                     "decision_datetime": f"{today_str} 09:30:00",
@@ -320,7 +331,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                     "avg_option_volume": 450.0,
                     "avg_open_interest": 2200.0,
                     "bid_ask_spread_pct": 0.015,
-                    "earnings_date": (datetime.now() + timedelta(days=45)).strftime("%Y-%m-%d"),
+                    "earnings_date": _mock_earnings_dates.get(item["ticker"], (datetime.now() + timedelta(days=45)).strftime("%Y-%m-%d")),
                     "event_risk_flag": 0,
                     "reason_summary": "Meets all criteria",
                     "model_version": MODEL_VERSION
@@ -447,39 +458,78 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         self.render_metrics_row(metrics)
         st.write("")
         
-        # Primary Multipage Dashboard Tab Nav
-        tabs = st.tabs([
-            "1. Daily Top Pick Setups",
-            "2. All Ranked Candidates",
-            "3. Ticker Detail View",
-            "4. Option Setup Payoffs",
-            "5. Decision History Log",
-            "6. Outcome Tracking",
-            "7. Backtest Performance",
-            "8. Weights Optimization",
-            "9. Regime HMM Transitions",
-            "10. Paper Trade Tracker"
-        ])
-        
-        with tabs[0]:
+        # ── Tab Navigation (session-state isolated to avoid Streamlit tab index collision)
+        _TAB_LABELS = [
+            "📋 Top Picks",
+            "🗂 All Ranked",
+            "🔍 Ticker Detail",
+            "📈 Payoff Chart",
+            "📂 History Log",
+            "🎯 Outcomes",
+            "📊 Backtest",
+            "⚙️ Weights",
+            "⚡ HMM Regime",
+            "💼 Paper Trades",
+        ]
+        if "cal_scoring_active_tab" not in st.session_state:
+            st.session_state["cal_scoring_active_tab"] = _TAB_LABELS[0]
+
+        st.markdown(
+            """<style>
+            div[data-testid="stHorizontalBlock"] .stRadio > div {
+                flex-direction: row !important;
+                flex-wrap: wrap;
+                gap: 4px;
+            }
+            div[data-testid="stHorizontalBlock"] .stRadio label {
+                padding: 6px 14px !important;
+                border-radius: 8px !important;
+                border: 1px solid var(--border-color, #1e3a5f) !important;
+                cursor: pointer !important;
+                font-size: 13px !important;
+                font-weight: 500 !important;
+                background: rgba(21,40,71,0.5) !important;
+                color: var(--text-muted, #94a3b8) !important;
+                transition: all 0.15s ease !important;
+            }
+            div[data-testid="stHorizontalBlock"] .stRadio label:hover {
+                border-color: var(--accent-color, #3ab54a) !important;
+                color: var(--accent-color, #3ab54a) !important;
+            }
+            </style>""",
+            unsafe_allow_html=True,
+        )
+
+        active_tab = st.radio(
+            "cal_nav",
+            options=_TAB_LABELS,
+            index=_TAB_LABELS.index(st.session_state.get("cal_scoring_active_tab", _TAB_LABELS[0])),
+            horizontal=True,
+            key="cal_scoring_active_tab",
+            label_visibility="collapsed",
+        )
+
+        st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+
+        if active_tab == _TAB_LABELS[0]:
             self.render_tab_top_picks()
-        with tabs[1]:
+        elif active_tab == _TAB_LABELS[1]:
             self.render_tab_all_ranked()
-        with tabs[2]:
+        elif active_tab == _TAB_LABELS[2]:
             self.render_tab_ticker_detail()
-        with tabs[3]:
+        elif active_tab == _TAB_LABELS[3]:
             self.render_tab_option_setup()
-        with tabs[4]:
+        elif active_tab == _TAB_LABELS[4]:
             self.render_tab_decision_history()
-        with tabs[5]:
+        elif active_tab == _TAB_LABELS[5]:
             self.render_tab_outcome_tracking()
-        with tabs[6]:
+        elif active_tab == _TAB_LABELS[6]:
             self.render_tab_backtest_performance()
-        with tabs[7]:
+        elif active_tab == _TAB_LABELS[7]:
             self.render_tab_weights_optimization()
-        with tabs[8]:
+        elif active_tab == _TAB_LABELS[8]:
             self.render_tab_regime_hmm()
-        with tabs[9]:
+        elif active_tab == _TAB_LABELS[9]:
             self.render_tab_paper_tracker()
 
     # ══════════════════════════════════════════════════════════════════════
@@ -543,10 +593,25 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                     return "color: #ffffff;"
             except Exception:
                 return ""
-            
-        styled_df = df.style.map(color_recommendation, subset=["Recommendation"]).map(color_earnings_date, subset=["Earnings Date"])
+
+        def color_cluster_label(val):
+            cluster_map = {
+                "Early Trend":   "background-color: rgba(58,181,74,0.2); color: #3ab54a; font-weight: bold;",
+                "Mid Trend":     "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;",
+                "Overextended":  "background-color: rgba(220,38,38,0.2); color: #ef4444; font-weight: bold;",
+                "Consolidating": "background-color: rgba(2,132,199,0.15); color: #0284c7;",
+                "Late Trend":    "background-color: rgba(249,115,22,0.15); color: #f97316;",
+            }
+            return cluster_map.get(val, "color: #94a3b8;")
+
+        styled_df = (
+            df.style
+            .map(color_recommendation, subset=["Recommendation"])
+            .map(color_earnings_date, subset=["Earnings Date"])
+            .map(color_cluster_label, subset=["Cluster Label"])
+        )
         st.dataframe(styled_df, use_container_width=True)
-        
+
         # Select ticker for Prompt Generator
         st.markdown("#### 💬 AI Analyst ChatGPT Prompt Copyable")
         sel_prompt_ticker = st.selectbox("Select Top Pick for ChatGPT Prompt:", options=[c["ticker"] for c in top_picks])
@@ -1120,8 +1185,15 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 iv_rank = float(np.random.uniform(15, 60))
                 iv_pct = float(np.random.uniform(10, 65))
                 
-                # Add earnings date proxy
-                earnings_date = (datetime.now() + timedelta(days=int(np.random.randint(10, 90)))).strftime("%Y-%m-%d")
+                # Fetch real earnings date from yfinance; fall back to +45-day proxy
+                try:
+                    _real_ed = _get_real_earnings_date(ticker)
+                    if _real_ed:
+                        earnings_date = _real_ed.strftime("%Y-%m-%d") if hasattr(_real_ed, "strftime") else str(_real_ed)[:10]
+                    else:
+                        earnings_date = (datetime.now() + timedelta(days=45)).strftime("%Y-%m-%d")
+                except Exception:
+                    earnings_date = (datetime.now() + timedelta(days=45)).strftime("%Y-%m-%d")
                 
                 # 6. Apply individual Scoring Engines
                 trend_score = calculate_trend_score(tech["spot_price"], tech["ema_20"], tech["ema_50"], tech["ema_200"], tech["adx_14"])
