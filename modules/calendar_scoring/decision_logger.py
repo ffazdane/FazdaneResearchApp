@@ -1,6 +1,6 @@
 from datetime import datetime
 import logging
-from modules.calendar_scoring.database import insert_decision_log, insert_option_setup
+from modules.calendar_scoring.database import insert_decision_log, insert_option_setup, get_connection
 
 logger = logging.getLogger("CalendarDecisionLogger")
 
@@ -8,7 +8,26 @@ def log_daily_run(run_date: str, candidates: list, model_version: str) -> int:
     """Save all candidates (including filtered-out items) into the SQLite database.
     
     This preserves the complete daily state required to run backtests later.
+    Clears any existing runs for the same date to prevent duplicate records.
     """
+    try:
+        # Clear existing logs for this run_date to maintain unique tickers per date
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT decision_id FROM ticker_decision_log WHERE decision_date = ?", (run_date,))
+        decision_ids = [row[0] for row in cursor.fetchall()]
+        
+        if decision_ids:
+            placeholders = ",".join(["?"] * len(decision_ids))
+            cursor.execute(f"DELETE FROM option_trade_setup_log WHERE decision_id IN ({placeholders})", decision_ids)
+            cursor.execute(f"DELETE FROM decision_outcome_log WHERE decision_id IN ({placeholders})", decision_ids)
+            cursor.execute("DELETE FROM ticker_decision_log WHERE decision_date = ?", (run_date,))
+            conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning(f"Failed clearing existing records for date {run_date}: {e}")
+
     logged_count = 0
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
