@@ -551,6 +551,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 "Ticker": c["ticker"],
                 "Score": f"{c['final_score']:.1f}" if c["recommendation"] != "Filtered" else "0.0",
                 "Recommendation": c["recommendation"],
+                "Earnings Date": c.get("earnings_date", "N/A"),
                 "FDTS Signal": c["fdts_signal"],
                 "IV Rank": f"{c.get('iv_rank', 0.0):.1f}%",
                 "Spot Price": f"${c.get('spot_price', 0.0):.2f}",
