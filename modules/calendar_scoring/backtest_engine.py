@@ -105,7 +105,10 @@ def run_backtest_analysis() -> dict:
                 corr = full_df[col].corr(full_df['pnl_pct'])
                 if not np.isnan(corr):
                     predictive_scores.append({"score_type": col.replace('_', ' ').title(), "correlation": corr})
-            predictive_df = pd.DataFrame(predictive_scores).sort_values(by="correlation", ascending=False)
+            if predictive_scores:
+                predictive_df = pd.DataFrame(predictive_scores).sort_values(by="correlation", ascending=False)
+            else:
+                predictive_df = pd.DataFrame(columns=["score_type", "correlation"])
         else:
             predictive_df = pd.DataFrame([
                 {"score_type": "Trend Score", "correlation": 0.42},

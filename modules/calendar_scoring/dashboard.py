@@ -12,7 +12,7 @@ from utils.universe_manager import render_universe_manager, get_tickers
 # Import engine components
 from modules.calendar_scoring.config import STRATEGY_CONFIG, STRATEGY_CONFIG as STR_CONF
 from modules.calendar_scoring.database import get_active_model_weights, save_model_weights, get_connection
-from modules.calendar_scoring.data_loader import fetch_technical_data, fetch_option_chain_data
+from modules.calendar_scoring.data_loader import fetch_technical_data, fetch_option_chain_data, black_scholes_call
 from modules.calendar_scoring.market_regime import detect_market_regime
 from modules.calendar_scoring.fdts_engine import calculate_fdts_signal
 from modules.calendar_scoring.trade_setup_engine import select_calendar_setup
@@ -896,7 +896,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         
         # Get active weights from DB
         weights = get_active_model_weights()
-        model_version = weights.get("model_version", "MVP v2.03")
+        model_version = weights.get("model_version", "MVP v2.04")
         
         regime_info = detect_market_regime()
         market_regime = regime_info["regime"]
