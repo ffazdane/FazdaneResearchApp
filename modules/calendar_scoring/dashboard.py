@@ -531,8 +531,22 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             st.info("💡 Run the Scoring Engine from the sidebar to populate candidates.")
             return
             
+        # Dynamic multi-select filter for recommendations
+        existing_recs = sorted(list(set(c["recommendation"] for c in st.session_state.cal_candidates)))
+        priority = {"Deploy": 0, "Watch": 1, "Monitor": 2, "Avoid": 3, "Filtered": 4}
+        existing_recs = sorted(existing_recs, key=lambda x: priority.get(x, 9))
+        
+        selected_recs = st.multiselect(
+            "Filter by Recommendation:",
+            options=existing_recs,
+            default=existing_recs,
+            key="cal_scoring_rec_filter"
+        )
+        
         rows = []
         for c in st.session_state.cal_candidates:
+            if c["recommendation"] not in selected_recs:
+                continue
             rows.append({
                 "Ticker": c["ticker"],
                 "Score": f"{c['final_score']:.1f}" if c["recommendation"] != "Filtered" else "0.0",
@@ -542,6 +556,10 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 "Spot Price": f"${c.get('spot_price', 0.0):.2f}",
                 "Status": c["reason_summary"]
             })
+            
+        if not rows:
+            st.info("No candidates match the selected recommendation filter.")
+            return
             
         df = pd.DataFrame(rows)
         # Apply color styling
@@ -694,7 +712,25 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             st.info("No historical decisions recorded yet. Run a scoring engine scan to save logs.")
             return
             
-        st.dataframe(df, use_container_width=True)
+        # Multi-select filter for recommendation in history
+        existing_recs = sorted(list(df["recommendation"].unique()))
+        priority = {"Deploy": 0, "Watch": 1, "Monitor": 2, "Avoid": 3, "Filtered": 4}
+        existing_recs = sorted(existing_recs, key=lambda x: priority.get(x, 9))
+        
+        selected_recs = st.multiselect(
+            "Filter by Recommendation (History):",
+            options=existing_recs,
+            default=existing_recs,
+            key="cal_scoring_rec_history_filter"
+        )
+        
+        filtered_df = df[df["recommendation"].isin(selected_recs)]
+        
+        if filtered_df.empty:
+            st.info("No historical decisions match the selected recommendation filter.")
+            return
+            
+        st.dataframe(filtered_df, use_container_width=True)
 
     # ══════════════════════════════════════════════════════════════════════
     # SCREEN 6: OUTCOME TRACKING
