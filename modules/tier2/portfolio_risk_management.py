@@ -26,6 +26,11 @@ from utils.portfolio_performance_store import (
     parse_schwab_positions_csv,
     save_portfolio_snapshot,
     summarize_positions,
+    clean_ticker_for_lookup,
+    parse_uploaded_files,
+    get_broker_dot,
+    format_ticker_for_display,
+    classify_option_strategy,
 )
 
 
@@ -121,7 +126,7 @@ def fetch_regime_snapshot() -> dict[str, float | str]:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_position_correlations(tickers: tuple[str, ...], lookback_days: int) -> pd.DataFrame:
-    clean = tuple(dict.fromkeys([ticker for ticker in tickers if ticker and ticker.isascii()]))[:25]
+    clean = tuple(dict.fromkeys([clean_ticker_for_lookup(ticker) for ticker in tickers if ticker]))[:25]
     if len(clean) < 2:
         return pd.DataFrame()
     try:
@@ -187,7 +192,7 @@ def enrich_positions(
     df["gamma_exposure"] = df["gamma"]
     df["theta_decay_day"] = df["theta"]
     df["vega_exposure"] = df["vega"]
-    df["sector"] = df["ticker"].map(SECTOR_MAP).fillna("Single Name / Other")
+    df["sector"] = df["ticker"].apply(clean_ticker_for_lookup).map(SECTOR_MAP).fillna("Single Name / Other")
     if "entry_value" not in df.columns:
         df["entry_value"] = df["market_value"].where(df["market_value"].abs() > 0, df["pl_open"].abs())
     if "current_value" not in df.columns:
@@ -604,7 +609,12 @@ class PortfolioRiskManagementModule(FazDaneModule):
 
     def render_sidebar(self):
         st.markdown("**Daily Portfolio Load**")
-        self.uploaded_file = st.file_uploader("Broker / Schwab CSV", type=["csv"], key="prm_csv_upload")
+        self.uploaded_files = st.file_uploader(
+            "Upload Broker CSVs (Schwab / Tastytrade)",
+            type=["csv"],
+            accept_multiple_files=True,
+            key="prm_csv_uploads",
+        )
         self.load_latest_saved = st.checkbox("Use latest saved snapshot", value=True, key="prm_use_latest")
         self.auto_save = st.checkbox("Save parsed upload", value=True, key="prm_auto_save")
 
@@ -627,6 +637,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             "Portfolio Performance & Risk Management",
             "Institutional options portfolio command center for Greeks, concentration, decay, exits, and AI commentary.",
         )
+        st.markdown("<div style='font-size:13px;color:#888;margin-bottom:12px;'>Source: 🔴 Tastytrade | 🔵 Schwab</div>", unsafe_allow_html=True)
 
         positions, details, metadata, source_label = self._load_active_snapshot()
         if positions.empty:
@@ -635,7 +646,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             return
 
         saved_info = None
-        if self.uploaded_file is not None and self.auto_save:
+        if self.uploaded_files and self.auto_save:
             saved_info = self._save_uploaded_snapshot_once(positions, details, metadata)
 
         regime = fetch_regime_snapshot() if self.include_live_regime else {
@@ -685,18 +696,35 @@ class PortfolioRiskManagementModule(FazDaneModule):
             self._render_ai_manager(enriched, totals, regime, heat, commentary, metadata)
 
     def _load_active_snapshot(self) -> tuple[pd.DataFrame, pd.DataFrame, dict, str]:
-        if self.uploaded_file is not None:
-            content = self.uploaded_file.getvalue()
-            positions, metadata = parse_schwab_positions_csv(content, self.uploaded_file.name)
-            details, detail_metadata = parse_schwab_position_details_csv(content, self.uploaded_file.name)
-            metadata.update({key: value for key, value in detail_metadata.items() if key.endswith("_count")})
-            return positions, details, metadata, "Uploaded broker CSV"
-        if self.load_latest_saved:
+        positions, details, metadata, label = pd.DataFrame(), pd.DataFrame(), {}, "No snapshot"
+        if self.uploaded_files:
+            file_tuples = [(f.getvalue(), f.name) for f in self.uploaded_files]
+            positions, details, metadata = parse_uploaded_files(file_tuples)
+            label = "Uploaded broker CSV(s)"
+        elif self.load_latest_saved:
             latest_positions, latest_metadata = get_latest_portfolio_positions()
             if latest_metadata:
                 latest_details, _ = get_latest_portfolio_details()
-                return latest_positions, latest_details, latest_metadata, "Latest saved snapshot"
-        return pd.DataFrame(), pd.DataFrame(), {}, "No snapshot"
+                positions, details, metadata = latest_positions, latest_details, latest_metadata
+                label = "Latest saved snapshot"
+
+        if not positions.empty and "ticker" in positions.columns:
+            positions["ticker"] = positions["ticker"].apply(format_ticker_for_display)
+        if not details.empty and "underlying" in details.columns:
+            details["underlying"] = details["underlying"].apply(format_ticker_for_display)
+
+        # On-the-fly strategy classification for loaded Tastytrade database positions
+        if not positions.empty and not details.empty:
+            tasty_mask = positions["ticker"].str.contains("🔴") & positions["account_group"].astype(str).str.contains("5WT|TASTY", case=False)
+            if tasty_mask.any():
+                option_legs = details[details["row_type"] == "option_leg"]
+                if not option_legs.empty:
+                    strategies = {}
+                    for und, group in option_legs.groupby("underlying"):
+                        strategies[und] = classify_option_strategy(group)
+                    positions.loc[tasty_mask, "account_group"] = positions.loc[tasty_mask, "ticker"].map(strategies).fillna("Position Basket")
+
+        return positions, details, metadata, label
 
     def _save_uploaded_snapshot_once(self, positions: pd.DataFrame, details: pd.DataFrame, metadata: dict) -> dict | None:
         file_hash = metadata.get("file_sha256")
@@ -864,11 +892,14 @@ class PortfolioRiskManagementModule(FazDaneModule):
         )
         st.plotly_chart(fig, use_container_width=True, theme=None)
 
+        position_view["Source"] = position_view["ticker"].apply(get_broker_dot)
+        position_view["ticker"] = position_view["ticker"].apply(clean_ticker_for_lookup)
         position_view["weight_pct_label"] = position_view["weight_pct"].map(_fmt_pct)
         position_view["target_weight_pct_label"] = position_view["target_weight_pct"].map(_fmt_pct)
         position_view["investment_pct_label"] = position_view["investment_pct"].map(_fmt_pct)
         position_view["profit_pct_label"] = position_view["profit_pct"].map(lambda value: _fmt_pct(value, signed=True))
         display_cols = [
+            "Source",
             "ticker",
             "strategy",
             "sector",
@@ -922,6 +953,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             hide_index=True,
             height=min(820, max(460, 36 * (len(display) + 1))),
             column_config={
+                "Source": st.column_config.TextColumn("Source", width="small"),
                 "weight_pct_label": st.column_config.TextColumn("Current Wt"),
                 "target_weight_pct_label": st.column_config.TextColumn("Target Wt"),
                 "leg_count": st.column_config.NumberColumn("Legs", format="%.0f"),
@@ -984,10 +1016,13 @@ class PortfolioRiskManagementModule(FazDaneModule):
         st.caption("Target size uses current gross capital, position risk score, recommendation, and concentration penalty.")
         board = df.sort_values("position_gap_value").copy()
         self._render_position_sizing_chart(board)
+        board["Source"] = board["ticker"].apply(get_broker_dot)
+        board["ticker"] = board["ticker"].apply(clean_ticker_for_lookup)
         board["current_weight_label"] = board["weight_pct"].map(_fmt_pct)
         board["target_weight_label"] = board["target_weight_pct"].map(_fmt_pct)
         board["profit_pct_label"] = board["profit_pct"].map(lambda value: _fmt_pct(value, signed=True))
         display_cols = [
+            "Source",
             "ticker",
             "recommendation",
             "exposure_status",
@@ -1006,6 +1041,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             hide_index=True,
             height=min(620, max(360, 36 * (len(board) + 1))),
             column_config={
+                "Source": st.column_config.TextColumn("Source", width="small"),
                 "ticker": st.column_config.TextColumn("Ticker"),
                 "recommendation": st.column_config.TextColumn("Action"),
                 "exposure_status": st.column_config.TextColumn("Exposure"),
@@ -1454,13 +1490,16 @@ class PortfolioRiskManagementModule(FazDaneModule):
     def _render_theta(self, df: pd.DataFrame):
         st.markdown("### Theta Decay Engine")
         self._render_theta_contribution_chart(df, title="Full Portfolio Theta Income vs Theta Burn", show_summary=True)
-        traps = df[(df["theta"] < 0) & (df["dte"] < 15)].sort_values("risk_score")
+        traps = df[(df["theta"] < 0) & (df["dte"] < 15)].sort_values("risk_score").copy()
+        traps["Source"] = traps["ticker"].apply(get_broker_dot)
+        traps["ticker"] = traps["ticker"].apply(clean_ticker_for_lookup)
         st.markdown("### Expiration Danger")
         st.dataframe(
-            traps[["ticker", "dte", "theta", "entry_value", "current_value", "profit_value", "pl_day", "risk_score", "recommendation"]],
+            traps[["Source", "ticker", "dte", "theta", "entry_value", "current_value", "profit_value", "pl_day", "risk_score", "recommendation"]],
             use_container_width=True,
             hide_index=True,
             column_config={
+                "Source": st.column_config.TextColumn("Source", width="small"),
                 "entry_value": st.column_config.NumberColumn("Entry Value", format="$%.2f"),
                 "current_value": st.column_config.NumberColumn("Current Value", format="$%.2f"),
                 "profit_value": st.column_config.NumberColumn("Net Profit", format="$%.2f"),
@@ -1491,11 +1530,14 @@ class PortfolioRiskManagementModule(FazDaneModule):
         )
         style_figure(fig, height=430)
         st.plotly_chart(fig, use_container_width=True, theme=None)
+        winners["Source"] = winners["ticker"].apply(get_broker_dot)
+        winners["ticker"] = winners["ticker"].apply(clean_ticker_for_lookup)
         st.dataframe(
-            winners[["ticker", "entry_value", "current_value", "gross_exposure", "profit_value", "profit_pct_label", "pl_day", "gamma_exposure", "weight_pct_label", "risk_score", "recommendation"]],
+            winners[["Source", "ticker", "entry_value", "current_value", "gross_exposure", "profit_value", "profit_pct_label", "pl_day", "gamma_exposure", "weight_pct_label", "risk_score", "recommendation"]],
             use_container_width=True,
             hide_index=True,
             column_config={
+                "Source": st.column_config.TextColumn("Source", width="small"),
                 "entry_value": st.column_config.NumberColumn("Entry Value", format="$%.2f"),
                 "current_value": st.column_config.NumberColumn("Current Value", format="$%.2f"),
                 "gross_exposure": st.column_config.NumberColumn("Gross Leg Exposure", format="$%.2f"),
@@ -1507,22 +1549,34 @@ class PortfolioRiskManagementModule(FazDaneModule):
 
     def _render_redeployment(self, df: pd.DataFrame):
         st.markdown("### Capital Redeployment Engine")
-        redeploy = df[df["recommendation"].isin(["Redeploy", "Eliminate", "Trim", "Hedge"])].sort_values(["risk_score", "weight_pct"], ascending=[True, False]).head(self.top_n)
-        preserved = df[df["recommendation"].isin(["Hold", "Add"])].sort_values("risk_score", ascending=False).head(self.top_n)
+        redeploy = df[df["recommendation"].isin(["Redeploy", "Eliminate", "Trim", "Hedge"])].sort_values(["risk_score", "weight_pct"], ascending=[True, False]).head(self.top_n).copy()
+        preserved = df[df["recommendation"].isin(["Hold", "Add"])].sort_values("risk_score", ascending=False).head(self.top_n).copy()
+        
+        redeploy["Source"] = redeploy["ticker"].apply(get_broker_dot)
+        preserved["Source"] = preserved["ticker"].apply(get_broker_dot)
+        redeploy["ticker"] = redeploy["ticker"].apply(clean_ticker_for_lookup)
+        preserved["ticker"] = preserved["ticker"].apply(clean_ticker_for_lookup)
+        
         left, right = st.columns(2)
         with left:
             st.markdown("#### Weak Capital Efficiency")
             st.dataframe(
-                redeploy[["ticker", "sector", "gross_contracts", "entry_value", "current_value", "gross_exposure", "profit_value", "theta", "risk_score", "recommendation"]],
+                redeploy[["Source", "ticker", "sector", "gross_contracts", "entry_value", "current_value", "gross_exposure", "profit_value", "theta", "risk_score", "recommendation"]],
                 use_container_width=True,
                 hide_index=True,
+                column_config={
+                    "Source": st.column_config.TextColumn("Source", width="small"),
+                },
             )
         with right:
             st.markdown("#### Better Current Setups")
             st.dataframe(
-                preserved[["ticker", "sector", "gross_contracts", "entry_value", "current_value", "gross_exposure", "profit_value", "theta", "risk_score", "recommendation"]],
+                preserved[["Source", "ticker", "sector", "gross_contracts", "entry_value", "current_value", "gross_exposure", "profit_value", "theta", "risk_score", "recommendation"]],
                 use_container_width=True,
                 hide_index=True,
+                column_config={
+                    "Source": st.column_config.TextColumn("Source", width="small"),
+                },
             )
 
     def _render_ai_manager(self, df: pd.DataFrame, totals: dict[str, float], regime: dict[str, float | str], heat: float, commentary: str, metadata: dict):
@@ -1572,13 +1626,19 @@ class PortfolioRiskManagementModule(FazDaneModule):
         pdf.cell(0, 7, f"Regime: {regime['regime']} | Heat: {heat:.0f}/100", ln=True)
         pdf.cell(0, 7, f"Value: {fmt_money(totals['total_market_value'])} | Day P/L: {fmt_money(totals['total_pl_day'])}", ln=True)
         pdf.ln(4)
-        pdf.multi_cell(0, 6, commentary.encode("latin-1", "replace").decode("latin-1"))
+        
+        # Clean commentary text by replacing emoji bullets with text names for Helvetica compatibility
+        clean_commentary = commentary.replace("🔵", "[Schwab]").replace("🔴", "[Tasty]").replace("⚪", "[Other]")
+        pdf.multi_cell(0, 6, clean_commentary.encode("latin-1", "replace").decode("latin-1"))
         pdf.ln(4)
         pdf.set_font("Helvetica", "B", 11)
         pdf.cell(0, 7, "Top Risk Actions", ln=True)
         pdf.set_font("Helvetica", "", 9)
+        
         for row in df.head(10).itertuples():
-            pdf.cell(0, 6, f"{row.ticker}: {row.recommendation} | Score {row.risk_score:.0f} | {row.risk_band}", ln=True)
+            ticker_pdf = str(row.ticker).replace("🔵", "[Schwab]").replace("🔴", "[Tasty]").replace("⚪", "[Other]")
+            pdf.cell(0, 6, f"{ticker_pdf}: {row.recommendation} | Score {row.risk_score:.0f} | {row.risk_band}", ln=True)
+            
         raw = pdf.output(dest="S")
         if isinstance(raw, str):
             return raw.encode("latin-1")

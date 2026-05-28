@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import hashlib
 import io
 import json
@@ -25,6 +26,8 @@ except ImportError:
 
 import pandas as pd
 from utils.persistence import backup_database
+
+logger = logging.getLogger("PortfolioPerformanceStore")
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -91,6 +94,111 @@ DETAIL_COLUMNS = [
 ]
 
 
+def clean_ticker_for_lookup(ticker: str) -> str:
+    """Extract standard stock/ETF symbol from a potentially account-suffixed ticker."""
+    ticker = str(ticker).strip().upper()
+    ticker = ticker.replace("🔵", "").replace("🔴", "").replace("⚪", "").strip()
+    if "(" in ticker:
+        ticker = ticker.split("(")[0].strip()
+    return ticker
+
+
+def get_broker_dot(ticker_or_group: str) -> str:
+    """Return visual color dot representation for the broker/source."""
+    val = str(ticker_or_group).lower()
+    if "5wt" in val or "tasty" in val or "🔴" in val:
+        return "🔴"
+    if "schwab" in val or "4360" in val or "schw" in val or "🔵" in val:
+        return "🔵"
+    return "⚪"
+
+
+def format_ticker_for_display(ticker: str) -> str:
+    """Convert any ticker format (suffixed or prefixed) to clean emoji bullet prefix format (e.g. 🔵 NVDA)."""
+    raw_ticker = clean_ticker_for_lookup(ticker)
+    dot = get_broker_dot(ticker)
+    return f"{dot} {raw_ticker}"
+
+
+def classify_option_strategy(legs: pd.DataFrame) -> str:
+    """Classify the options strategy from a group of option legs."""
+    if legs.empty:
+        return "Position Basket"
+    
+    # Filter only option legs
+    option_legs = legs[legs["row_type"] == "option_leg"]
+    if option_legs.empty:
+        return "Equity"
+        
+    num_legs = len(option_legs)
+    expirations = option_legs["expiration"].dropna().unique()
+    strikes = option_legs["strike"].dropna().unique()
+    call_puts = option_legs["call_put"].dropna().unique()
+    
+    # If 1 leg
+    if num_legs == 1:
+        cp = call_puts[0] if len(call_puts) > 0 else "Option"
+        side_prefix = "Long" if option_legs.iloc[0]["quantity"] > 0 else "Short"
+        return f"{side_prefix} {cp}"
+        
+    # If 2 legs
+    if num_legs == 2:
+        # Same expiration, different strikes (Vertical)
+        if len(expirations) == 1 and len(strikes) == 2:
+            cp = call_puts[0] if len(call_puts) == 1 else "Vertical"
+            if cp == "CALL":
+                return "Call Vertical"
+            elif cp == "PUT":
+                return "Put Vertical"
+            return "Vertical Spread"
+            
+        # Different expirations
+        if len(expirations) == 2:
+            cp = call_puts[0] if len(call_puts) == 1 else "Calendar"
+            if cp == "CALL":
+                return "Call-Calander"  # Match Schwab spelling "Call-Calander"
+            elif cp == "PUT":
+                return "Put-Calander"
+            return "Calendar Spread"
+            
+    # If 4 legs (Iron Condor)
+    if num_legs == 4:
+        if len(call_puts) == 2 and len(expirations) == 1:
+            return "Iron Condor"
+            
+    # Fallback/General classification
+    if len(expirations) > 1:
+        if len(call_puts) == 1:
+            return "Call-Calander" if call_puts[0] == "CALL" else "Put-Calander"
+        return "Calendar Spread"
+        
+    if len(strikes) > 1:
+        if len(call_puts) == 1:
+            return "Call Vertical" if call_puts[0] == "CALL" else "Put Vertical"
+        return "Vertical Spread"
+        
+    return "Options Combo"
+
+
+def detect_broker_type(text: str) -> str:
+    """Inspect the first few lines of file text to identify Schwab vs Tastytrade."""
+    first_lines = " ".join(text.splitlines()[:5])
+    if "Position Statement for" in first_lines:
+        return "schwab"
+    if "Account,Symbol,Type,Quantity" in first_lines or "Underlying Last Price" in first_lines:
+        return "tastytrade"
+    return "unknown"
+
+
+def extract_schwab_account(text: str) -> str:
+    """Extract Schwab account number from the first line of the position statement."""
+    first_lines = " ".join(text.splitlines()[:8])
+    match = re.search(r"Position\s+Statement\s+for\s+([a-zA-Z0-9]+)", first_lines, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+    return "SCHWAB"
+
+
 def parse_money(value: Any) -> float:
     """Parse Schwab-style money values, including commas and parentheses."""
     if value is None:
@@ -143,7 +251,8 @@ def parse_schwab_positions_csv(
     """Extract ticker-level Schwab position rows and report metadata."""
     text = _decode_content(content)
     snapshot_dt = extract_snapshot_datetime(text)
-    rows = _extract_positions(text)
+    account = extract_schwab_account(text)
+    rows = _extract_positions(text, account)
     if rows.empty:
         raise ValueError("No ticker-level rows found. Check the Schwab Position Statement CSV format.")
 
@@ -178,7 +287,7 @@ def parse_schwab_positions_csv(
         "file_sha256": hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest(),
         "row_count": int(len(positions)),
         "raw_row_count": int(len(rows)),
-        "detail_row_count": int(len(_extract_position_details(text))),
+        "detail_row_count": int(len(_extract_position_details(text, account))),
         "totals": summarize_positions(positions),
     }
     return positions, metadata
@@ -191,7 +300,8 @@ def parse_schwab_position_details_csv(
     """Extract raw Schwab ticker, strategy, equity description, and option-leg rows."""
     text = _decode_content(content)
     snapshot_dt = extract_snapshot_datetime(text)
-    details = _extract_position_details(text)
+    account = extract_schwab_account(text)
+    details = _extract_position_details(text, account)
     if details.empty:
         raise ValueError("No detailed position rows found. Check the Schwab Position Statement CSV format.")
 
@@ -210,6 +320,263 @@ def parse_schwab_position_details_csv(
         "summary_row_count": int((details["row_type"] == "ticker_summary").sum()),
     }
     return details, metadata
+
+
+def format_tasty_exp(exp_str: str) -> str:
+    """Format Tastytrade exp date (e.g. Jun 5, 2026) to Schwab format (e.g. 5 JUN 26)."""
+    try:
+        dt = datetime.strptime(str(exp_str).strip(), "%b %d, %Y")
+        return f"{dt.day} {dt.strftime('%b').upper()} {dt.strftime('%y')}"
+    except Exception:
+        return str(exp_str)
+
+
+def parse_tastytrade_position_details_csv(
+    content: bytes | str,
+    source_file: str = "uploaded_positions.csv",
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Extract raw Tastytrade symbol, type, quantity, and option metrics into detail rows."""
+    text = _decode_content(content)
+    df = pd.read_csv(io.StringIO(text))
+    if df.empty:
+        return pd.DataFrame(), {}
+
+    account = "TASTYTRADE"
+    if "Account" in df.columns and not df["Account"].empty:
+        account = str(df["Account"].iloc[0]).strip().upper()
+
+    rows = []
+    for _, row in df.iterrows():
+        symbol = str(row.get("Symbol", "")).strip().upper()
+        type_str = str(row.get("Type", "")).strip().upper()
+
+        underlying = get_underlying_ticker(symbol)
+        if not underlying or underlying == "CASH":
+            continue
+
+        dot = get_broker_dot(account)
+        underlying_suffixed = f"{dot} {underlying}"
+
+        qty = parse_number(row.get("Quantity"))
+        dte_str = str(row.get("DTE", "")).strip().lower()
+        dte = parse_number(dte_str.replace("d", ""))
+
+        exp_date_str = str(row.get("Exp Date", ""))
+        formatted_exp = format_tasty_exp(exp_date_str)
+        strike = parse_number(row.get("Strike Price"))
+        call_put = str(row.get("Call/Put", "")).upper()
+        side = "SELL" if qty < 0 else "BUY"
+
+        trade_price = parse_number(row.get("Trade Price"))
+        mark_price = abs(parse_number(row.get("Mark")))
+
+        # Build Schwab-style instrument name (e.g., "100 5 JUN 26 240 CALL")
+        instrument = f"100 {formatted_exp} {strike:g} {call_put}" if type_str == "OPTION" else symbol
+
+        pl_open = parse_money(row.get("P/L Open w/ Percent Bar"))
+        pl_day = parse_money(row.get("P/L Day w/ Percent Bar"))
+
+        rows.append({
+            "account_group": account,
+            "underlying": underlying_suffixed,
+            "row_type": "option_leg" if type_str == "OPTION" else "equity_description",
+            "strategy": "NONE",
+            "instrument": instrument,
+            "quantity": qty,
+            "days": dte,
+            "expiration": formatted_exp if type_str == "OPTION" else None,
+            "strike": strike if type_str == "OPTION" else None,
+            "call_put": call_put if type_str == "OPTION" else None,
+            "side": side,
+            "trade_price": trade_price,
+            "mark_price": mark_price,
+            "mark_change": 0.0,
+            "delta": parse_number(row.get("Delta")),
+            "theta": parse_number(row.get("Theta")),
+            "gamma": parse_number(row.get("Gamma")),
+            "vega": parse_number(row.get("Vega")),
+            "pl_open": pl_open,
+            "pl_day": pl_day,
+            "bp_effect": 0.0,
+            "is_weekly": False,
+        })
+
+    details = pd.DataFrame(rows)
+    snapshot_dt = datetime.now(CENTRAL_TZ).replace(microsecond=0) if CENTRAL_TZ else datetime.now().replace(microsecond=0)
+    details["snapshot_ts"] = snapshot_dt.isoformat(sep=" ")
+    details["snapshot_date"] = snapshot_dt.date().isoformat()
+    details["source_file"] = source_file
+
+    metadata = {
+        "source_file": source_file,
+        "snapshot_ts": snapshot_dt.isoformat(sep=" "),
+        "snapshot_date": snapshot_dt.date().isoformat(),
+        "detail_row_count": len(details),
+        "option_leg_count": int((details["row_type"] == "option_leg").sum()),
+        "strategy_row_count": 0,
+        "summary_row_count": 0,
+    }
+    return details, metadata
+
+
+def parse_tastytrade_positions_csv(
+    content: bytes | str,
+    source_file: str = "uploaded_positions.csv",
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Extract aggregated ticker-level position rows for Tastytrade uploads."""
+    text = _decode_content(content)
+    df = pd.read_csv(io.StringIO(text))
+    if df.empty:
+        return pd.DataFrame(), {}
+
+    account = "TASTYTRADE"
+    if "Account" in df.columns and not df["Account"].empty:
+        account = str(df["Account"].iloc[0]).strip().upper()
+
+    details, detail_meta = parse_tastytrade_position_details_csv(content, source_file)
+    if not details.empty:
+        for und_suffixed, group in details[details["row_type"] == "option_leg"].groupby("underlying"):
+            strategy = classify_option_strategy(group)
+            details.loc[details["underlying"] == und_suffixed, "strategy"] = strategy
+
+    legs = details[details["row_type"] == "option_leg"].copy()
+    if legs.empty:
+        return pd.DataFrame(), {}
+
+    raw_underlyings = {}
+    for _, row in df.iterrows():
+        sym = str(row.get("Symbol", "")).strip().upper()
+        und = get_underlying_ticker(sym)
+        last_px = parse_number(row.get("Underlying Last Price"))
+        if und and und != "CASH":
+            raw_underlyings[und] = last_px
+
+    rows = []
+    grouped = legs.groupby("underlying")
+    for und_suffixed, group in grouped:
+        und = clean_ticker_for_lookup(und_suffixed)
+        underlying_px = raw_underlyings.get(und, 0.0)
+        strategy = group["strategy"].iloc[0] if "strategy" in group.columns else "Position Basket"
+
+        rows.append({
+            "account_group": strategy,
+            "ticker": und_suffixed,
+            "quantity": float(group["quantity"].sum()),
+            "mark_price": float(underlying_px),
+            "market_value": float((group["quantity"] * group["mark_price"] * 100).sum()),
+            "theta": float(group["theta"].sum()),
+            "delta": float(group["delta"].sum()),
+            "gamma": float(group["gamma"].sum()),
+            "vega": float(group["vega"].sum()),
+            "pl_open": float(group["pl_open"].sum()),
+            "pl_day": float(group["pl_day"].sum()),
+            "bp_effect": 0.0,
+        })
+
+    positions = pd.DataFrame(rows)
+    snapshot_dt = datetime.now(CENTRAL_TZ).replace(microsecond=0) if CENTRAL_TZ else datetime.now().replace(microsecond=0)
+    positions["snapshot_ts"] = snapshot_dt.isoformat(sep=" ")
+    positions["snapshot_date"] = snapshot_dt.date().isoformat()
+    positions["source_file"] = source_file
+
+    metadata = {
+        "source_file": source_file,
+        "snapshot_ts": snapshot_dt.isoformat(sep=" "),
+        "snapshot_date": snapshot_dt.date().isoformat(),
+        "file_sha256": hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest(),
+        "row_count": len(positions),
+        "raw_row_count": len(df),
+        "detail_row_count": len(details),
+        "totals": summarize_positions(positions),
+    }
+    return positions, metadata
+
+
+def parse_uploaded_files(
+    uploaded_files: list[tuple[bytes | str, str]]
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    """Parse one or more uploaded CSV statements (Schwab and/or Tastytrade) and combine them."""
+    if not uploaded_files:
+        return pd.DataFrame(), pd.DataFrame(), {}
+
+    positions_list = []
+    details_list = []
+
+    source_files = []
+    file_hashes = []
+
+    total_raw_rows = 0
+    total_detail_rows = 0
+    total_option_legs = 0
+    total_strategies = 0
+    total_summaries = 0
+
+    latest_dt = None
+
+    for content, filename in uploaded_files:
+        text = _decode_content(content)
+        broker = detect_broker_type(text)
+
+        if broker == "schwab":
+            pos, pos_meta = parse_schwab_positions_csv(text, filename)
+            det, det_meta = parse_schwab_position_details_csv(text, filename)
+        elif broker == "tastytrade":
+            pos, pos_meta = parse_tastytrade_positions_csv(text, filename)
+            det, det_meta = parse_tastytrade_position_details_csv(text, filename)
+        else:
+            raise ValueError(
+                f"Unknown broker file format for: {filename}. "
+                "Please upload a Schwab Position Statement CSV or Tastytrade positions CSV."
+            )
+
+        positions_list.append(pos)
+        details_list.append(det)
+
+        source_files.append(filename)
+        file_hashes.append(hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest())
+
+        total_raw_rows += pos_meta.get("raw_row_count", 0)
+        total_detail_rows += det_meta.get("detail_row_count", 0)
+        total_option_legs += det_meta.get("option_leg_count", 0)
+        total_strategies += det_meta.get("strategy_row_count", 0)
+        total_summaries += det_meta.get("summary_row_count", 0)
+
+        # Track the most recent snapshot datetime
+        dt_str = pos_meta.get("snapshot_ts")
+        if dt_str:
+            try:
+                dt = datetime.fromisoformat(dt_str)
+                if latest_dt is None or dt > latest_dt:
+                    latest_dt = dt
+            except Exception:
+                pass
+
+    if not positions_list:
+        return pd.DataFrame(), pd.DataFrame(), {}
+
+    combined_positions = pd.concat(positions_list, ignore_index=True)
+    combined_details = pd.concat(details_list, ignore_index=True)
+
+    if latest_dt is None:
+        latest_dt = datetime.now(CENTRAL_TZ).replace(microsecond=0) if CENTRAL_TZ else datetime.now().replace(microsecond=0)
+
+    combined_hash = hashlib.sha256(",".join(file_hashes).encode("utf-8")).hexdigest()
+
+    combined_metadata = {
+        "source_file": ", ".join(source_files),
+        "snapshot_ts": latest_dt.isoformat(sep=" "),
+        "snapshot_date": latest_dt.date().isoformat(),
+        "file_sha256": combined_hash,
+        "row_count": len(combined_positions),
+        "raw_row_count": total_raw_rows,
+        "detail_row_count": total_detail_rows,
+        "option_leg_count": total_option_legs,
+        "strategy_row_count": total_strategies,
+        "summary_row_count": total_summaries,
+        "totals": summarize_positions(combined_positions),
+    }
+
+    return combined_positions, combined_details, combined_metadata
 
 
 def summarize_positions(df: pd.DataFrame) -> dict[str, float]:
@@ -598,7 +965,7 @@ def get_underlying_ticker(ticker: str) -> str:
     return ticker
 
 
-def _extract_positions(text: str) -> pd.DataFrame:
+def _extract_positions(text: str, account: str) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     current_group = "Unknown"
     header: list[str] | None = None
@@ -647,6 +1014,9 @@ def _extract_positions(text: str) -> pd.DataFrame:
         if not is_ticker or is_detail_row:
             continue
 
+        dot = get_broker_dot(account)
+        ticker = f"{dot} {ticker}"
+
         rows.append(
             {
                 "account_group": current_group,
@@ -667,7 +1037,7 @@ def _extract_positions(text: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _extract_position_details(text: str) -> pd.DataFrame:
+def _extract_position_details(text: str, account: str) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     current_group = "Unknown"
     current_underlying: str | None = None
@@ -744,7 +1114,8 @@ def _extract_position_details(text: str) -> pd.DataFrame:
             strategy = current_strategy
         elif is_ticker:
             row_type = "ticker_summary"
-            current_underlying = instrument.upper()
+            dot = get_broker_dot(account)
+            current_underlying = f"{dot} {instrument.upper()}"
             current_strategy = None
             strategy = None
         elif parse_number(_first_available(record, ["Qty", "Quantity"])) == 0:

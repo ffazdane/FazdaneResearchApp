@@ -29,6 +29,11 @@ from utils.portfolio_performance_store import (
     parse_schwab_positions_csv,
     save_portfolio_snapshot,
     summarize_positions,
+    clean_ticker_for_lookup,
+    parse_uploaded_files,
+    get_broker_dot,
+    format_ticker_for_display,
+    classify_option_strategy,
 )
 
 
@@ -92,7 +97,7 @@ def metric_delta(value: float, suffix: str = "") -> str:
 @st.cache_data(ttl=180, show_spinner=False)
 def fetch_daily_net_change(symbols: tuple[str, ...], source_preference: str) -> pd.DataFrame:
     """Fetch current daily price change for portfolio tickers."""
-    clean_symbols = tuple(dict.fromkeys(str(symbol).upper() for symbol in symbols if str(symbol).strip()))
+    clean_symbols = tuple(dict.fromkeys(clean_ticker_for_lookup(symbol) for symbol in symbols if str(symbol).strip()))
     if not clean_symbols:
         return pd.DataFrame()
 
@@ -246,10 +251,11 @@ class PortfolioPerformanceModule(FazDaneModule):
 
     def render_sidebar(self):
         st.markdown("**Snapshot Source**")
-        self.uploaded_file = st.file_uploader(
-            "Schwab Position Statement CSV",
+        self.uploaded_files = st.file_uploader(
+            "Upload Broker CSVs (Schwab / Tastytrade)",
             type=["csv"],
-            key="pp_csv_upload",
+            accept_multiple_files=True,
+            key="pp_csv_uploads",
         )
         self.load_latest_saved = st.checkbox(
             "Use latest saved snapshot when no file is uploaded",
@@ -296,6 +302,7 @@ class PortfolioPerformanceModule(FazDaneModule):
             "Portfolio Performance",
             "Upload Schwab positions, save daily snapshots, and monitor P/L, theta, and delta concentration.",
         )
+        st.markdown("<div style='font-size:13px;color:#888;margin-bottom:12px;'>Source: 🔴 Tastytrade | 🔵 Schwab</div>", unsafe_allow_html=True)
 
         positions, details, metadata, source_label = self._load_active_snapshot()
         if positions.empty:
@@ -304,7 +311,7 @@ class PortfolioPerformanceModule(FazDaneModule):
             return
 
         saved_info = None
-        if self.uploaded_file is not None and self.auto_save:
+        if self.uploaded_files and self.auto_save:
             saved_info = self._save_uploaded_snapshot_once(positions, details, metadata)
 
         totals = summarize_positions(positions)
@@ -326,20 +333,35 @@ class PortfolioPerformanceModule(FazDaneModule):
             self._render_details_tab(details, metadata)
 
     def _load_active_snapshot(self) -> tuple[pd.DataFrame, pd.DataFrame, dict, str]:
-        if self.uploaded_file is not None:
-            content = self.uploaded_file.getvalue()
-            positions, metadata = parse_schwab_positions_csv(content, self.uploaded_file.name)
-            details, detail_metadata = parse_schwab_position_details_csv(content, self.uploaded_file.name)
-            metadata.update({key: value for key, value in detail_metadata.items() if key.endswith("_count")})
-            return positions, details, metadata, "Uploaded Schwab CSV"
-
-        if self.load_latest_saved:
+        positions, details, metadata, label = pd.DataFrame(), pd.DataFrame(), {}, "No snapshot"
+        if self.uploaded_files:
+            file_tuples = [(f.getvalue(), f.name) for f in self.uploaded_files]
+            positions, details, metadata = parse_uploaded_files(file_tuples)
+            label = "Uploaded broker CSV(s)"
+        elif self.load_latest_saved:
             latest_positions, latest_metadata = get_latest_portfolio_positions()
             if latest_metadata:
                 latest_details, _ = get_latest_portfolio_details()
-                return latest_positions, latest_details, latest_metadata, "Latest saved snapshot"
+                positions, details, metadata = latest_positions, latest_details, latest_metadata
+                label = "Latest saved snapshot"
 
-        return pd.DataFrame(), pd.DataFrame(), {}, "No snapshot"
+        if not positions.empty and "ticker" in positions.columns:
+            positions["ticker"] = positions["ticker"].apply(format_ticker_for_display)
+        if not details.empty and "underlying" in details.columns:
+            details["underlying"] = details["underlying"].apply(format_ticker_for_display)
+
+        # On-the-fly strategy classification for loaded Tastytrade database positions
+        if not positions.empty and not details.empty:
+            tasty_mask = positions["ticker"].str.contains("🔴") & positions["account_group"].astype(str).str.contains("5WT|TASTY", case=False)
+            if tasty_mask.any():
+                option_legs = details[details["row_type"] == "option_leg"]
+                if not option_legs.empty:
+                    strategies = {}
+                    for und, group in option_legs.groupby("underlying"):
+                        strategies[und] = classify_option_strategy(group)
+                    positions.loc[tasty_mask, "account_group"] = positions.loc[tasty_mask, "ticker"].map(strategies).fillna("Position Basket")
+
+        return positions, details, metadata, label
 
     def _save_uploaded_snapshot_once(self, positions: pd.DataFrame, details: pd.DataFrame, metadata: dict) -> dict | None:
         file_hash = metadata.get("file_sha256")
@@ -485,7 +507,9 @@ class PortfolioPerformanceModule(FazDaneModule):
 
         quantity = positions[["ticker", "quantity", "market_value"]].copy()
         quantity["ticker"] = quantity["ticker"].astype(str).str.upper()
-        daily = market.merge(quantity, on="ticker", how="left")
+        quantity["base_ticker"] = quantity["ticker"].apply(clean_ticker_for_lookup)
+        daily = market.merge(quantity, left_on="ticker", right_on="base_ticker", how="left", suffixes=("_market", ""))
+        daily["ticker"] = daily["ticker"].fillna(daily["ticker_market"])
         daily["quantity"] = pd.to_numeric(daily["quantity"], errors="coerce").fillna(0)
         daily["market_value"] = pd.to_numeric(daily["market_value"], errors="coerce").fillna(0)
         daily["estimated_dollar_change"] = daily["quantity"] * daily["price_change"]
@@ -775,7 +799,11 @@ class PortfolioPerformanceModule(FazDaneModule):
         if selected_underlying != "All":
             view = view[view["underlying"] == selected_underlying]
 
+        view["Source"] = view["underlying"].apply(get_broker_dot)
+        view["underlying"] = view["underlying"].apply(clean_ticker_for_lookup)
+
         display_cols = [
+            "Source",
             "account_group",
             "underlying",
             "row_type",
@@ -803,6 +831,7 @@ class PortfolioPerformanceModule(FazDaneModule):
             hide_index=True,
             height=min(820, max(460, 34 * (len(view) + 1))),
             column_config={
+                "Source": st.column_config.TextColumn("Source", width="small"),
                 "quantity": st.column_config.NumberColumn("Contracts", format="%.0f"),
                 "trade_price": st.column_config.NumberColumn("Trade Price", format="$%.3f"),
                 "mark_price": st.column_config.NumberColumn("Mark", format="$%.3f"),
@@ -827,7 +856,11 @@ class PortfolioPerformanceModule(FazDaneModule):
         )
 
     def _render_position_table(self, positions: pd.DataFrame):
+        positions = positions.copy()
+        positions["Source"] = positions["ticker"].apply(get_broker_dot)
+        positions["ticker"] = positions["ticker"].apply(clean_ticker_for_lookup)
         display_cols = [
+            "Source",
             "ticker",
             "account_group",
             "quantity",
@@ -846,6 +879,7 @@ class PortfolioPerformanceModule(FazDaneModule):
             hide_index=True,
             height=min(820, max(460, 38 * (len(positions) + 1))),
             column_config={
+                "Source": st.column_config.TextColumn("Source", width="small"),
                 "ticker": st.column_config.TextColumn("Ticker"),
                 "account_group": st.column_config.TextColumn("Group"),
                 "quantity": st.column_config.NumberColumn("Qty", format="%.2f"),
