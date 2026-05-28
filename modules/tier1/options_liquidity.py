@@ -692,7 +692,7 @@ class OptionsLiquidityModule(FazDaneModule):
             show_benchmark=False,
             label="Ticker Universe:",
         )
-        st.caption(f"{len(symbols)} symbols selected from {universe_name}.")
+        st.caption(f"{len(symbols)} symbols selected from {self.universe_name}.")
 
         st.markdown("**Filters**")
         min_volume = st.slider("Min Volume", 0, 5000, 500, 100, key="ol_min_vol")
