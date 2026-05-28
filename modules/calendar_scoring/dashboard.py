@@ -616,6 +616,19 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             )
             
             st.plotly_chart(fig, use_container_width=True)
+            
+            # Export and provide download option
+            try:
+                img_bytes = fig.to_image(format="png", width=1000, height=500)
+                st.download_button(
+                    label="📥 Download Chart Image (PNG)",
+                    data=img_bytes,
+                    file_name=f"{ticker}_fib_chart.png",
+                    mime="image/png",
+                    use_container_width=True
+                )
+            except Exception as ex:
+                logger.warning(f"Could not generate download image bytes: {ex}")
         except Exception as e:
             st.error(f"Error rendering chart: {e}")
 
