@@ -514,7 +514,20 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 "Reason Summary": c["reason_summary"]
             })
             
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        df = pd.DataFrame(rows)
+        # Apply color styling
+        def color_recommendation(val):
+            color_map = {
+                "Deploy": "background-color: rgba(58,181,74,0.2); color: #3ab54a; font-weight: bold;",
+                "Watch": "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;",
+                "Monitor": "background-color: rgba(2,132,199,0.15); color: #0284c7;",
+                "Avoid": "background-color: rgba(220,38,38,0.15); color: #ef4444;",
+                "Filtered": "background-color: rgba(100,116,139,0.15); color: #64748b; text-decoration: line-through;"
+            }
+            return color_map.get(val, "")
+            
+        styled_df = df.style.map(color_recommendation, subset=["Recommendation"])
+        st.dataframe(styled_df, use_container_width=True)
         
         # Select ticker for Prompt Generator
         st.markdown("#### 💬 AI Analyst ChatGPT Prompt Copyable")
