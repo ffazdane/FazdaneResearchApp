@@ -105,12 +105,12 @@ def clean_ticker_for_lookup(ticker: str) -> str:
 
 def get_broker_dot(ticker_or_group: str) -> str:
     """Return visual color dot representation for the broker/source."""
-    val = str(ticker_or_group).lower()
+    val = str(ticker_or_group).lower().strip()
+    if not val or val in {"none", "unknown", "⚪"}:
+        return "⚪"
     if "5wt" in val or "tasty" in val or "🔴" in val:
         return "🔴"
-    if "schwab" in val or "4360" in val or "schw" in val or "🔵" in val:
-        return "🔵"
-    return "⚪"
+    return "🔵"
 
 
 def format_ticker_for_display(ticker: str) -> str:
@@ -195,7 +195,10 @@ def extract_schwab_account(text: str) -> str:
     first_lines = " ".join(text.splitlines()[:8])
     match = re.search(r"Position\s+Statement\s+for\s+([a-zA-Z0-9]+)", first_lines, flags=re.IGNORECASE)
     if match:
-        return match.group(1).upper()
+        acct = match.group(1).upper()
+        if "SCHWAB" in acct:
+            return acct
+        return f"SCHWAB_{acct}"
     return "SCHWAB"
 
 
@@ -343,7 +346,8 @@ def parse_tastytrade_position_details_csv(
 
     account = "TASTYTRADE"
     if "Account" in df.columns and not df["Account"].empty:
-        account = str(df["Account"].iloc[0]).strip().upper()
+        raw_acct = str(df["Account"].iloc[0]).strip().upper()
+        account = raw_acct if "TASTYTRADE" in raw_acct else f"TASTYTRADE_{raw_acct}"
 
     rows = []
     for _, row in df.iterrows():
@@ -431,7 +435,8 @@ def parse_tastytrade_positions_csv(
 
     account = "TASTYTRADE"
     if "Account" in df.columns and not df["Account"].empty:
-        account = str(df["Account"].iloc[0]).strip().upper()
+        raw_acct = str(df["Account"].iloc[0]).strip().upper()
+        account = raw_acct if "TASTYTRADE" in raw_acct else f"TASTYTRADE_{raw_acct}"
 
     details, detail_meta = parse_tastytrade_position_details_csv(content, source_file)
     if not details.empty:
