@@ -504,6 +504,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 "Ticker": c["ticker"],
                 "Score": f"{c['final_score']:.1f}",
                 "Recommendation": c["recommendation"],
+                "Earnings Date": c.get("earnings_date", "N/A"),
                 "FDTS Signal": c["fdts_signal"],
                 "Cluster Label": c["cluster_label"],
                 "Strike": f"${setup.get('selected_strike', 0.0):.2f}",
