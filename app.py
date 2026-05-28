@@ -1251,6 +1251,6 @@ else:
 
     st.divider()
     st.markdown(
-        f"<p style='text-align:center;color:#334155;font-size:12px;'>Research & Trading Intelligence Platform {VERSION}   2026 All Rights Reserved  Built on Streamlit</p>",
+        f"<p style='text-align:center;color:#334155;font-size:12px;'>Copyright (c) FazDane Analytics | Research & Trading Intelligence Platform {VERSION} · 2026 All Rights Reserved  Built on Streamlit</p>",
         unsafe_allow_html=True,
     )

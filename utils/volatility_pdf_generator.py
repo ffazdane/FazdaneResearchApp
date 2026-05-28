@@ -141,7 +141,7 @@ class PDFReport(FPDF):
         self.set_text_color(150, 150, 150)
         self.cell(
             0, 5,
-            "Research & Trading Intelligence Platform - Confidential | For informational purposes only. Not financial advice.",
+            "Copyright (c) FazDane Analytics | Research & Trading Intelligence Platform - Confidential | For informational purposes only. Not financial advice.",
             align="C"
         )
 

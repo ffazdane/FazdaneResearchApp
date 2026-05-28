@@ -186,7 +186,7 @@ class FazDaneAuthenticator:
             st.markdown(
                 f"""
                 <p style="text-align:center;color:#334155;font-size:11px;margin-top:20px;">
-                    Research & Trading Intelligence Platform {VERSION} · © 2026 All Rights Reserved
+                    Copyright (c) FazDane Analytics | Research & Trading Intelligence Platform {VERSION} · © 2026 All Rights Reserved
                 </p>
                 """,
                 unsafe_allow_html=True,

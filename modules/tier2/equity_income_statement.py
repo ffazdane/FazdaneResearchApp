@@ -478,7 +478,7 @@ def render_income_figure(payload: dict):
              fontsize=20, fontweight="bold", color=TITLE_CLR, va="top")
     fig.text(0.02, 0.922, "Revenue sources -> flow -> Gross -> Operating -> Net  |  Key metrics  |  Margin trends  |  YoY comparison",
              fontsize=9.5, color=GRAY, va="top")
-    fig.text(0.98, 0.012, "Research & Trading Intelligence Platform", ha="right", va="bottom", fontsize=10, color=GRAY, alpha=0.85)
+    fig.text(0.98, 0.012, "Copyright (c) FazDane Analytics | Research & Trading Intelligence Platform", ha="right", va="bottom", fontsize=10, color=GRAY, alpha=0.85)
     return fig
 
 
