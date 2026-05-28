@@ -14,7 +14,7 @@ from utils.universe_manager import render_universe_manager, get_tickers
 from modules.calendar_scoring.config import STRATEGY_CONFIG, STRATEGY_CONFIG as STR_CONF
 from modules.calendar_scoring.database import get_active_model_weights, save_model_weights, get_connection
 # data_loader imports are consolidated below with the scoring engine imports
-from modules.calendar_scoring.market_regime import detect_market_regime
+from modules.calendar_scoring.market_regime import detect_market_regime, get_transition_matrices
 from modules.calendar_scoring.fdts_engine import calculate_fdts_signal
 from modules.calendar_scoring.trade_setup_engine import select_calendar_setup
 from modules.calendar_scoring.scoring_engine import (
@@ -31,6 +31,9 @@ from modules.calendar_scoring.outcome_tracker import update_decision_outcomes
 from modules.calendar_scoring.backtest_engine import run_backtest_analysis
 from modules.calendar_scoring.optimization_engine import run_weights_optimization
 from modules.calendar_scoring.explanation_engine import generate_llm_prompt
+from modules.calendar_scoring.meta_ranking import predict_meta_rankings, train_meta_ranking_model
+from modules.calendar_scoring.bayesian_updating import fetch_intraday_data, calculate_bayesian_posterior
+from modules.calendar_scoring.survival_analysis import analyze_trend_survival, analyze_trend_survival_with_df
 
 logger = logging.getLogger("CalendarDashboard")
 
@@ -51,12 +54,80 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         if "cal_last_run" not in st.session_state:
             st.session_state.cal_last_run = None
             
+        if "cal_enable_ml_sort" not in st.session_state:
+            st.session_state.cal_enable_ml_sort = False
+            
         # Auto-load latest results on initialization
         if not st.session_state.cal_candidates:
             loaded = self.load_latest_run_from_db()
             if not loaded:
                 self.prepopulate_db_with_mock_run()
                 self.load_latest_run_from_db()
+                
+    def _adjust_weights_by_hmm(self, weights: dict, hmm_transitions: dict) -> dict:
+        """Dynamically adjust factor weights based on HMM state transition probabilities."""
+        adjusted = weights.copy()
+        risk_off_prob = hmm_transitions.get("Risk-Off", 0.0)
+        bull_prob = hmm_transitions.get("Bull Trend", 0.0)
+        
+        total_keys = [
+            "trend_weight", "option_structure_weight", "volatility_weight", "fdts_weight",
+            "pca_weight", "cluster_weight", "leading_lagging_weight", "liquidity_weight",
+            "event_risk_weight", "institutional_flow_weight"
+        ]
+        
+        # Normalize inputs
+        total_w = sum(adjusted.get(k, 0.0) for k in total_keys)
+        if total_w > 0:
+            for k in total_keys:
+                adjusted[k] = adjusted.get(k, 0.0) / total_w
+                
+        if risk_off_prob > 0.35:
+            # Volatility & Liquidity become more important, Trend/FDTS less important
+            shift = (risk_off_prob - 0.20) * 0.4
+            
+            dec_keys = ["trend_weight", "fdts_weight", "pca_weight"]
+            total_dec = sum(adjusted.get(k, 0.0) for k in dec_keys)
+            
+            actual_dec = min(shift, total_dec * 0.5)
+            if total_dec > 0:
+                for k in dec_keys:
+                    adjusted[k] -= (adjusted[k] / total_dec) * actual_dec
+                    
+            inc_keys = ["volatility_weight", "liquidity_weight", "event_risk_weight"]
+            total_inc = sum(adjusted.get(k, 0.0) for k in inc_keys)
+            if total_inc > 0:
+                for k in inc_keys:
+                    adjusted[k] += (adjusted[k] / total_inc) * actual_dec
+            else:
+                for k in inc_keys:
+                    adjusted[k] += actual_dec / len(inc_keys)
+                    
+        elif bull_prob > 0.70:
+            # Momentum factors become more important
+            shift = (bull_prob - 0.60) * 0.3
+            
+            dec_keys = ["volatility_weight", "liquidity_weight"]
+            total_dec = sum(adjusted.get(k, 0.0) for k in dec_keys)
+            
+            actual_dec = min(shift, total_dec * 0.4)
+            if total_dec > 0:
+                for k in dec_keys:
+                    adjusted[k] -= (adjusted[k] / total_dec) * actual_dec
+                    
+            inc_keys = ["trend_weight", "fdts_weight", "pca_weight"]
+            total_inc = sum(adjusted.get(k, 0.0) for k in inc_keys)
+            if total_inc > 0:
+                for k in inc_keys:
+                    adjusted[k] += (adjusted[k] / total_inc) * actual_dec
+                    
+        # Normalize to ensure exactly 1.0 sum
+        total_w = sum(adjusted.get(k, 0.0) for k in total_keys)
+        if total_w > 0:
+            for k in total_keys:
+                adjusted[k] = round(adjusted[k] / total_w, 4)
+                
+        return adjusted
                 
     def load_latest_run_from_db(self) -> bool:
         """Query the SQLite database to fetch and populate the candidates list from the most recent run date."""
@@ -163,6 +234,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                     "event_risk_flag": int(row_dec.get("event_risk_flag", 0)),
                     "market_regime": row_dec.get("market_regime", "Bull Trend"),
                     "reason_summary": row_dec.get("reason_summary", ""),
+                    "ml_predicted_return": float(row_dec["ml_predicted_return"]) if "ml_predicted_return" in row_dec and not pd.isna(row_dec["ml_predicted_return"]) else None,
                     "option_setup": setup_dict
                 }
                 candidates.append(cand_data)
@@ -549,21 +621,41 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             st.warning("No tickers met the 'Deploy' or 'Watch' recommendation thresholds (Score >= 75) in the last scan.")
             return
             
+        # Fetch Bayesian Intraday updates
+        with st.spinner("Updating live intraday signals..."):
+            for c in top_picks:
+                ticker = c["ticker"]
+                intra = fetch_intraday_data(ticker)
+                if intra["success"]:
+                    post_prob, entry_sig = calculate_bayesian_posterior(
+                        c["final_score"],
+                        intra["above_vwap"],
+                        intra["high_vol"],
+                        intra["iv_spike"]
+                    )
+                else:
+                    post_prob, entry_sig = c["final_score"], "Monitor (Neutral)"
+                c["bayesian_prob"] = post_prob
+                c["bayesian_signal"] = entry_sig
+            
         # Format table
         rows = []
         for c in top_picks:
             setup = c.get("option_setup", {})
+            ml_ret = c.get("ml_predicted_return")
+            ml_ret_str = f"{ml_ret:+.1f}%" if ml_ret is not None else "N/A"
             rows.append({
                 "Ticker": c["ticker"],
                 "Score": f"{c['final_score']:.1f}",
+                "ML Pred PnL": ml_ret_str,
+                "Intraday Prob": f"{c.get('bayesian_prob', c['final_score']):.1f}%",
+                "Intraday Signal": c.get("bayesian_signal", "Monitor"),
                 "Recommendation": c["recommendation"],
                 "Earnings Date": c.get("earnings_date", "N/A"),
                 "FDTS Signal": c["fdts_signal"],
                 "Cluster Label": c["cluster_label"],
                 "Strike": f"${setup.get('selected_strike', 0.0):.2f}",
                 "Net Debit": f"${setup.get('net_debit', 0.0):.2f}",
-                "Comb. Theta": f"+{setup.get('setup_theta', 0.0):.4f}",
-                "Comb. Vega": f"+{setup.get('setup_vega', 0.0):.4f}",
                 "Reason Summary": c["reason_summary"]
             })
             
@@ -607,11 +699,21 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             }
             return cluster_map.get(val, "color: #94a3b8;")
 
+        def color_intraday_signal(val):
+            if "Green Light" in val:
+                return "color: #3ab54a; font-weight: bold;"
+            elif "Hold" in val:
+                return "color: #ffb800; font-weight: bold;"
+            elif "Avoid" in val:
+                return "color: #ef4444; font-weight: bold;"
+            return "color: #94a3b8;"
+
         styled_df = (
             df.style
             .map(color_recommendation, subset=["Recommendation"])
             .map(color_earnings_date, subset=["Earnings Date"])
             .map(color_cluster_label, subset=["Cluster Label"])
+            .map(color_intraday_signal, subset=["Intraday Signal"])
         )
         st.dataframe(styled_df, use_container_width=True)
 
@@ -743,9 +845,12 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         for c in st.session_state.cal_candidates:
             if c["recommendation"] not in selected_recs:
                 continue
+            ml_ret = c.get("ml_predicted_return")
+            ml_ret_str = f"{ml_ret:+.1f}%" if ml_ret is not None else "N/A"
             rows.append({
                 "Ticker": c["ticker"],
                 "Score": f"{c['final_score']:.1f}" if c["recommendation"] != "Filtered" else "0.0",
+                "ML Pred Return": ml_ret_str,
                 "Recommendation": c["recommendation"],
                 "Earnings Date": c.get("earnings_date", "N/A"),
                 "FDTS Signal": c["fdts_signal"],
@@ -842,6 +947,78 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             ))
             fig.update_layout(height=300, margin=dict(l=20, r=20, t=10, b=10))
             st.plotly_chart(fig, use_container_width=True)
+            
+        st.divider()
+        st.markdown("### 🧠 Phase 2 Advanced Intelligence Models")
+        
+        col_intra, col_surv = st.columns(2)
+        
+        with col_intra:
+            st.markdown("#### ⚡ Bayesian Intraday Entry Timing Model")
+            with st.spinner("Fetching live intraday data..."):
+                intra = fetch_intraday_data(sel_ticker)
+                
+            if intra["success"]:
+                post_prob, entry_sig = calculate_bayesian_posterior(
+                    c["final_score"],
+                    intra["above_vwap"],
+                    intra["high_vol"],
+                    intra["iv_spike"]
+                )
+                
+                # Render metrics
+                st.metric("Bayesian Entry Probability", f"{post_prob:.1f}%", f"{post_prob - c['final_score']:+.1f}% vs Daily Score")
+                st.write(f"**Intraday Entry Signal**: `{entry_sig}`")
+                st.write(f"**Price vs Intraday VWAP**: {'Above' if intra['above_vwap'] else 'Below'} VWAP (Price: ${intra['last_price']:.2f} | VWAP: ${intra['vwap']:.2f})")
+                st.write(f"**Volume Velocity**: {'Spike detected' if intra['high_vol'] else 'Normal / Low'} (Last Bar Vol: {intra['last_volume']:.0f} | Avg Vol: {intra['avg_volume']:.0f})")
+                st.write(f"**Volatility Expansion**: {'IV Spike warning' if intra['iv_spike'] else 'Stable volatility'} (Rolling Vol: {intra['latest_vol']:.4f} | Avg Vol: {intra['avg_vol_std']:.4f})")
+            else:
+                st.warning("Could not download intraday price bars for Bayesian updating.")
+                st.write(f"**Default Entry Probability (Prior)**: {c['final_score']:.1f}%")
+                
+        with col_surv:
+            st.markdown("#### ⏳ Kaplan-Meier Trend Survival Analysis")
+            with st.spinner("Calculating trend lifespans..."):
+                surv_info = analyze_trend_survival(sel_ticker)
+                
+            if surv_info["success"]:
+                curr_age = surv_info["current_age"]
+                surv_prob = surv_info["survival_prob_20d"]
+                
+                st.metric("Conditional Trend Survival (20 Days)", f"{surv_prob:.1f}%")
+                st.write(f"**Current Uptrend Age**: `{curr_age} trading days`")
+                if surv_info["warning"]:
+                    st.warning("⚠️ **Warning**: Trend exhaustion probability is high. Trend is statistically unlikely to survive another 20 days.")
+                else:
+                    st.success("✅ **Supportive**: Trend has a high probability of survival through options holding period.")
+                    
+                # Plot Kaplan-Meier curve
+                x_vals = list(surv_info["curve"].keys())
+                y_vals = list(surv_info["curve"].values())
+                fig_surv = go.Figure(data=go.Scatter(
+                    x=x_vals, y=y_vals,
+                    mode='lines',
+                    name='Survival Prob',
+                    line=dict(color='#00ff88', width=2.5)
+                ))
+                fig_surv.add_vline(
+                    x=curr_age,
+                    line_dash="dash",
+                    line_color="#ffb800" if curr_age < 40 else "#ef4444",
+                    annotation_text=f"Current Age ({curr_age}d)",
+                    annotation_position="top right"
+                )
+                fig_surv.update_layout(
+                    title=f"Kaplan-Meier Curve: {sel_ticker} Trend Lifespans",
+                    xaxis_title="Days in Trend",
+                    yaxis_title="Probability",
+                    height=240,
+                    margin=dict(l=20, r=20, t=30, b=10),
+                    template="plotly_dark"
+                )
+                st.plotly_chart(fig_surv, use_container_width=True)
+            else:
+                st.warning("Could not calculate survival curve.")
 
     # ══════════════════════════════════════════════════════════════════════
     # SCREEN 4: OPTION SETUP PAYOFFS
@@ -1086,6 +1263,39 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                     save_model_weights(best)
                     st.success("Applied recommended weights configuration.")
                     st.rerun()
+                    
+        st.divider()
+        st.write("#### 🤖 Machine Learning Meta-Ranking Model")
+        
+        st.session_state.cal_enable_ml_sort = st.toggle(
+            "Enable ML Meta-Ranking Expected Return Sorting", 
+            value=st.session_state.cal_enable_ml_sort,
+            help="Toggle to sort candidate scan lists primarily by predicted ML expected PnL instead of rules-based scores."
+        )
+        
+        if st.button("Train/Retrain Meta-Ranking ML Model", key="btn_train_ml_meta"):
+            with st.spinner("Querying database and training Gradient Boosting regressor..."):
+                res = train_meta_ranking_model()
+                
+            if res["status"] == "success":
+                st.success(f"✅ Model trained successfully! Model Type: `{res['model_type']}` | Sample Count: `{res['sample_count']}`")
+                st.write(f"**R-squared Score**: `{res['r2']:.4f}` | **Root Mean Squared Error**: `{res['rmse']:.2f}%` PnL")
+                
+                st.write("##### Model Feature Importances")
+                importances = res["feature_importances"]
+                top_features = dict(list(importances.items())[:10])
+                fig_imp = go.Figure(go.Bar(
+                    x=list(top_features.values()),
+                    y=list(top_features.keys()),
+                    orientation='h',
+                    marker=dict(color='#00ff88')
+                ))
+                fig_imp.update_layout(height=280, margin=dict(l=20, r=20, t=10, b=10), template="plotly_dark")
+                st.plotly_chart(fig_imp, use_container_width=True)
+            elif res["status"] == "cold_start":
+                st.warning(f"⚠️ **Cold Start Warning**: {res['message']}")
+            else:
+                st.error(f"❌ **Error**: {res['message']}")
 
     # ══════════════════════════════════════════════════════════════════════
     # SCREEN 9: REGIME HMM TRANSITIONS
@@ -1109,8 +1319,29 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         
         # Plotly chart
         fig = go.Figure(data=[go.Pie(labels=list(hmm_trans.keys()), values=list(hmm_trans.values()), hole=.3)])
-        fig.update_layout(height=280, margin=dict(l=20, r=20, t=10, b=10))
+        fig.update_layout(height=280, margin=dict(l=20, r=20, t=10, b=10), template="plotly_dark")
         st.plotly_chart(fig, use_container_width=True)
+        
+        # Daily Transition Matrix Heatmap
+        matrices = get_transition_matrices()
+        if matrices["daily"] is not None:
+            st.write("#### Daily Markov Transition Probability Matrix")
+            st.write("Historical probability of transitioning between regimes from one day to the next:")
+            P_daily, states = matrices["daily"]
+            df_p = pd.DataFrame(P_daily, index=states, columns=states)
+            df_p_pct = df_p.map(lambda x: f"{x * 100.0:.1f}%")
+            st.dataframe(df_p_pct, use_container_width=True)
+            
+            fig_hm = px.imshow(
+                P_daily * 100.0,
+                labels=dict(x="To Regime", y="From Regime", color="Prob %"),
+                x=states,
+                y=states,
+                color_continuous_scale="Viridis",
+                text_auto=".1f"
+            )
+            fig_hm.update_layout(height=260, margin=dict(l=20, r=20, t=10, b=10), template="plotly_dark")
+            st.plotly_chart(fig_hm, use_container_width=True)
 
     # ══════════════════════════════════════════════════════════════════════
     # SCREEN 10: PAPER TRADE TRACKER
@@ -1156,6 +1387,10 @@ class CalendarOpportunityScoringModule(FazDaneModule):
 
         regime_info = detect_market_regime()
         market_regime = regime_info["regime"]
+        hmm_transitions = regime_info.get("hmm_transitions", {})
+        
+        # Dynamically scale option scoring weights based on HMM state transition probabilities
+        active_weights = self._adjust_weights_by_hmm(weights, hmm_transitions)
 
         # ── Pre-fetch benchmark data ONCE before the ticker loop ──────────────
         # Avoids repeated SPY/QQQ API calls inside calculate_pca_score() and
@@ -1214,7 +1449,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 # PCA: pass pre-fetched benchmark returns to avoid redundant API call
                 pca_score = calculate_pca_score(ticker, tech["df_history"], benchmark_returns)
 
-                # K-Means cluster classification
+                # Heuristic cluster classification (K-Means ML clustering is excluded per request)
                 clus_score, clus_lbl = calculate_cluster_score(ticker, tech["df_history"])
 
                 # Multi-timeframe relative strength vs SPY (pass pre-fetched SPY)
@@ -1226,19 +1461,24 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 # Institutional flow (uses live options chain if available)
                 inst_flow_score = calculate_institutional_flow_score(ticker, option_chain)
 
-                # Compute Final Score (10 factors, weights sum to 100%)
+                # Compute Final Score (10 factors, weights sum to 100% using dynamic HMM weights)
                 final_score = (
-                    trend_score      * weights.get("trend_weight", 0.175) +
-                    opt_struct_score * weights.get("option_structure_weight", 0.175) +
-                    vol_score        * weights.get("volatility_weight", 0.15) +
-                    fdts_score_val   * weights.get("fdts_weight", 0.15) +
-                    pca_score        * weights.get("pca_weight", 0.10) +
-                    clus_score       * weights.get("cluster_weight", 0.10) +
-                    lead_score       * weights.get("leading_lagging_weight", 0.05) +
-                    inst_flow_score  * weights.get("institutional_flow_weight", 0.05) +
-                    liq_score        * weights.get("liquidity_weight", 0.03) +
-                    evt_score        * weights.get("event_risk_weight", 0.02)
+                    trend_score      * active_weights.get("trend_weight", 0.175) +
+                    opt_struct_score * active_weights.get("option_structure_weight", 0.175) +
+                    vol_score        * active_weights.get("volatility_weight", 0.15) +
+                    fdts_score_val   * active_weights.get("fdts_weight", 0.15) +
+                    pca_score        * active_weights.get("pca_weight", 0.10) +
+                    clus_score       * active_weights.get("cluster_weight", 0.10) +
+                    lead_score       * active_weights.get("leading_lagging_weight", 0.05) +
+                    inst_flow_score  * active_weights.get("institutional_flow_weight", 0.05) +
+                    liq_score        * active_weights.get("liquidity_weight", 0.03) +
+                    evt_score        * active_weights.get("event_risk_weight", 0.02)
                 )
+                
+                # Component 4: Survival Analysis trend lifespan check
+                surv_analysis = analyze_trend_survival_with_df(ticker, tech["df_history"])
+                survival_prob = surv_analysis.get("survival_prob_20d", 75.0)
+                survival_warning = surv_analysis.get("warning", False)
                 
                 # recommendation
                 if final_score >= 85:
@@ -1250,6 +1490,10 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 else:
                     rec = "Avoid"
                     
+                # Apply Survival Trend Exhaustion downgrade
+                if rec == "Deploy" and survival_prob < 65.0:
+                    rec = "Watch"
+                    
                 # Update tech data parameters
                 tech["iv_rank"] = iv_rank
                 tech["iv_percentile"] = iv_pct
@@ -1259,6 +1503,8 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 # Apply Hard Filters
                 exclusions = apply_hard_filters(ticker, tech, setup, fdts["signal"])
                 reason_summary = "Meets all criteria"
+                if survival_prob < 65.0 and rec != "Filtered":
+                    reason_summary = f"Trend Exhaustion Warning ({survival_prob:.1f}% survival prob)"
                 if exclusions:
                     rec = "Filtered"
                     reason_summary = ", ".join(exclusions)
@@ -1306,10 +1552,14 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             except Exception as e:
                 logger.error(f"Error processing ticker {ticker}: {e}")
                 
-        # Sort candidates (Rank index order: Deploy -> Watch -> Monitor -> Avoid -> Filtered, sorted by score)
+        # Run ML Meta-Ranking predictions on all candidates
+        temp_candidates = predict_meta_rankings(temp_candidates)
+        
+        # Sort candidates (Rank index order: Deploy -> Watch -> Monitor -> Avoid -> Filtered, sorted by score or ML return)
         def sort_key(x):
             rec_order = {"Deploy": 0, "Watch": 1, "Monitor": 2, "Avoid": 3, "Filtered": 4}
-            return (rec_order.get(x["recommendation"], 9), -x["final_score"])
+            val = x.get("ml_predicted_return", 0.0) if st.session_state.cal_enable_ml_sort else x["final_score"]
+            return (rec_order.get(x["recommendation"], 9), -val)
             
         ranked_candidates = sorted(temp_candidates, key=sort_key)
         

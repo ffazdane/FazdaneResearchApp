@@ -84,7 +84,8 @@ def log_daily_run(run_date: str, candidates: list, model_version: str) -> int:
                 "event_risk_flag": int(cand.get("event_risk_flag", 0)),
                 
                 "reason_summary": cand.get("reason_summary", ""),
-                "model_version": model_version
+                "model_version": model_version,
+                "ml_predicted_return": cand.get("ml_predicted_return")
             }
             
             decision_id = insert_decision_log(decision_data)

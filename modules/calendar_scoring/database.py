@@ -69,9 +69,16 @@ def create_tables():
 
         reason_summary TEXT,
         model_version TEXT,
+        ml_predicted_return REAL,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
     """)
+    
+    # Run alter table to handle existing databases safely
+    try:
+        cursor.execute("ALTER TABLE ticker_decision_log ADD COLUMN ml_predicted_return REAL")
+    except sqlite3.OperationalError:
+        pass # Already exists
 
     # Table 2: option_trade_setup_log
     cursor.execute("""
@@ -269,7 +276,7 @@ def insert_decision_log(data: dict) -> int:
         "atr_14", "rsi_14", "adx_14", "ema_20", "ema_50", "ema_200", "iv_rank",
         "iv_percentile", "front_iv", "back_iv", "iv_term_structure", "avg_option_volume",
         "avg_open_interest", "bid_ask_spread_pct", "earnings_date", "event_risk_flag",
-        "reason_summary", "model_version"
+        "reason_summary", "model_version", "ml_predicted_return"
     ]
     
     placeholders = ", ".join(["?"] * len(columns))

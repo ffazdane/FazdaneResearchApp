@@ -75,7 +75,7 @@ pip install streamlit streamlit-authenticator google-auth-oauthlib pandas yfinan
 
 ---
 
-### **TIER 2: ANALYSIS & INTELLIGENCE MODULES** (Weeks 3-4)
+### **TIER 2: ANALYSIS & INTELLIGENCE MODULES** (Weeks 3-4) - 🧠 Calendar Scoring Phase 2 ✅ 100% COMPLETE
 *Decision support, research, pattern identification*
 
 | **Module** | **Source Notebook** | **Priority** | **Data Deps** |
@@ -85,6 +85,7 @@ pip install streamlit streamlit-authenticator google-auth-oauthlib pandas yfinan
 | **8. Index Analysis Dashboard** | `04-Index Analysis.ipynb` | P1 | Real-time quotes |
 | **9. Calendar Heatmaps** | `Average Return-Daily-Calendar View.ipynb` | P1 | Historical returns |
 | **10. Earnings Calendar** | `Earning Calendar.ipynb` | P1 | Earnings API |
+| **11. Calendar Opportunity Scoring Engine** | `Average Return-Daily-Calendar View.ipynb` + Phase 2 Models | P1 | Historical daily indices, options chain, intraday bars (Phase 2 Advanced Intelligence Models live) |
 
 ---
 

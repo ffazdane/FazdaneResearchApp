@@ -115,12 +115,13 @@ Follow "PHASE 1-5" in IMPLEMENTATION_GUIDE.md to convert first Jupyter notebook
 │  │  ├─ ⚙️ ES Futures Backtester                                 │
 │  │  ├─ 🎯 Portfolio Optimizer                                   │
 │  │  └─ 🔄 Sector Rotation Monitor                               │
-│  ├─ TIER 2: Analysis & Intelligence (5 modules)                 │
+│  ├─ TIER 2: Analysis & Intelligence (6 modules)                 │
 │  │  ├─ 🔍 Stock Ticker Screener                                 │
 │  │  ├─ 📊 IV Analysis                                           │
 │  │  ├─ 🏦 Index Analysis Dashboard                              │
 │  │  ├─ 📅 Calendar Heatmaps                                     │
-│  │  └─ 📺 Earnings Calendar                                     │
+│  │  ├─ 📺 Earnings Calendar                                     │
+│  │  └─ 🧠 Calendar Opportunity Scoring Engine                   │
 │  ├─ TIER 3: Forecasting (4 modules)                             │
 │  │  ├─ 🔮 Price Forecasting                                     │
 │  │  ├─ 🌙 Bradley Cycles                                        │
@@ -197,6 +198,7 @@ Follow "PHASE 1-5" in IMPLEMENTATION_GUIDE.md to convert first Jupyter notebook
 🏦 Index Analysis (7 hrs)
 📅 Calendar Heatmaps (5 hrs)
 📺 Earnings Calendar (4 hrs)
+🧠 Calendar Opportunity Scoring Engine - Phase 2 (Advanced Intelligence Models) [✅ 100% COMPLETE]
 ```
 
 ### TIER 3: FORECASTING (Weeks 5-6)
