@@ -19,7 +19,7 @@ from scipy.spatial.distance import pdist
 from scipy.cluster.vq import kmeans, vq
 
 from modules.base_module import FazDaneModule
-from utils.universe_manager import render_universe_manager, get_universe_names
+from utils.universe_manager import render_universe_manager, get_universe_names, get_ticker_names, format_ticker_display
 from utils.portfolio_performance_store import get_latest_portfolio_positions, get_latest_portfolio_details
 
 logger = logging.getLogger("UniverseIntelligence")
@@ -1753,7 +1753,13 @@ class UniverseIntelligenceModule(FazDaneModule):
             
             with drill_tabs[0]:
                 st.markdown("#### Drilldown Level 1 — Ticker Detail Profile")
-                sel_ticker = st.selectbox("Select Ticker for deep-dive analysis:", options=ticker_list, key="drill_ticker")
+                ticker_names = get_ticker_names(getattr(self, "universe_name", "Options Default Watchlist"))
+                sel_ticker = st.selectbox(
+                    "Select Ticker for deep-dive analysis:",
+                    options=ticker_list,
+                    key="drill_ticker",
+                    format_func=lambda ticker: format_ticker_display(ticker, ticker_names)
+                )
                 
                 if sel_ticker:
                     tick_info = fetch_info_details(sel_ticker)
@@ -1839,7 +1845,13 @@ class UniverseIntelligenceModule(FazDaneModule):
                 ic1, ic2 = st.columns([1, 1.2])
                 with ic1:
                     st.markdown("**Simulated Capital Deployment**")
-                    sim_ticker = st.selectbox("Ticker to add/deploy:", options=ticker_list, key="sim_ticker")
+                    ticker_names = get_ticker_names(getattr(self, "universe_name", "Options Default Watchlist"))
+                    sim_ticker = st.selectbox(
+                        "Ticker to add/deploy:",
+                        options=ticker_list,
+                        key="sim_ticker",
+                        format_func=lambda ticker: format_ticker_display(ticker, ticker_names)
+                    )
                     sim_qty = st.number_input("Shares to trade:", min_value=1, value=100, step=10, key="sim_qty")
                     sim_price = close_df[sim_ticker].iloc[-1]
                     sim_cost = sim_qty * sim_price

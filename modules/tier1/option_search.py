@@ -16,6 +16,7 @@ import streamlit as st
 from modules.base_module import FazDaneModule
 from modules.tier1.options_liquidity import fetch_options_data
 from utils.tastytrade_provider import load_config
+from utils.universe_manager import format_ticker_display
 
 from modules.tier1.option_search_db import (
     init_option_search_db,
@@ -814,7 +815,12 @@ class OptionSearchModule(FazDaneModule):
         # Tab-level filter columns
         c1, c2, c3 = st.columns(3)
         with c1:
-            sel_ticker = st.selectbox("Filter Ticker:", tickers_list, key="contract_sel_ticker")
+            sel_ticker = st.selectbox(
+                "Filter Ticker:",
+                tickers_list,
+                key="contract_sel_ticker",
+                format_func=lambda t: "All" if t == "All" else format_ticker_display(t)
+            )
         with c2:
             sel_type = st.selectbox("Option Type:", ["All", "Call", "Put"], key="contract_sel_type")
         with c3:

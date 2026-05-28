@@ -19,7 +19,7 @@ from utils.tastytrade_provider import (
     fetch_nested_option_chain,
     load_config,
 )
-from utils.universe_manager import render_universe_manager
+from utils.universe_manager import render_universe_manager, get_ticker_names, format_ticker_display
 from utils.options_liquidity_store import (
     get_latest_contract_snapshot,
     get_recent_snapshots,
@@ -687,7 +687,7 @@ class OptionsLiquidityModule(FazDaneModule):
 
     def render_sidebar(self):
         st.markdown("**Watchlist**")
-        universe_name, symbols, _ = render_universe_manager(
+        self.universe_name, symbols, _ = render_universe_manager(
             key_prefix="ol",
             show_benchmark=False,
             label="Ticker Universe:",
@@ -1136,6 +1136,7 @@ class OptionsLiquidityModule(FazDaneModule):
         if st.session_state.get(focus_picker_key) not in syms:
             st.session_state[focus_picker_key] = selected_symbol
 
+        ticker_names = get_ticker_names(getattr(self, "universe_name", "Options Default Watchlist"))
         control_cols = st.columns([2, 1])
         with control_cols[0]:
             focus_symbol = st.selectbox(
@@ -1143,6 +1144,7 @@ class OptionsLiquidityModule(FazDaneModule):
                 syms,
                 index=syms.index(selected_symbol) if selected_symbol in syms else 0,
                 key=focus_picker_key,
+                format_func=lambda ticker: format_ticker_display(ticker, ticker_names),
                 help="Click a heatmap bar when supported, or choose a ticker here to highlight its FDTS + MACD status below.",
             )
             if focus_symbol != st.session_state.get(focus_state_key):
@@ -1238,11 +1240,13 @@ class OptionsLiquidityModule(FazDaneModule):
             return
 
         symbol_totals = df.groupby("symbol")["volume"].sum().sort_values(ascending=False)
+        ticker_names = get_ticker_names(getattr(self, "universe_name", "Options Default Watchlist"))
         selected_symbol = st.selectbox(
             "Select Ticker",
             symbol_totals.index.tolist(),
             index=0,
             key="ol_drill_symbol",
+            format_func=lambda ticker: format_ticker_display(ticker, ticker_names),
         )
 
         drill = df[df["symbol"] == selected_symbol].copy()

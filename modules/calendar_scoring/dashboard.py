@@ -8,7 +8,7 @@ import logging
 from modules.tier4.volatility_engine import get_earnings_date as _get_real_earnings_date
 
 from modules.base_module import FazDaneModule
-from utils.universe_manager import render_universe_manager, get_tickers
+from utils.universe_manager import render_universe_manager, get_tickers, format_ticker_display, get_ticker_names
 
 # Import engine components
 from modules.calendar_scoring.config import STRATEGY_CONFIG, STRATEGY_CONFIG as STR_CONF
@@ -477,7 +477,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         st.divider()
         st.write("### Universe Selection")
         # Load Universe Manager widget
-        universe_name, self.tickers, _ = render_universe_manager(
+        self.universe_name, self.tickers, _ = render_universe_manager(
             key_prefix="cal_scoring_um",
             module_filter="general",
             show_benchmark=False,
@@ -719,7 +719,12 @@ class CalendarOpportunityScoringModule(FazDaneModule):
 
         # Select ticker for Prompt Generator
         st.markdown("#### 💬 AI Analyst ChatGPT Prompt Copyable")
-        sel_prompt_ticker = st.selectbox("Select Top Pick for ChatGPT Prompt:", options=[c["ticker"] for c in top_picks])
+        ticker_names = get_ticker_names(getattr(self, "universe_name", "Options Default Watchlist"))
+        sel_prompt_ticker = st.selectbox(
+            "Select Top Pick for ChatGPT Prompt:",
+            options=[c["ticker"] for c in top_picks],
+            format_func=lambda t: format_ticker_display(t, ticker_names)
+        )
         target_c = next(c for c in top_picks if c["ticker"] == sel_prompt_ticker)
         
         col1, col2 = st.columns([1, 1])
@@ -910,7 +915,12 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             st.warning("No ranked candidates available. (All filtered out in last scan).")
             return
             
-        sel_ticker = st.selectbox("Select Candidate Ticker:", options=ticker_options)
+        ticker_names = get_ticker_names(getattr(self, "universe_name", "Options Default Watchlist"))
+        sel_ticker = st.selectbox(
+            "Select Candidate Ticker:",
+            options=ticker_options,
+            format_func=lambda t: format_ticker_display(t, ticker_names)
+        )
         c = next(cand for cand in st.session_state.cal_candidates if cand["ticker"] == sel_ticker)
         
         col1, col2 = st.columns(2)
@@ -1034,7 +1044,13 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             st.warning("No ranked candidates available.")
             return
             
-        sel_ticker = st.selectbox("Select Setup Ticker Payoff:", options=ticker_options, key="payoff_ticker_sel")
+        ticker_names = get_ticker_names(getattr(self, "universe_name", "Options Default Watchlist"))
+        sel_ticker = st.selectbox(
+            "Select Setup Ticker Payoff:",
+            options=ticker_options,
+            key="payoff_ticker_sel",
+            format_func=lambda t: format_ticker_display(t, ticker_names)
+        )
         c = next(cand for cand in st.session_state.cal_candidates if cand["ticker"] == sel_ticker)
         setup = c.get("option_setup")
         
