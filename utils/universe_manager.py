@@ -178,7 +178,7 @@ def load_universes() -> dict:
                 data = json.load(f)
         except Exception:
             st.warning("Could not read config/universes.json. Loaded built-in universes without overwriting the file.")
-            return defaults
+            return _normalize_universes(defaults)
 
         deleted_defaults = set(data.get("__deleted_defaults__", []))
         defaults = {name: val for name, val in _DEFAULTS.items() if name not in deleted_defaults}
@@ -205,10 +205,10 @@ def load_universes() -> dict:
                     "description": val.get("description", ""),
                     "module": val.get("module", "general"),
                 }
-        return upgraded
+        return _normalize_universes(upgraded)
 
     save_universes(defaults)
-    return defaults
+    return _normalize_universes(defaults)
 
 
 def save_universes(universes: dict) -> None:
@@ -524,18 +524,22 @@ def _normalize_universes(universes: dict) -> dict:
             continue
         if isinstance(data, list):
             tickers = _clean_tickers(data)
+            ticker_names = _build_ticker_names(tickers)
+            sorted_tickers = sorted(tickers, key=lambda t: ticker_names.get(t, t).strip().lower())
             normalized[name] = {
-                "tickers": tickers,
-                "ticker_names": _build_ticker_names(tickers),
+                "tickers": sorted_tickers,
+                "ticker_names": {t: ticker_names[t] for t in sorted_tickers if t in ticker_names},
                 "benchmark": "SPY",
                 "description": "",
                 "module": "general",
             }
             continue
         tickers = _clean_tickers(data.get("tickers", []))
+        ticker_names = _normalize_ticker_names(tickers, data.get("ticker_names", {}))
+        sorted_tickers = sorted(tickers, key=lambda t: ticker_names.get(t, t).strip().lower())
         normalized[name] = {
-            "tickers": tickers,
-            "ticker_names": _normalize_ticker_names(tickers, data.get("ticker_names", {})),
+            "tickers": sorted_tickers,
+            "ticker_names": {t: ticker_names[t] for t in sorted_tickers if t in ticker_names},
             "benchmark": str(data.get("benchmark", "SPY")).strip().upper(),
             "description": data.get("description", ""),
             "module": data.get("module", "general"),
