@@ -526,7 +526,25 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             }
             return color_map.get(val, "")
             
-        styled_df = df.style.map(color_recommendation, subset=["Recommendation"])
+        def color_earnings_date(val):
+            if not val or val == "N/A":
+                return ""
+            try:
+                earnings_dt = datetime.strptime(val, "%Y-%m-%d").date()
+                today_dt = date.today()
+                days_diff = (earnings_dt - today_dt).days
+                if days_diff < 0:
+                    return "color: #ffffff;"
+                elif days_diff <= 20:
+                    return "background-color: rgba(220,38,38,0.15); color: #ef4444; font-weight: bold;"
+                elif days_diff <= 40:
+                    return "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;"
+                else:
+                    return "color: #ffffff;"
+            except Exception:
+                return ""
+            
+        styled_df = df.style.map(color_recommendation, subset=["Recommendation"]).map(color_earnings_date, subset=["Earnings Date"])
         st.dataframe(styled_df, use_container_width=True)
         
         # Select ticker for Prompt Generator
@@ -684,7 +702,25 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             }
             return color_map.get(val, "")
             
-        styled_df = df.style.map(color_recommendation, subset=["Recommendation"])
+        def color_earnings_date(val):
+            if not val or val == "N/A":
+                return ""
+            try:
+                earnings_dt = datetime.strptime(val, "%Y-%m-%d").date()
+                today_dt = date.today()
+                days_diff = (earnings_dt - today_dt).days
+                if days_diff < 0:
+                    return "color: #ffffff;"
+                elif days_diff <= 20:
+                    return "background-color: rgba(220,38,38,0.15); color: #ef4444; font-weight: bold;"
+                elif days_diff <= 40:
+                    return "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;"
+                else:
+                    return "color: #ffffff;"
+            except Exception:
+                return ""
+            
+        styled_df = df.style.map(color_recommendation, subset=["Recommendation"]).map(color_earnings_date, subset=["Earnings Date"])
         st.dataframe(styled_df, use_container_width=True)
 
     # ══════════════════════════════════════════════════════════════════════
