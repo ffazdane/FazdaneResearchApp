@@ -533,8 +533,91 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         st.markdown("#### 💬 AI Analyst ChatGPT Prompt Copyable")
         sel_prompt_ticker = st.selectbox("Select Top Pick for ChatGPT Prompt:", options=[c["ticker"] for c in top_picks])
         target_c = next(c for c in top_picks if c["ticker"] == sel_prompt_ticker)
-        prompt_txt = generate_llm_prompt(target_c)
-        st.code(prompt_txt, language="text")
+        
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            prompt_txt = generate_llm_prompt(target_c)
+            st.code(prompt_txt, language="text")
+        with col2:
+            self.render_fib_candlestick_chart(sel_prompt_ticker)
+
+    def render_fib_candlestick_chart(self, ticker: str):
+        """Render a premium candlestick chart with Fibonacci retracement and extension levels for the selected ticker."""
+        try:
+            # Fetch historical data
+            tech = fetch_technical_data(ticker)
+            df = tech.get("df_history")
+            
+            if df is None or df.empty:
+                st.warning("No price history available to draw chart.")
+                return
+                
+            # Use last 90 trading days for anchoring the Fibonacci swing
+            df_recent = df.iloc[-90:] if len(df) >= 90 else df
+            
+            # Find swing low and swing high
+            swing_low = df_recent["Low"].min()
+            swing_high = df_recent["High"].max()
+            diff = swing_high - swing_low
+            
+            if diff <= 0:
+                diff = 1e-5
+            
+            # Calculate Fibonacci levels
+            fib_levels = {
+                "Fib 1.618 Extension": swing_high + 0.618 * diff,
+                "Fib 1.272 Extension": swing_high + 0.272 * diff,
+                "Fib 0.000 (High)": swing_high,
+                "Fib 0.382 Retracement": swing_high - 0.382 * diff,
+                "Fib 0.500 Retracement": swing_high - 0.500 * diff,
+                "Fib 0.618 Retracement": swing_high - 0.618 * diff,
+                "Fib 1.000 (Low)": swing_low
+            }
+            
+            # Draw candlestick
+            fig = go.Figure(data=[go.Candlestick(
+                x=df_recent.index,
+                open=df_recent['Open'],
+                high=df_recent['High'],
+                low=df_recent['Low'],
+                close=df_recent['Close'],
+                name=f"{ticker} Price"
+            )])
+            
+            # Define colors for fib lines
+            colors = {
+                "Fib 1.618 Extension": "#ef4444", # Red
+                "Fib 1.272 Extension": "#ffb800", # Orange
+                "Fib 0.000 (High)": "#3ab54a",    # Green
+                "Fib 0.382 Retracement": "#64748b",# Grey
+                "Fib 0.500 Retracement": "#64748b",
+                "Fib 0.618 Retracement": "#64748b",
+                "Fib 1.000 (Low)": "#ef4444"     # Red
+            }
+            
+            # Add horizontal lines for each fib level
+            for label, val in fib_levels.items():
+                fig.add_hline(
+                    y=val,
+                    line_dash="dash" if "Retracement" in label else "solid",
+                    line_color=colors.get(label, "#64748b"),
+                    annotation_text=f"{label}: ${val:.2f}",
+                    annotation_position="top right"
+                )
+                
+            fig.update_layout(
+                title=f"📈 {ticker} Technical Chart (Last 90 Days & Fibonacci Targets)",
+                xaxis_title="Date",
+                yaxis_title="Price ($)",
+                height=380,
+                margin=dict(l=20, r=20, t=40, b=10),
+                xaxis_rangeslider_visible=False,
+                template="plotly_dark"
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"Error rendering chart: {e}")
 
     # ══════════════════════════════════════════════════════════════════════
     # SCREEN 2: ALL RANKED CANDIDATES
