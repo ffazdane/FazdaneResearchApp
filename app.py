@@ -7,6 +7,7 @@ import streamlit as st
 import logging
 import os
 from datetime import datetime
+from utils.version import VERSION
 
 #
 # PAGE CONFIG  (must be first Streamlit call)
@@ -18,7 +19,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
-        "About": "FazDane Analytics v1.0  Research & Trading Intelligence Platform",
+        "About": f"FazDane Analytics v{VERSION}  Research & Trading Intelligence Platform",
     },
 )
 
@@ -932,6 +933,11 @@ with st.sidebar:
     if st.button("Logout", use_container_width=True, type="secondary"):
         logger.info(f"User {user['username']} logged out")
         logout()
+
+    st.markdown(
+        f"<div style='text-align:center;color:#475569;font-size:11px;margin-top:12px;'>FazDane Analytics v{VERSION}</div>",
+        unsafe_allow_html=True
+    )
 
 #
 # MODULE DISPATCHER
