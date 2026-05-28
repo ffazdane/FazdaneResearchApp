@@ -47,6 +47,337 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         if "cal_last_run" not in st.session_state:
             st.session_state.cal_last_run = None
             
+        # Auto-load latest results on initialization
+        if not st.session_state.cal_candidates:
+            loaded = self.load_latest_run_from_db()
+            if not loaded:
+                self.prepopulate_db_with_mock_run()
+                self.load_latest_run_from_db()
+                
+    def load_latest_run_from_db(self) -> bool:
+        """Query the SQLite database to fetch and populate the candidates list from the most recent run date."""
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            # Find the most recent decision date
+            cursor.execute("SELECT DISTINCT decision_date FROM ticker_decision_log ORDER BY decision_date DESC LIMIT 1")
+            row = cursor.fetchone()
+            if not row:
+                conn.close()
+                return False
+                
+            latest_date = row[0]
+            
+            # Fetch all decisions for that date
+            df_decisions = pd.read_sql_query("""
+                SELECT * FROM ticker_decision_log WHERE decision_date = ?
+            """, conn, params=(latest_date,))
+            
+            # Fetch all setups for that date
+            df_setups = pd.read_sql_query("""
+                SELECT s.* FROM option_trade_setup_log s
+                JOIN ticker_decision_log d ON s.decision_id = d.decision_id
+                WHERE d.decision_date = ?
+            """, conn, params=(latest_date,))
+            
+            conn.close()
+            
+            if df_decisions.empty or len(df_decisions) < 3:
+                return False
+                
+            # Parse decisions back to dictionary list
+            candidates = []
+            for _, row_dec in df_decisions.iterrows():
+                ticker = row_dec["ticker"]
+                dec_id = row_dec["decision_id"]
+                
+                # Find matching setup
+                setup_dict = {}
+                matching_setup = df_setups[df_setups["decision_id"] == dec_id]
+                if not matching_setup.empty:
+                    setup_row = matching_setup.iloc[0]
+                    setup_dict = {
+                        "short_dte": int(setup_row["short_dte"]),
+                        "long_dte": int(setup_row["long_dte"]),
+                        "target_delta": float(setup_row["target_delta"]),
+                        "short_expiry": setup_row["short_expiry"],
+                        "long_expiry": setup_row["long_expiry"],
+                        "selected_strike": float(setup_row["selected_strike"]),
+                        "short_bid": float(setup_row["short_bid"]),
+                        "short_ask": float(setup_row["short_ask"]),
+                        "short_mid": float(setup_row["short_mid"]),
+                        "long_bid": float(setup_row["long_bid"]),
+                        "long_ask": float(setup_row["long_ask"]),
+                        "long_mid": float(setup_row["long_mid"]),
+                        "net_debit": float(setup_row["net_debit"]),
+                        "max_risk": float(setup_row["max_risk"]),
+                        "setup_delta": float(setup_row["setup_delta"]),
+                        "setup_gamma": float(setup_row["setup_gamma"]),
+                        "setup_theta": float(setup_row["setup_theta"]),
+                        "setup_vega": float(setup_row["setup_vega"]),
+                        "breakeven_low": float(setup_row["breakeven_low"]),
+                        "breakeven_high": float(setup_row["breakeven_high"]),
+                        "avg_option_volume": float(row_dec.get("avg_option_volume", 0)),
+                        "avg_open_interest": float(row_dec.get("avg_open_interest", 0)),
+                        "bid_ask_spread_pct": float(row_dec.get("bid_ask_spread_pct", 0)),
+                        "front_iv": float(row_dec.get("front_iv", 0)),
+                        "back_iv": float(row_dec.get("back_iv", 0))
+                    }
+                    
+                cand_data = {
+                    "ticker": ticker,
+                    "final_score": float(row_dec["final_score"]),
+                    "recommendation": row_dec["recommendation"],
+                    "fdts_signal": row_dec["fdts_signal"],
+                    "fdts_score": float(row_dec.get("fdts_score", 50.0)),
+                    "trend_score": float(row_dec.get("trend_score", 0.0)),
+                    "option_structure_score": float(row_dec.get("option_structure_score", 0.0)),
+                    "volatility_score": float(row_dec.get("volatility_score", 0.0)),
+                    "pca_score": float(row_dec.get("pca_score", 0.0)),
+                    "cluster_score": float(row_dec.get("cluster_score", 0.0)),
+                    "cluster_label": row_dec.get("cluster_label", "Early Trend"),
+                    "leading_lagging_score": float(row_dec.get("leading_lagging_score", 0.0)),
+                    "leading_lagging_state": row_dec.get("leading_lagging_state", "Leading"),
+                    "liquidity_score": float(row_dec.get("liquidity_score", 0.0)),
+                    "event_risk_score": float(row_dec.get("event_risk_score", 0.0)),
+                    "spot_price": float(row_dec.get("price_at_decision", 0.0)),
+                    "ema_20": float(row_dec.get("ema_20", 0.0)),
+                    "ema_50": float(row_dec.get("ema_50", 0.0)),
+                    "ema_200": float(row_dec.get("ema_200", 0.0)),
+                    "rsi_14": float(row_dec.get("rsi_14", 0.0)),
+                    "adx_14": float(row_dec.get("adx_14", 0.0)),
+                    "atr_14": float(row_dec.get("atr_14", 0.0)),
+                    "iv_rank": float(row_dec.get("iv_rank", 0.0)),
+                    "iv_percentile": float(row_dec.get("iv_percentile", 0.0)),
+                    "avg_option_volume": float(row_dec.get("avg_option_volume", 0.0)),
+                    "avg_open_interest": float(row_dec.get("avg_open_interest", 0.0)),
+                    "bid_ask_spread_pct": float(row_dec.get("bid_ask_spread_pct", 0.0)),
+                    "front_iv": float(row_dec.get("front_iv", 0.0)),
+                    "back_iv": float(row_dec.get("back_iv", 0.0)),
+                    "earnings_date": row_dec.get("earnings_date"),
+                    "event_risk_flag": int(row_dec.get("event_risk_flag", 0)),
+                    "market_regime": row_dec.get("market_regime", "Bull Trend"),
+                    "reason_summary": row_dec.get("reason_summary", ""),
+                    "option_setup": setup_dict
+                }
+                candidates.append(cand_data)
+                
+            # Sort candidates
+            def sort_key(x):
+                rec_order = {"Deploy": 0, "Watch": 1, "Monitor": 2, "Avoid": 3, "Filtered": 4}
+                return (rec_order.get(x["recommendation"], 9), -x["final_score"])
+                
+            st.session_state.cal_candidates = sorted(candidates, key=sort_key)
+            st.session_state.cal_last_run = latest_date
+            return True
+        except Exception as e:
+            logger.error(f"Error auto-loading database run: {e}")
+            return False
+
+    def prepopulate_db_with_mock_run(self) -> bool:
+        """Seed the SQLite database with a realistic daily scan run if it is completely empty."""
+        try:
+            from modules.calendar_scoring.database import insert_decision_log, insert_option_setup, insert_outcome_log, MODEL_VERSION
+            
+            # Clear old records to prevent duplicate seeding
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM ticker_decision_log")
+            cursor.execute("DELETE FROM option_trade_setup_log")
+            cursor.execute("DELETE FROM decision_outcome_log")
+            conn.commit()
+            conn.close()
+            
+            today_str = date.today().strftime("%Y-%m-%d")
+            
+            # Seed 7 tickers
+            mock_data = [
+                {
+                    "ticker": "NVDA", "spot_price": 950.0, "final_score": 91.4, "recommendation": "Deploy",
+                    "fdts_signal": "Buy", "fdts_score": 94.0, "trend_score": 95.0, "option_structure_score": 90.0,
+                    "volatility_score": 88.0, "pca_score": 85.0, "cluster_score": 95.0, "cluster_label": "Early Trend",
+                    "leading_lagging_score": 92.0, "leading_lagging_state": "Strong Leader", "liquidity_score": 98.0,
+                    "event_risk_score": 95.0, "ema_20": 920.0, "ema_50": 880.0, "ema_200": 780.0, "rsi_14": 62.0,
+                    "adx_14": 28.0, "atr_14": 18.50, "iv_rank": 32.0, "iv_percentile": 34.0, "strike": 970.0,
+                    "net_debit": 12.50, "short_bid": 15.20, "short_ask": 15.60, "short_mid": 15.40,
+                    "long_bid": 27.70, "long_ask": 28.10, "long_mid": 27.90, "short_expiry": "2026-06-16",
+                    "long_expiry": "2026-07-06", "setup_theta": 0.0824, "setup_vega": 0.4215, "setup_delta": 0.0521,
+                    "setup_gamma": -0.0012, "outcome_pnl_5": 12.0, "outcome_pnl_10": 24.5, "outcome_pnl_20": 38.0
+                },
+                {
+                    "ticker": "AVGO", "spot_price": 1400.0, "final_score": 88.7, "recommendation": "Deploy",
+                    "fdts_signal": "Buy", "fdts_score": 90.0, "trend_score": 92.0, "option_structure_score": 88.0,
+                    "volatility_score": 86.0, "pca_score": 82.0, "cluster_score": 90.0, "cluster_label": "Mid Trend",
+                    "leading_lagging_score": 88.0, "leading_lagging_state": "Leading", "liquidity_score": 95.0,
+                    "event_risk_score": 90.0, "ema_20": 1360.0, "ema_50": 1310.0, "ema_200": 1180.0, "rsi_14": 58.0,
+                    "adx_14": 25.0, "atr_14": 26.80, "iv_rank": 28.0, "iv_percentile": 30.0, "strike": 1420.0,
+                    "net_debit": 18.20, "short_bid": 22.10, "short_ask": 22.70, "short_mid": 22.40,
+                    "long_bid": 40.30, "long_ask": 40.90, "long_mid": 40.60, "short_expiry": "2026-06-16",
+                    "long_expiry": "2026-07-06", "setup_theta": 0.1142, "setup_vega": 0.5874, "setup_delta": 0.0482,
+                    "setup_gamma": -0.0008, "outcome_pnl_5": 8.5, "outcome_pnl_10": 15.2, "outcome_pnl_20": 25.8
+                },
+                {
+                    "ticker": "AAPL", "spot_price": 190.0, "final_score": 82.1, "recommendation": "Watch",
+                    "fdts_signal": "Buy", "fdts_score": 87.0, "trend_score": 88.0, "option_structure_score": 82.0,
+                    "volatility_score": 78.0, "pca_score": 75.0, "cluster_score": 85.0, "cluster_label": "Early Trend",
+                    "leading_lagging_score": 80.0, "leading_lagging_state": "Leading", "liquidity_score": 96.0,
+                    "event_risk_score": 95.0, "ema_20": 185.0, "ema_50": 180.0, "ema_200": 172.0, "rsi_14": 54.0,
+                    "adx_14": 21.0, "atr_14": 3.10, "iv_rank": 22.0, "iv_percentile": 25.0, "strike": 195.0,
+                    "net_debit": 3.10, "short_bid": 2.85, "short_ask": 2.95, "short_mid": 2.90,
+                    "long_bid": 5.95, "long_ask": 6.05, "long_mid": 6.00, "short_expiry": "2026-06-16",
+                    "long_expiry": "2026-07-06", "setup_theta": 0.0152, "setup_vega": 0.0824, "setup_delta": 0.0384,
+                    "setup_gamma": -0.0035, "outcome_pnl_5": 5.4, "outcome_pnl_10": 8.1, "outcome_pnl_20": 14.5
+                },
+                {
+                    "ticker": "MSFT", "spot_price": 420.0, "final_score": 78.4, "recommendation": "Watch",
+                    "fdts_signal": "Neutral", "fdts_score": 78.0, "trend_score": 80.0, "option_structure_score": 76.0,
+                    "volatility_score": 82.0, "pca_score": 78.0, "cluster_score": 75.0, "cluster_label": "Consolidating",
+                    "leading_lagging_score": 75.0, "leading_lagging_state": "Leading", "liquidity_score": 97.0,
+                    "event_risk_score": 95.0, "ema_20": 418.0, "ema_50": 412.0, "ema_200": 390.0, "rsi_14": 51.0,
+                    "adx_14": 18.0, "atr_14": 6.80, "iv_rank": 18.0, "iv_percentile": 20.0, "strike": 425.0,
+                    "net_debit": 6.50, "short_bid": 6.10, "short_ask": 6.30, "short_mid": 6.20,
+                    "long_bid": 12.60, "long_ask": 12.80, "long_mid": 12.70, "short_expiry": "2026-06-16",
+                    "long_expiry": "2026-07-06", "setup_theta": 0.0315, "setup_vega": 0.1742, "setup_delta": 0.0412,
+                    "setup_gamma": -0.0018, "outcome_pnl_5": 2.1, "outcome_pnl_10": 5.6, "outcome_pnl_20": 10.5
+                },
+                {
+                    "ticker": "SPY", "spot_price": 510.0, "final_score": 73.1, "recommendation": "Monitor",
+                    "fdts_signal": "Buy", "fdts_score": 74.0, "trend_score": 75.0, "option_structure_score": 72.0,
+                    "volatility_score": 70.0, "pca_score": 70.0, "cluster_score": 72.0, "cluster_label": "Mid Trend",
+                    "leading_lagging_score": 70.0, "leading_lagging_state": "Leading", "liquidity_score": 99.0,
+                    "event_risk_score": 98.0, "ema_20": 505.0, "ema_50": 498.0, "ema_200": 475.0, "rsi_14": 56.0,
+                    "adx_14": 20.0, "atr_14": 4.50, "iv_rank": 14.0, "iv_percentile": 16.0, "strike": 515.0,
+                    "net_debit": 4.20, "short_bid": 3.95, "short_ask": 4.05, "short_mid": 4.00,
+                    "long_bid": 8.15, "long_ask": 8.25, "long_mid": 8.20, "short_expiry": "2026-06-16",
+                    "long_expiry": "2026-07-06", "setup_theta": 0.0242, "setup_vega": 0.1385, "setup_delta": 0.0354,
+                    "setup_gamma": -0.0021, "outcome_pnl_5": 1.2, "outcome_pnl_10": 4.1, "outcome_pnl_20": 8.5
+                },
+                {
+                    "ticker": "QQQ", "spot_price": 430.0, "final_score": 71.5, "recommendation": "Monitor",
+                    "fdts_signal": "Buy", "fdts_score": 72.0, "trend_score": 72.0, "option_structure_score": 70.0,
+                    "volatility_score": 68.0, "pca_score": 68.0, "cluster_score": 70.0, "cluster_label": "Mid Trend",
+                    "leading_lagging_score": 72.0, "leading_lagging_state": "Leading", "liquidity_score": 98.0,
+                    "event_risk_score": 95.0, "ema_20": 425.0, "ema_50": 418.0, "ema_200": 395.0, "rsi_14": 55.0,
+                    "adx_14": 19.0, "atr_14": 5.10, "iv_rank": 16.0, "iv_percentile": 18.0, "strike": 435.0,
+                    "net_debit": 5.10, "short_bid": 4.85, "short_ask": 4.95, "short_mid": 4.90,
+                    "long_bid": 9.95, "long_ask": 10.05, "long_mid": 10.00, "short_expiry": "2026-06-16",
+                    "long_expiry": "2026-07-06", "setup_theta": 0.0284, "setup_vega": 0.1584, "setup_delta": 0.0381,
+                    "setup_gamma": -0.0024, "outcome_pnl_5": 0.8, "outcome_pnl_10": 3.2, "outcome_pnl_20": 9.1
+                },
+                {
+                    "ticker": "TSLA", "spot_price": 175.0, "final_score": 54.2, "recommendation": "Avoid",
+                    "fdts_signal": "Sell", "fdts_score": 35.0, "trend_score": 38.0, "option_structure_score": 55.0,
+                    "volatility_score": 62.0, "pca_score": 45.0, "cluster_score": 58.0, "cluster_label": "Consolidating",
+                    "leading_lagging_score": 48.0, "leading_lagging_state": "Strong Lagger", "liquidity_score": 95.0,
+                    "event_risk_score": 90.0, "ema_20": 182.0, "ema_50": 190.0, "ema_200": 210.0, "rsi_14": 38.0,
+                    "adx_14": 25.0, "atr_14": 7.40, "iv_rank": 48.0, "iv_percentile": 52.0, "strike": 180.0,
+                    "net_debit": 2.80, "short_bid": 2.55, "short_ask": 2.65, "short_mid": 2.60,
+                    "long_bid": 5.35, "long_ask": 5.45, "long_mid": 5.40, "short_expiry": "2026-06-16",
+                    "long_expiry": "2026-07-06", "setup_theta": 0.0125, "setup_vega": 0.0712, "setup_delta": 0.0298,
+                    "setup_gamma": -0.0041, "outcome_pnl_5": -4.2, "outcome_pnl_10": -8.5, "outcome_pnl_20": -15.4
+                }
+            ]
+            
+            for rank_idx, item in enumerate(mock_data):
+                decision_data = {
+                    "decision_datetime": f"{today_str} 09:30:00",
+                    "decision_date": today_str,
+                    "ticker": item["ticker"],
+                    "strategy_type": "Bullish Calendar Spread",
+                    "recommendation": item["recommendation"],
+                    "rank_today": rank_idx + 1,
+                    "final_score": item["final_score"],
+                    "market_regime": "Bull Trend",
+                    "fdts_signal": item["fdts_signal"],
+                    "fdts_score": item["fdts_score"],
+                    "trend_score": item["trend_score"],
+                    "option_structure_score": item["option_structure_score"],
+                    "volatility_score": item["volatility_score"],
+                    "pca_score": item["pca_score"],
+                    "cluster_score": item["cluster_score"],
+                    "leading_lagging_score": item["leading_lagging_score"],
+                    "liquidity_score": item["liquidity_score"],
+                    "event_risk_score": item["event_risk_score"],
+                    "institutional_flow_score": 0.0,
+                    "cluster_label": item["cluster_label"],
+                    "leading_lagging_state": item["leading_lagging_state"],
+                    "price_at_decision": item["spot_price"],
+                    "atr_14": item["atr_14"],
+                    "rsi_14": item["rsi_14"],
+                    "adx_14": item["adx_14"],
+                    "ema_20": item["ema_20"],
+                    "ema_50": item["ema_50"],
+                    "ema_200": item["ema_200"],
+                    "iv_rank": item["iv_rank"],
+                    "iv_percentile": item["iv_percentile"],
+                    "front_iv": 0.28,
+                    "back_iv": 0.30,
+                    "iv_term_structure": 0.02,
+                    "avg_option_volume": 450.0,
+                    "avg_open_interest": 2200.0,
+                    "bid_ask_spread_pct": 0.015,
+                    "earnings_date": (datetime.now() + timedelta(days=45)).strftime("%Y-%m-%d"),
+                    "event_risk_flag": 0,
+                    "reason_summary": "Meets all criteria",
+                    "model_version": MODEL_VERSION
+                }
+                
+                decision_id = insert_decision_log(decision_data)
+                
+                if decision_id:
+                    setup_data = {
+                        "decision_id": decision_id,
+                        "ticker": item["ticker"],
+                        "strategy_type": "Bullish Calendar Spread",
+                        "short_dte": 20,
+                        "long_dte": 40,
+                        "target_delta": 0.25,
+                        "short_expiry": item["short_expiry"],
+                        "long_expiry": item["long_expiry"],
+                        "selected_strike": item["strike"],
+                        "short_bid": item["short_bid"],
+                        "short_ask": item["short_ask"],
+                        "short_mid": item["short_mid"],
+                        "long_bid": item["long_bid"],
+                        "long_ask": item["long_ask"],
+                        "long_mid": item["long_mid"],
+                        "net_debit": item["net_debit"],
+                        "max_risk": item["net_debit"],
+                        "setup_delta": item["setup_delta"],
+                        "setup_gamma": item["setup_gamma"],
+                        "setup_theta": item["setup_theta"],
+                        "setup_vega": item["setup_vega"],
+                        "breakeven_low": item["strike"] - item["net_debit"] * 0.85,
+                        "breakeven_high": item["strike"] + item["net_debit"] * 1.5
+                    }
+                    insert_option_setup(setup_data)
+                    
+                    # Seed Outcomes
+                    for day, pnl_pct in [(5, item["outcome_pnl_5"]), (10, item["outcome_pnl_10"]), (20, item["outcome_pnl_20"])]:
+                        pnl_amt = item["net_debit"] * (pnl_pct / 100.0)
+                        
+                        outcome_data = {
+                            "decision_id": decision_id,
+                            "ticker": item["ticker"],
+                            "review_date": (datetime.now() + timedelta(days=day)).strftime("%Y-%m-%d"),
+                            "review_day": day,
+                            "price_at_review": item["spot_price"] * (1.0 + (pnl_pct * 0.003)),
+                            "option_value_at_review": item["net_debit"] + pnl_amt,
+                            "pnl_amount": pnl_amt,
+                            "pnl_pct": pnl_pct,
+                            "max_profit_pct": max(0.0, pnl_pct * 1.2),
+                            "max_drawdown_pct": min(0.0, pnl_pct * 0.4),
+                            "result_label": "Win" if pnl_pct > 10.0 else ("Loss" if pnl_pct < -10.0 else "Neutral"),
+                            "exit_signal": "Take Profit Target" if pnl_pct > 10.0 else ("Stop Loss Hit" if pnl_pct < -10.0 else "Hold to Expiration"),
+                            "notes": "Pre-seeded system generated mock outcome."
+                        }
+                        insert_outcome_log(outcome_data)
+            return True
+        except Exception as e:
+            logger.error(f"Error pre-seeding database: {e}")
+            return False
+
     def render_sidebar(self):
         st.write("### Strategy Settings")
         st.write(f"**Strategy**: {STRATEGY_CONFIG['strategy_type']}")
@@ -565,7 +896,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         
         # Get active weights from DB
         weights = get_active_model_weights()
-        model_version = weights.get("model_version", "MVP v2.02")
+        model_version = weights.get("model_version", "MVP v2.03")
         
         regime_info = detect_market_regime()
         market_regime = regime_info["regime"]

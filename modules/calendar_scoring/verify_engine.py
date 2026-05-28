@@ -116,7 +116,7 @@ def run_verification_tests():
         "option_setup": setup
     }
     
-    count = log_daily_run("2026-05-28", [candidate], "MVP v2.02")
+    count = log_daily_run("2026-05-28", [candidate], "MVP v2.03")
     logger.info(f"Decision logger completed. Logged {count} entries.")
     
     # 9. Outcomes
