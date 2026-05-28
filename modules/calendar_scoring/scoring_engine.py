@@ -201,112 +201,43 @@ def calculate_pca_score(
 
 def calculate_cluster_score(ticker: str, df_history: pd.DataFrame) -> tuple[float, str]:
     """
-    Classify the ticker into a market phase cluster using K-Means on rolling features.
+    Classify the ticker into a market phase cluster using rules-based heuristics
+    on rolling technical features (distance from EMAs, momentum, and ADX).
 
-    Builds a 6-feature vector from price history:
-      1. dist_from_20ema  — proximity to 20-period EMA (trend freshness)
-      2. dist_from_50ema  — proximity to 50-period EMA (structural trend)
-      3. momentum_20d     — 20-day price change % (momentum)
-      4. rsi_norm         — RSI(14) normalised to [0, 1]
-      5. adx_proxy        — rolling absolute-return / std ratio (trend strength proxy)
-      6. hv_ratio         — 10-day HV / 30-day HV (volatility acceleration)
-
-    Fits K-Means (k=4) on the ticker's own last 120 rows of feature history,
-    then assigns a semantic label to the current cluster based on centroid
-    characteristics. Works per-ticker — no cross-ticker data needed.
-
-    Falls back to enhanced rule-based classification if sklearn is unavailable.
+    This is the Phase 1 rules-based implementation. The real K-Means machine
+    learning clustering model is deferred to Phase 2.
 
     Returns:
         tuple[float, str]: (score, label) where label ∈
             {"Early Trend", "Mid Trend", "Consolidating", "Overextended"}
     """
-    if df_history.empty or len(df_history) < 50:
+    if df_history.empty or len(df_history) < 20:
         return 70.0, "Early Trend"
 
     try:
         close = df_history['Close']
         returns = close.pct_change()
 
-        ema_20 = close.ewm(span=20, adjust=False).mean()
-        ema_50 = close.ewm(span=50, adjust=False).mean()
+        # Calculate EMA distance & momentum
+        ema_20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
+        ema_50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
 
-        dist_20 = (close - ema_20) / (ema_20 + 1e-8)
-        dist_50 = (close - ema_50) / (ema_50 + 1e-8)
-        momentum_20 = close.pct_change(20)
+        dist_20 = (close.iloc[-1] - ema_20) / (ema_20 + 1e-8)
+        dist_50 = (close.iloc[-1] - ema_50) / (ema_50 + 1e-8)
+        momentum_20 = (close.iloc[-1] / (close.iloc[-20] if len(close) >= 20 else close.iloc[0])) - 1.0
 
-        # RSI (14) normalised to [0, 1]
-        delta = close.diff()
-        gain = delta.where(delta > 0, 0.0).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0.0)).rolling(14).mean()
-        rsi_norm = (100.0 - (100.0 / (1.0 + gain / (loss + 1e-8)))) / 100.0
+        # ADX trend strength proxy
+        adx_proxy = returns.abs().rolling(14).mean().iloc[-1] / (returns.rolling(14).std().iloc[-1] + 1e-8)
 
-        # Trend strength proxy (ratio of mean abs return to return std)
-        adx_proxy = returns.abs().rolling(14).mean() / (returns.rolling(14).std() + 1e-8)
-
-        # Volatility acceleration: short HV vs long HV
-        hv_10 = returns.rolling(10).std()
-        hv_30 = returns.rolling(30).std()
-        hv_ratio = hv_10 / (hv_30 + 1e-8)
-
-        feature_df = pd.DataFrame({
-            'dist_20':     dist_20,
-            'dist_50':     dist_50,
-            'momentum_20': momentum_20,
-            'rsi_norm':    rsi_norm,
-            'adx_proxy':   adx_proxy,
-            'hv_ratio':    hv_ratio,
-        }).dropna()
-
-        if len(feature_df) < 20:
-            return 70.0, "Early Trend"
-
-        feature_window = feature_df.tail(120)
-
-        if _SKLEARN_AVAILABLE:
-            # ── K-Means path ─────────────────────────────────────────────────
-            scaler = _StandardScaler()
-            X_scaled = scaler.fit_transform(feature_window.values)
-
-            km = _KMeans(n_clusters=4, random_state=42, n_init=10, max_iter=300)
-            cluster_ids = km.fit_predict(X_scaled)
-
-            # Inverse-transform centroids for interpretable thresholds
-            centroids = scaler.inverse_transform(km.cluster_centers_)
-
-            cluster_label_map = {}
-            for i, c in enumerate(centroids):
-                c_dist50 = c[1]   # dist from 50 EMA
-                c_mom20  = c[2]   # 20-day momentum
-                c_adx    = c[4]   # trend strength
-
-                if c_dist50 > 0.08 or (c_dist50 > 0.05 and c_mom20 > 0.08):
-                    cluster_label_map[i] = "Overextended"
-                elif c_mom20 > 0.025 and c_adx > 0.6 and c_dist50 > 0.01:
-                    cluster_label_map[i] = "Mid Trend"
-                elif c_mom20 > 0.005 and c_dist50 >= 0.0:
-                    cluster_label_map[i] = "Early Trend"
-                else:
-                    cluster_label_map[i] = "Consolidating"
-
-            current_id = int(cluster_ids[-1])
-            label = cluster_label_map.get(current_id, "Consolidating")
-
+        # Heuristic rules to assign cluster labels
+        if dist_50 > 0.08 or (dist_50 > 0.05 and momentum_20 > 0.08):
+            label = "Overextended"
+        elif momentum_20 > 0.025 and adx_proxy > 0.6 and dist_50 > 0.01:
+            label = "Mid Trend"
+        elif momentum_20 > 0.005 and dist_50 >= 0.0:
+            label = "Early Trend"
         else:
-            # ── Enhanced rule-based fallback using all 6 features ─────────────
-            last = feature_df.iloc[-1]
-            c_dist50 = last['dist_50']
-            c_mom20  = last['momentum_20']
-            c_adx    = last['adx_proxy']
-
-            if c_dist50 > 0.08:
-                label = "Overextended"
-            elif c_mom20 > 0.03 and c_adx > 0.5 and c_dist50 > 0.02:
-                label = "Mid Trend"
-            elif c_mom20 > 0.005 and c_dist50 >= 0.0:
-                label = "Early Trend"
-            else:
-                label = "Consolidating"
+            label = "Consolidating"
 
         score_map = {
             "Early Trend":   95.0,
