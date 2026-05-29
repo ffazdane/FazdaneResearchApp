@@ -144,6 +144,63 @@ def fetch_position_correlations(tickers: tuple[str, ...], lookback_days: int) ->
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_position_betas(
+    tickers: tuple[str, ...],
+    benchmark: str,
+    lookback_days: int,
+) -> dict[str, float]:
+    """Compute OLS beta for each ticker vs benchmark using daily returns. Falls back to 1.0 on failure."""
+    clean = list(dict.fromkeys([clean_ticker_for_lookup(t) for t in tickers if t]))[:25]
+    bench_clean = benchmark.upper()
+    all_syms = list(dict.fromkeys([bench_clean] + clean))
+    if len(all_syms) < 2:
+        return {}
+    try:
+        end = datetime.today().date() + timedelta(days=1)
+        start = end - timedelta(days=int(lookback_days))
+        raw = yf.download(all_syms, start=start, end=end, auto_adjust=True, progress=False)
+        close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw
+        returns = close.ffill().pct_change().dropna(how="all")
+        if bench_clean not in returns.columns or len(returns) < 10:
+            return {}
+        bench_ret = returns[bench_clean].dropna()
+        betas: dict[str, float] = {}
+        for sym in clean:
+            if sym not in returns.columns:
+                betas[sym] = 1.0
+                continue
+            sym_ret = returns[sym].dropna()
+            aligned = pd.concat([bench_ret, sym_ret], axis=1).dropna()
+            if len(aligned) < 10:
+                betas[sym] = 1.0
+                continue
+            x = aligned.iloc[:, 0].values
+            y = aligned.iloc[:, 1].values
+            cov = float(np.cov(x, y)[0, 1])
+            var = float(np.var(x))
+            betas[sym] = round(cov / var, 3) if var > 0 else 1.0
+        return betas
+    except Exception:
+        return {}
+
+
+def compute_weighted_portfolio_beta(
+    df: pd.DataFrame,
+    betas: dict[str, float],
+) -> float:
+    """Compute weight-averaged portfolio beta. Unmapped tickers assume beta=1."""
+    if df.empty or not betas:
+        return 1.0
+    total_weight = max(float(df["weight_pct"].sum()), 1.0)
+    weighted_sum = 0.0
+    for _, row in df.iterrows():
+        clean = clean_ticker_for_lookup(str(row["ticker"]))
+        beta = betas.get(clean, 1.0)
+        weighted_sum += float(row["weight_pct"]) * beta
+    return round(weighted_sum / total_weight, 3)
+
+
 def enrich_positions(
     positions: pd.DataFrame,
     regime: dict[str, float | str],
@@ -627,6 +684,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
         self.lookback_days = st.selectbox("Correlation Lookback", [30, 60, 90, 180, 365], index=2, key="prm_corr_days")
         self.heat_limit = st.slider("Portfolio Heat Alert", 40, 95, 70, key="prm_heat_limit")
         self.include_live_regime = st.checkbox("Fetch market regime", value=True, key="prm_live_regime")
+        st.selectbox("Beta Benchmark", ["SPY", "QQQ"], key="prm_beta_benchmark", help="Benchmark index used for portfolio beta regression")
 
         if st.button("Refresh Risk Engine", use_container_width=True, type="primary", key="prm_refresh"):
             fetch_regime_snapshot.clear()
@@ -667,8 +725,14 @@ class PortfolioRiskManagementModule(FazDaneModule):
         heat = portfolio_heat_score(enriched, regime)
         commentary = build_ai_commentary(enriched, totals, regime, heat)
 
+        # Portfolio beta (sidebar control drives benchmark selection)
+        beta_benchmark = st.session_state.get("prm_beta_benchmark", "SPY")
+        tickers_tuple = tuple(enriched["ticker"].tolist()) if not enriched.empty else ()
+        position_betas = fetch_position_betas(tickers_tuple, beta_benchmark, int(self.lookback_days))
+        portfolio_beta = compute_weighted_portfolio_beta(enriched, position_betas)
+
         self._render_source_banner(metadata, source_label, saved_info)
-        self._render_command_metrics(enriched, totals, regime, heat)
+        self._render_command_metrics(enriched, totals, regime, heat, portfolio_beta, beta_benchmark)
 
         tabs = st.tabs(
             [
@@ -691,7 +755,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
         with tabs[2]:
             self._render_greeks(enriched, totals, regime, heat)
         with tabs[3]:
-            self._render_what_if_tab(enriched, totals)
+            self._render_what_if_tab(enriched, totals, position_betas, portfolio_beta, beta_benchmark)
         with tabs[4]:
             self._render_correlation(enriched)
         with tabs[5]:
@@ -1069,14 +1133,24 @@ class PortfolioRiskManagementModule(FazDaneModule):
             unsafe_allow_html=True,
         )
 
-    def _render_command_metrics(self, df: pd.DataFrame, totals: dict[str, float], regime: dict[str, float | str], heat: float):
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
+    def _render_command_metrics(
+        self,
+        df: pd.DataFrame,
+        totals: dict[str, float],
+        regime: dict[str, float | str],
+        heat: float,
+        portfolio_beta: float = 1.0,
+        beta_benchmark: str = "SPY",
+    ):
+        c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
         c1.metric("Portfolio Value", fmt_money(totals["total_market_value"]))
         c2.metric("Open P/L", fmt_money(totals["total_pl_open"]), fmt_money(totals["total_pl_day"]))
         c3.metric("Net Delta", fmt_num(totals["total_delta"]))
         c4.metric("Net Theta", fmt_num(totals["total_theta"]))
         c5.metric("Portfolio Heat", f"{heat:.0f}/100", "Alert" if heat >= self.heat_limit else "Normal")
         c6.metric("Market Regime", str(regime["risk_level"]), f"VIX {float(regime['vix']):.1f}" if float(regime["vix"]) else None)
+        beta_delta = "Defensive" if portfolio_beta < 0.85 else ("Aggressive" if portfolio_beta > 1.25 else "Market-Like")
+        c7.metric(f"β vs {beta_benchmark}", f"{portfolio_beta:.2f}", beta_delta)
 
     def _render_executive(self, df: pd.DataFrame, totals: dict[str, float], regime: dict[str, float | str], heat: float, commentary: str):
         left, right = st.columns([1.35, 1.0])
@@ -1739,19 +1813,130 @@ class PortfolioRiskManagementModule(FazDaneModule):
         st.dataframe(scenarios[["Scenario", "Impact"]], use_container_width=True, hide_index=True)
         st.markdown("<p style='font-size:11.5px;color:#94a3b8;margin-top:-4px;'>For dynamic shocks, interactive curve simulations, and proactive hedging playbooks, visit the dedicated <b>What-If Simulator</b> tab.</p>", unsafe_allow_html=True)
 
-    def _render_what_if_tab(self, df: pd.DataFrame, totals: dict[str, float]):
+    def _render_what_if_tab(
+        self,
+        df: pd.DataFrame,
+        totals: dict[str, float],
+        position_betas: dict[str, float] | None = None,
+        portfolio_beta: float = 1.0,
+        beta_benchmark: str = "SPY",
+    ):
         st.markdown("### Interactive Stress Simulator")
-        
+
+        # ── Beta Analytics Panel ────────────────────────────────────────────
+        st.markdown("#### Portfolio Beta Analytics")
+        position_betas = position_betas or {}
+
+        port_val = float(totals.get("total_market_value", 0.0))
+        gross_exp = max(float(df["notional_abs"].sum()), 1.0)
+        capital_base = port_val if port_val > 10.0 else gross_exp
+
+        # Beta health classification
+        if portfolio_beta < 0.5:
+            beta_label, beta_color = "Very Defensive", BRAND["green"]
+        elif portfolio_beta < 0.85:
+            beta_label, beta_color = "Defensive", "#22d3ee"
+        elif portfolio_beta <= 1.15:
+            beta_label, beta_color = "Market-Like", BRAND["yellow"]
+        elif portfolio_beta <= 1.50:
+            beta_label, beta_color = "Aggressive", "#f97316"
+        else:
+            beta_label, beta_color = "High Beta / Leveraged", BRAND["red"]
+
+        beta_col1, beta_col2, beta_col3 = st.columns([1.0, 1.0, 2.0])
+        with beta_col1:
+            st.markdown(
+                f"""
+                <div style="background:#152847;border:1px solid #1e3a5f;border-left:4px solid {beta_color};
+                    border-radius:8px;padding:14px;text-align:center;">
+                    <div style="color:#94a3b8;font-size:12px;font-weight:700;text-transform:uppercase;
+                        letter-spacing:0.5px;">Portfolio Beta vs {beta_benchmark}</div>
+                    <div style="color:#e2e8f0;font-size:40px;font-weight:900;margin:6px 0;">{portfolio_beta:.2f}</div>
+                    <div style="color:{beta_color};font-size:13px;font-weight:700;">{beta_label}</div>
+                    <div style="color:#64748b;font-size:11px;margin-top:4px;">1% {beta_benchmark} move ≈ {portfolio_beta:.2f}% portfolio move</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with beta_col2:
+            # Beta-adjusted 1% SPY stress quick metrics
+            beta_1pct_dollar = capital_base * portfolio_beta * 0.01
+            beta_5pct_dollar = capital_base * portfolio_beta * 0.05
+            beta_10pct_dollar = capital_base * portfolio_beta * 0.10
+            st.markdown(
+                f"""
+                <div style="background:#152847;border:1px solid #1e3a5f;border-radius:8px;padding:14px;">
+                    <div style="color:#94a3b8;font-size:12px;font-weight:700;text-transform:uppercase;
+                        letter-spacing:0.5px;margin-bottom:10px;">Beta-Adjusted Exposure</div>
+                    <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+                        <span style="color:#94a3b8;font-size:12px;">{beta_benchmark} -1%</span>
+                        <span style="color:#fca5a5;font-weight:700;font-size:13px;">-${beta_1pct_dollar:,.0f}</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+                        <span style="color:#94a3b8;font-size:12px;">{beta_benchmark} -5%</span>
+                        <span style="color:#fca5a5;font-weight:700;font-size:13px;">-${beta_5pct_dollar:,.0f}</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;">
+                        <span style="color:#94a3b8;font-size:12px;">{beta_benchmark} -10%</span>
+                        <span style="color:#ef4444;font-weight:800;font-size:14px;">-${beta_10pct_dollar:,.0f}</span>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with beta_col3:
+            # Per-position beta bar chart
+            if position_betas and not df.empty:
+                beta_rows = []
+                for _, row in df.iterrows():
+                    clean = clean_ticker_for_lookup(str(row["ticker"]))
+                    b = position_betas.get(clean, 1.0)
+                    beta_rows.append({
+                        "ticker": clean_ticker_for_lookup(str(row["ticker"])),
+                        "beta": b,
+                        "weight_pct": float(row["weight_pct"]),
+                        "weighted_beta": round(b * float(row["weight_pct"]) / 100.0, 4),
+                    })
+                beta_df = pd.DataFrame(beta_rows).sort_values("beta", ascending=True)
+                beta_df["color"] = beta_df["beta"].apply(
+                    lambda v: BRAND["green"] if v < 0.85 else (BRAND["yellow"] if v <= 1.25 else BRAND["red"])
+                )
+                fig_beta = go.Figure(go.Bar(
+                    x=beta_df["beta"],
+                    y=beta_df["ticker"],
+                    orientation="h",
+                    marker_color=beta_df["color"].tolist(),
+                    text=beta_df["beta"].map(lambda v: f"{v:.2f}β"),
+                    textposition="outside",
+                    cliponaxis=False,
+                    customdata=beta_df[["weight_pct", "weighted_beta"]].values,
+                    hovertemplate=(
+                        "<b>%{y}</b><br>"
+                        f"Beta vs {beta_benchmark}: %{{x:.2f}}<br>"
+                        "Position Weight: %{customdata[0]:.1f}%<br>"
+                        "Weighted Contribution: %{customdata[1]:.4f}<extra></extra>"
+                    ),
+                ))
+                fig_beta.add_vline(x=1.0, line_dash="dash", line_color="#475569", line_width=1.5)
+                style_figure(fig_beta, height=max(220, 26 * len(beta_df) + 60))
+                fig_beta.update_layout(
+                    margin=dict(l=10, r=40, t=24, b=10),
+                    xaxis=dict(title=f"Beta vs {beta_benchmark}", showgrid=True, gridcolor="#1e3a5f"),
+                    yaxis=dict(anchor="free", position=0.0),
+                    title=dict(text=f"Per-Position Beta vs {beta_benchmark}", font=dict(size=13)),
+                )
+                st.plotly_chart(fig_beta, use_container_width=True, theme=None)
+            else:
+                st.info("Beta data is loading. Ensure \"Fetch market regime\" is enabled and positions are loaded.")
+
+        st.markdown("---")
+        st.markdown("#### Greek Stress Simulator")
+
         # 1. Pull portfolio greeks and parameters
         net_delta = float(totals.get("total_delta", df["delta_exposure"].sum()) if "total_delta" in totals else df["delta_exposure"].sum())
         net_gamma = float(totals.get("total_gamma", df["gamma_exposure"].sum()) if "total_gamma" in totals else df["gamma_exposure"].sum())
         net_vega = float(totals.get("total_vega", df["vega_exposure"].sum()) if "total_vega" in totals else df["vega_exposure"].sum())
-        
-        # Calculate capital base
-        port_val = float(totals.get("total_market_value", 0.0))
-        gross_exp = max(float(df["notional_abs"].sum()), 1.0)
-        capital_base = port_val if port_val > 10.0 else gross_exp
-        
+
         # Get largest position weight and ticker
         largest_weight = 0.0
         largest_ticker = "Largest Position"
