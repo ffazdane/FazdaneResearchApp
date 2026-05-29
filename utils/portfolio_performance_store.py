@@ -749,8 +749,167 @@ def get_recent_portfolio_snapshots(limit: int = 20, db_path: Path = DB_PATH) -> 
         )
 
 
+
+
+
+def save_portfolio_log(
+    log_date: str,
+    category: str,
+    content: str,
+    log_id: str | None = None,
+    run_id: str | None = None,
+    image_data: bytes | None = None,
+    clear_image: bool = False,
+    snippet: str | None = None,
+    images_list: list[bytes] | None = None,
+    db_path: Path = DB_PATH,
+) -> str:
+    """Save a new portfolio log or update an existing one, triggering cloud backup."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    if not log_id:
+        log_id = f"log_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        is_new = True
+    else:
+        is_new = False
+        
+    now_ts = datetime.now().isoformat()
+    
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        if is_new:
+            conn.execute(
+                """
+                INSERT INTO pp_portfolio_logs (
+                    log_id, log_date, category, content, created_at, updated_at, run_id, image_data, snippet
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (log_id, log_date, category, content, now_ts, now_ts, run_id, image_data, snippet),
+            )
+        else:
+            if clear_image:
+                conn.execute(
+                    """
+                    UPDATE pp_portfolio_logs
+                    SET log_date = ?, category = ?, content = ?, updated_at = ?, run_id = ?, image_data = NULL, snippet = ?
+                    WHERE log_id = ?
+                    """,
+                    (log_date, category, content, now_ts, run_id, snippet, log_id),
+                )
+            elif image_data is not None:
+                conn.execute(
+                    """
+                    UPDATE pp_portfolio_logs
+                    SET log_date = ?, category = ?, content = ?, updated_at = ?, run_id = ?, image_data = ?, snippet = ?
+                    WHERE log_id = ?
+                    """,
+                    (log_date, category, content, now_ts, run_id, image_data, snippet, log_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE pp_portfolio_logs
+                    SET log_date = ?, category = ?, content = ?, updated_at = ?, run_id = ?, snippet = ?
+                    WHERE log_id = ?
+                    """,
+                    (log_date, category, content, now_ts, run_id, snippet, log_id),
+                )
+                
+        # Handle multiple images
+        if clear_image:
+            conn.execute("DELETE FROM pp_log_images WHERE log_id = ?", (log_id,))
+        elif images_list is not None:
+            # Clear legacy column to keep everything consistent
+            conn.execute("UPDATE pp_portfolio_logs SET image_data = NULL WHERE log_id = ?", (log_id,))
+            conn.execute("DELETE FROM pp_log_images WHERE log_id = ?", (log_id,))
+            for idx, img in enumerate(images_list):
+                img_id = f"img_{log_id}_{idx}_{uuid.uuid4().hex[:4]}"
+                conn.execute(
+                    """
+                    INSERT INTO pp_log_images (image_id, log_id, image_data, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (img_id, log_id, sqlite3.Binary(img), now_ts),
+                )
+            
+    # Sync database to cloud storage
+    try:
+        backup_database("portfolio_performance", reason=f"Log {'Save' if is_new else 'Update'}")
+    except Exception as e:
+        logger.warning(f"Cloud backup failed for portfolio_performance on log save: {e}")
+        
+    return log_id
+
+
+def delete_portfolio_log(log_id: str, db_path: Path = DB_PATH) -> None:
+    """Delete a portfolio log by ID, triggering cloud backup."""
+    if not db_path.exists():
+        return
+        
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        conn.execute("DELETE FROM pp_portfolio_logs WHERE log_id = ?", (log_id,))
+        conn.execute("DELETE FROM pp_log_images WHERE log_id = ?", (log_id,))
+        
+    # Sync database to cloud storage
+    try:
+        backup_database("portfolio_performance", reason="Log Delete")
+    except Exception as e:
+        logger.warning(f"Cloud backup failed for portfolio_performance on log delete: {e}")
+
+
+def get_portfolio_log_images(db_path: Path = DB_PATH) -> dict[str, list[bytes]]:
+    """Retrieve all log images grouped by log_id."""
+    if not db_path.exists():
+        return {}
+        
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        cursor = conn.cursor()
+        cursor.execute("SELECT log_id, image_data FROM pp_log_images ORDER BY created_at ASC")
+        rows = cursor.fetchall()
+        
+    res = {}
+    for log_id, image_bytes in rows:
+        if log_id not in res:
+            res[log_id] = []
+        res[log_id].append(image_bytes)
+    return res
+
+
+def get_portfolio_logs(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    db_path: Path = DB_PATH,
+) -> pd.DataFrame:
+    """Retrieve portfolio logs within optional date range (YYYY-MM-DD)."""
+    if not db_path.exists():
+        return pd.DataFrame()
+        
+    query = "SELECT log_id, log_date, category, content, created_at, updated_at, run_id, image_data, snippet FROM pp_portfolio_logs"
+    params = []
+    
+    conditions = []
+    if start_date:
+        conditions.append("date(log_date) >= date(?)")
+        params.append(start_date)
+    if end_date:
+        conditions.append("date(log_date) <= date(?)")
+        params.append(end_date)
+        
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+        
+    query += " ORDER BY log_date DESC, created_at DESC"
+    
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        return pd.read_sql_query(query, conn, params=params)
+
+
 def get_portfolio_history(days: int = 90, db_path: Path = DB_PATH) -> pd.DataFrame:
     """Return one saved total row per snapshot for progress analysis."""
+
     if not db_path.exists():
         return pd.DataFrame()
 
@@ -1239,10 +1398,38 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             ON pp_position_details(run_id);
         CREATE INDEX IF NOT EXISTS idx_pp_details_underlying
             ON pp_position_details(snapshot_date, underlying, row_type);
+
+        CREATE TABLE IF NOT EXISTS pp_portfolio_logs (
+            log_id TEXT PRIMARY KEY,
+            log_date TEXT NOT NULL,
+            category TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            run_id TEXT,
+            image_data BLOB,
+            snippet TEXT,
+            FOREIGN KEY (run_id) REFERENCES pp_runs(run_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pp_logs_date ON pp_portfolio_logs(log_date);
+        CREATE INDEX IF NOT EXISTS idx_pp_logs_run_id ON pp_portfolio_logs(run_id);
+
+        CREATE TABLE IF NOT EXISTS pp_log_images (
+            image_id TEXT PRIMARY KEY,
+            log_id TEXT NOT NULL,
+            image_data BLOB NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (log_id) REFERENCES pp_portfolio_logs(log_id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pp_log_images_log_id ON pp_log_images(log_id);
         """
     )
     _ensure_column(conn, "pp_position_snapshots", "gamma", "REAL")
     _ensure_column(conn, "pp_position_snapshots", "vega", "REAL")
+    _ensure_column(conn, "pp_portfolio_logs", "image_data", "BLOB")
+    _ensure_column(conn, "pp_portfolio_logs", "snippet", "TEXT")
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:

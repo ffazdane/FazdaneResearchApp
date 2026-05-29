@@ -31,6 +31,10 @@ from utils.portfolio_performance_store import (
     get_broker_dot,
     format_ticker_for_display,
     classify_option_strategy,
+    save_portfolio_log,
+    delete_portfolio_log,
+    get_portfolio_logs,
+    get_portfolio_log_images,
 )
 
 
@@ -676,6 +680,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 "Profit Taking",
                 "Capital Redeployment",
                 "AI Portfolio Manager",
+                "Portfolio Logs",
             ]
         )
         with tabs[0]:
@@ -694,6 +699,313 @@ class PortfolioRiskManagementModule(FazDaneModule):
             self._render_redeployment(enriched)
         with tabs[7]:
             self._render_ai_manager(enriched, totals, regime, heat, commentary, metadata)
+        with tabs[8]:
+            self._render_logs_tab(metadata)
+
+    def _render_logs_tab(self, metadata: dict):
+        st.markdown("### Portfolio Daily Logs")
+        
+        import base64
+        from st_img_pastebutton import paste
+        
+        # Load logs from DB
+        logs_df = get_portfolio_logs()
+        
+        # Handle edit state loading
+        edit_id = st.session_state.get("prm_edit_log_id")
+        log_to_edit = None
+        if edit_id and not logs_df.empty:
+            matching = logs_df[logs_df["log_id"] == edit_id]
+            if not matching.empty:
+                log_to_edit = matching.iloc[0]
+                
+        # Initialize the current images list in session state
+        if "prm_current_images" not in st.session_state or st.session_state.get("prm_loaded_edit_id") != edit_id:
+            st.session_state["prm_loaded_edit_id"] = edit_id
+            if edit_id and not logs_df.empty and log_to_edit is not None:
+                images = []
+                if "image_data" in log_to_edit and log_to_edit["image_data"] is not None:
+                    if isinstance(log_to_edit["image_data"], bytes) and len(log_to_edit["image_data"]) > 0:
+                        images.append(log_to_edit["image_data"])
+                try:
+                    db_images = get_portfolio_log_images().get(edit_id, [])
+                    images.extend(db_images)
+                except Exception:
+                    pass
+                st.session_state["prm_current_images"] = images
+            else:
+                st.session_state["prm_current_images"] = []
+        
+        # 1. Input Form
+        form_title = "✍️ Edit Portfolio Log Entry" if log_to_edit is not None else "✍️ Add Daily Portfolio Log Entry"
+        with st.container(border=True):
+            st.markdown(f"**{form_title}**")
+            
+            # Default values
+            if log_to_edit is not None:
+                default_date = datetime.strptime(log_to_edit["log_date"], "%Y-%m-%d")
+                default_category = log_to_edit["category"]
+                default_content = log_to_edit["content"]
+                default_snippet = log_to_edit["snippet"] if "snippet" in log_to_edit and log_to_edit["snippet"] is not None else ""
+            else:
+                active_date_str = metadata.get("snapshot_date")
+                if active_date_str:
+                    try:
+                        default_date = datetime.strptime(active_date_str, "%Y-%m-%d")
+                    except Exception:
+                        default_date = datetime.today()
+                else:
+                    default_date = datetime.today()
+                default_category = "What Happened"
+                default_content = ""
+                default_snippet = ""
+                
+            col_date, col_cat = st.columns(2)
+            with col_date:
+                log_date = st.date_input("Target Log Date", value=default_date, key="prm_log_date_input")
+            with col_cat:
+                categories = ["What Happened", "What Can Improve", "Market Context", "Action Items", "General Notes"]
+                cat_idx = categories.index(default_category) if default_category in categories else 0
+                category = st.selectbox("Log Category", options=categories, index=cat_idx, key="prm_log_category_input")
+                
+            content = st.text_area("What's on your mind? (Supports Markdown)", value=default_content, height=120, key="prm_log_content_input")
+            snippet = st.text_area("Code/Data Snippet (Optional, e.g. terminal output, JSON, trade detail)", value=default_snippet, height=100, key="prm_log_snippet_input")
+            
+            # Use dynamic keys for uploader/paste to allow resetting
+            paste_counter = st.session_state.get("prm_paste_counter", 0)
+            uploaded_image = st.file_uploader("Upload Screenshot File (PNG, JPG, JPEG)", type=["png", "jpg", "jpeg"], key=f"prm_log_image_upload_{paste_counter}")
+            
+            st.markdown("<p style='font-size:13px;color:#94a3b8;margin-bottom:4px;'>Or paste screenshot directly from clipboard:</p>", unsafe_allow_html=True)
+            pasted_image_data = paste(label="📋 Click to Paste Clipboard Image", key=f"prm_log_image_paste_{paste_counter}")
+            
+            # Check if new image uploaded
+            if uploaded_image is not None:
+                image_bytes = uploaded_image.read()
+                st.session_state["prm_current_images"].append(image_bytes)
+                st.session_state["prm_paste_counter"] = paste_counter + 1
+                st.rerun()
+                
+            # Check if new image pasted
+            if pasted_image_data is not None:
+                try:
+                    header, encoded = pasted_image_data.split(",", 1)
+                    image_bytes = base64.b64decode(encoded)
+                    st.session_state["prm_current_images"].append(image_bytes)
+                    st.session_state["prm_paste_counter"] = paste_counter + 1
+                    st.rerun()
+                except Exception:
+                    pass
+            
+            # Display attached screenshots
+            current_images = st.session_state.get("prm_current_images", [])
+            if current_images:
+                st.markdown("<p style='font-size:14px;font-weight:bold;margin-top:10px;margin-bottom:6px;'>Attached Screenshots:</p>", unsafe_allow_html=True)
+                for idx, img_bytes in enumerate(current_images):
+                    col_img, col_act = st.columns([5, 1])
+                    with col_img:
+                        st.image(img_bytes, caption=f"Screenshot #{idx + 1}", width=250)
+                    with col_act:
+                        st.markdown("<div style='height:25px;'></div>", unsafe_allow_html=True)
+                        if st.button("🗑️ Remove", key=f"prm_remove_img_{idx}"):
+                            st.session_state["prm_current_images"].pop(idx)
+                            st.rerun()
+            
+            sub_col1, sub_col2 = st.columns([1, 6])
+            with sub_col1:
+                submit_button = st.button("Save Log Entry", type="primary", key="prm_save_log_btn")
+            with sub_col2:
+                if log_to_edit is not None:
+                    cancel_button = st.button("Cancel Edit", key="prm_cancel_edit_btn")
+                    if cancel_button:
+                        st.session_state.pop("prm_edit_log_id", None)
+                        st.session_state.pop("prm_loaded_edit_id", None)
+                        st.session_state.pop("prm_current_images", None)
+                        st.session_state["prm_paste_counter"] = paste_counter + 1
+                        st.rerun()
+                        
+            if submit_button:
+                if not content.strip():
+                    st.error("Log content cannot be empty.")
+                else:
+                    log_date_str = log_date.strftime("%Y-%m-%d")
+                    run_id = metadata.get("run_id") if log_to_edit is None else log_to_edit["run_id"]
+                    
+                    save_portfolio_log(
+                        log_date=log_date_str,
+                        category=category,
+                        content=content,
+                        log_id=edit_id,
+                        run_id=run_id,
+                        image_data=None,
+                        clear_image=False,
+                        snippet=snippet if snippet.strip() else None,
+                        images_list=current_images,
+                    )
+                    st.session_state.pop("prm_edit_log_id", None)
+                    st.session_state.pop("prm_loaded_edit_id", None)
+                    st.session_state.pop("prm_current_images", None)
+                    st.session_state["prm_paste_counter"] = paste_counter + 1
+                    st.success("Portfolio log saved successfully!")
+                    st.rerun()
+
+        # 2. Insights counters
+        if not logs_df.empty:
+            total_logs = len(logs_df)
+            improvements = len(logs_df[logs_df["category"] == "What Can Improve"])
+            happened = len(logs_df[logs_df["category"] == "What Happened"])
+            
+            try:
+                current_month_str = datetime.today().strftime("%Y-%m")
+                logs_this_month = len(logs_df[logs_df["log_date"].str.startswith(current_month_str)])
+            except Exception:
+                logs_this_month = 0
+                
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Total Logs", f"{total_logs}")
+            c2.metric("What Happened", f"{happened}")
+            c3.metric("What Can Improve", f"{improvements}", delta="Opportunities" if improvements > 0 else None, delta_color="normal")
+            c4.metric("Logs This Month", f"{logs_this_month}")
+            
+        st.markdown("---")
+        
+        # 3. Filtering & View
+        st.markdown("### Log Timeline & Reporting")
+        
+        if logs_df.empty:
+            st.info("No logs saved yet. Add a log entry above to populate your timeline!")
+            return
+        
+        # Get all images for logs timeline
+        all_images_dict = {}
+        try:
+            all_images_dict = get_portfolio_log_images()
+        except Exception:
+            pass
+            
+        col_search, col_filter = st.columns([2, 1])
+        with col_search:
+            search_query = st.text_input("🔍 Search logs...", placeholder="Type to search...", key="prm_logs_search")
+        with col_filter:
+            cat_filter = st.multiselect("Filter by Category", options=["What Happened", "What Can Improve", "Market Context", "Action Items", "General Notes"], key="prm_logs_cat_filter")
+            
+        view_period = st.radio("Group/Report logs by:", ["Day", "Week", "Month", "Year"], horizontal=True, key="prm_logs_period")
+        
+        # Apply search and category filters
+        filtered_df = logs_df.copy()
+        if search_query:
+            filtered_df = filtered_df[
+                filtered_df["content"].str.contains(search_query, case=False) |
+                filtered_df["category"].str.contains(search_query, case=False)
+            ]
+        if cat_filter:
+            filtered_df = filtered_df[filtered_df["category"].isin(cat_filter)]
+            
+        if filtered_df.empty:
+            st.warning("No logs match the current search or filter criteria.")
+            return
+
+        filtered_df["log_date_dt"] = pd.to_datetime(filtered_df["log_date"])
+        
+        cat_styles = {
+            "What Happened": ("#3ab54a", "rgba(58, 181, 74, 0.12)"),
+            "What Can Improve": ("#ef4444", "rgba(239, 68, 68, 0.12)"),
+            "Market Context": ("#facc15", "rgba(250, 204, 21, 0.12)"),
+            "Action Items": ("#a78bfa", "rgba(167, 139, 250, 0.12)"),
+            "General Notes": ("#93c5fd", "rgba(147, 197, 253, 0.12)"),
+        }
+        
+        if view_period == "Day":
+            grouped = filtered_df.groupby("log_date", sort=False)
+            for date_str, group in grouped:
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                st.markdown(f"#### 📅 {dt.strftime('%A, %B %d, %Y')}")
+                for _, row in group.iterrows():
+                    self._render_log_item_card(row, cat_styles, all_images_dict=all_images_dict)
+                    
+        elif view_period == "Week":
+            filtered_df["week_start"] = filtered_df["log_date_dt"].dt.to_period("W").dt.start_time
+            grouped = filtered_df.groupby("week_start", sort=False)
+            for week_start, group in grouped:
+                week_end = week_start + pd.Timedelta(days=6)
+                st.markdown(f"#### 🗓️ Week of {week_start.strftime('%B %d, %Y')} to {week_end.strftime('%B %d, %Y')}")
+                for _, row in group.iterrows():
+                    self._render_log_item_card(row, cat_styles, show_date=True, all_images_dict=all_images_dict)
+                    
+        elif view_period == "Month":
+            filtered_df["year_month"] = filtered_df["log_date_dt"].dt.to_period("M")
+            grouped = filtered_df.groupby("year_month", sort=False)
+            for month_period, group in grouped:
+                st.markdown(f"#### 📅 {month_period.start_time.strftime('%B %Y')}")
+                for _, row in group.iterrows():
+                    self._render_log_item_card(row, cat_styles, show_date=True, all_images_dict=all_images_dict)
+                    
+        elif view_period == "Year":
+            filtered_df["year"] = filtered_df["log_date_dt"].dt.to_period("Y")
+            grouped = filtered_df.groupby("year", sort=False)
+            for year_period, group in grouped:
+                st.markdown(f"#### 🗓️ Year {year_period.start_time.strftime('%Y')}")
+                for _, row in group.iterrows():
+                    self._render_log_item_card(row, cat_styles, show_date=True, all_images_dict=all_images_dict)
+
+    def _render_log_item_card(self, row: pd.Series, cat_styles: dict, show_date: bool = False, all_images_dict: dict | None = None):
+        cat = row["category"]
+        color, bg = cat_styles.get(cat, ("#e2e8f0", "rgba(226, 232, 240, 0.15)"))
+        
+        date_badge = f"<span style='background-color:#1e3a5f;color:#e2e8f0;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-right:8px;'>{row['log_date']}</span>" if show_date else ""
+        run_badge = f"<span style='background-color:#1e3a5f;color:#94a3b8;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-right:8px;'>Run: {row['run_id']}</span>" if row["run_id"] else ""
+        
+        st.markdown(
+            f"""<div style="background-color:#152847; border:1px solid #1e3a5f; border-left:4px solid {color}; border-radius:8px; padding:12px 16px; margin-bottom:10px;">
+<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:6px;">
+<div>
+{date_badge}
+<span style="background-color:{bg}; color:{color}; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:700; border:1px solid {color};">
+{cat.upper()}
+</span>
+{run_badge}
+</div>
+<span style="color:#94a3b8; font-size:11px;">Updated: {row['updated_at'][:16].replace('T', ' ')}</span>
+</div>
+<div style="color:#e2e8f0; font-size:13.5px; line-height:1.6; white-space:pre-wrap; margin-bottom:10px;">{row['content']}</div>
+</div>""",
+            unsafe_allow_html=True,
+        )
+        
+        # Render legacy + multiple images
+        log_images = []
+        if "image_data" in row and row["image_data"] is not None:
+            if isinstance(row["image_data"], bytes) and len(row["image_data"]) > 0:
+                log_images.append(row["image_data"])
+                
+        if all_images_dict is not None:
+            db_images = all_images_dict.get(row["log_id"], [])
+        else:
+            try:
+                db_images = get_portfolio_log_images().get(row["log_id"], [])
+            except Exception:
+                db_images = []
+        log_images.extend(db_images)
+        
+        for img in log_images:
+            st.image(img, use_container_width=True)
+            st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
+            
+        # Check if there is snippet data and render it
+        if "snippet" in row and row["snippet"] is not None and str(row["snippet"]).strip() != "":
+            st.code(row["snippet"])
+            st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
+        
+        col_btn1, col_btn2, _ = st.columns([1, 1, 15])
+        with col_btn1:
+            if st.button("Edit", key=f"prm_edit_btn_{row['log_id']}"):
+                st.session_state["prm_edit_log_id"] = row["log_id"]
+                st.rerun()
+        with col_btn2:
+            if st.button("Delete", key=f"prm_delete_btn_{row['log_id']}"):
+                delete_portfolio_log(row["log_id"])
+                st.success("Log entry deleted.")
+                st.rerun()
+
 
     def _load_active_snapshot(self) -> tuple[pd.DataFrame, pd.DataFrame, dict, str]:
         positions, details, metadata, label = pd.DataFrame(), pd.DataFrame(), {}, "No snapshot"
