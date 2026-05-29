@@ -675,6 +675,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 "Executive Command Center",
                 "Position Analyzer",
                 "Greeks Command Center",
+                "What-If Simulator",
                 "Correlation Risk",
                 "Theta Decay",
                 "Profit Taking",
@@ -690,16 +691,18 @@ class PortfolioRiskManagementModule(FazDaneModule):
         with tabs[2]:
             self._render_greeks(enriched, totals, regime, heat)
         with tabs[3]:
-            self._render_correlation(enriched)
+            self._render_what_if_tab(enriched, totals)
         with tabs[4]:
-            self._render_theta(enriched)
+            self._render_correlation(enriched)
         with tabs[5]:
-            self._render_profit_taking(enriched)
+            self._render_theta(enriched)
         with tabs[6]:
-            self._render_redeployment(enriched)
+            self._render_profit_taking(enriched)
         with tabs[7]:
-            self._render_ai_manager(enriched, totals, regime, heat, commentary, metadata)
+            self._render_redeployment(enriched)
         with tabs[8]:
+            self._render_ai_manager(enriched, totals, regime, heat, commentary, metadata)
+        with tabs[9]:
             self._render_logs_tab(metadata)
 
     def _render_logs_tab(self, metadata: dict):
@@ -1719,7 +1722,25 @@ class PortfolioRiskManagementModule(FazDaneModule):
             st.markdown(f"**{index}. {item}**")
 
     def _render_what_if_panel(self, df: pd.DataFrame, totals: dict[str, float]):
-        st.markdown("### What-If Stress Simulator")
+        st.markdown("### Stress Test Scenarios")
+        gross = max(float(df["notional_abs"].sum()), 1.0)
+        delta = float(df["delta_exposure"].sum())
+        gamma = float(df["gamma_exposure"].abs().sum())
+        vega = float(df["vega_exposure"].sum())
+        scenarios = pd.DataFrame(
+            [
+                {"Scenario": "SPY -2%", "Portfolio Impact": -(abs(delta) * 2 + gamma * 0.8) / gross * 100},
+                {"Scenario": "VIX +15%", "Portfolio Impact": (vega * 0.15) / gross * 100},
+                {"Scenario": "Largest Name -5%", "Portfolio Impact": -float(df["weight_pct"].max()) * 0.05},
+                {"Scenario": "IV Crush", "Portfolio Impact": -(abs(vega) * 0.12) / gross * 100},
+            ]
+        )
+        scenarios["Impact"] = scenarios["Portfolio Impact"].map(lambda value: _fmt_pct(value, signed=True))
+        st.dataframe(scenarios[["Scenario", "Impact"]], use_container_width=True, hide_index=True)
+        st.markdown("<p style='font-size:11.5px;color:#94a3b8;margin-top:-4px;'>For dynamic shocks, interactive curve simulations, and proactive hedging playbooks, visit the dedicated <b>What-If Simulator</b> tab.</p>", unsafe_allow_html=True)
+
+    def _render_what_if_tab(self, df: pd.DataFrame, totals: dict[str, float]):
+        st.markdown("### Interactive Stress Simulator")
         
         # 1. Pull portfolio greeks and parameters
         net_delta = float(totals.get("total_delta", df["delta_exposure"].sum()) if "total_delta" in totals else df["delta_exposure"].sum())
@@ -1739,10 +1760,8 @@ class PortfolioRiskManagementModule(FazDaneModule):
             largest_weight = float(largest_row["weight_pct"])
             largest_ticker = str(largest_row["ticker"])
             
-        # 2. Interactive Simulator Controls
-        st.markdown("<p style='font-size:13px;color:#94a3b8;margin-bottom:8px;'>Simulate shocks to model portfolio P/L and protect your profits proactively:</p>", unsafe_allow_html=True)
-        
-        col_ctrl1, col_ctrl2 = st.columns(2)
+        # 2. Controls Row
+        col_ctrl1, col_ctrl2, col_ctrl3 = st.columns(3)
         with col_ctrl1:
             spy_shock = st.slider(
                 "SPY Index Move (%)",
@@ -1750,7 +1769,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 max_value=15.0,
                 value=-2.0,
                 step=0.5,
-                key="whatif_spy_shock_slider"
+                key="tab_whatif_spy_shock"
             )
         with col_ctrl2:
             vix_shock = st.slider(
@@ -1759,19 +1778,19 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 max_value=100.0,
                 value=15.0,
                 step=5.0,
-                key="whatif_vix_shock_slider"
+                key="tab_whatif_vix_shock"
+            )
+        with col_ctrl3:
+            name_shock = st.slider(
+                f"{largest_ticker} Move (%)",
+                min_value=-25.0,
+                max_value=10.0,
+                value=-5.0,
+                step=1.0,
+                key="tab_whatif_name_shock"
             )
             
-        name_shock = st.slider(
-            f"{largest_ticker} Move (%)",
-            min_value=-25.0,
-            max_value=10.0,
-            value=-5.0,
-            step=1.0,
-            key="whatif_name_shock_slider"
-        )
-        
-        # 3. Perform Stress Calculations
+        # 3. Calculations
         delta_impact_val = net_delta * spy_shock
         gamma_impact_val = 0.2 * net_gamma * (spy_shock ** 2)
         vega_impact_val = net_vega * (vix_shock / 100.0)
@@ -1781,26 +1800,25 @@ class PortfolioRiskManagementModule(FazDaneModule):
         total_impact_val = delta_impact_val + gamma_impact_val + vega_impact_val + name_impact_val
         total_impact_pct = (total_impact_val / capital_base) * 100.0
         
-        # 4. Display Results
-        st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+        # 4. Results Columns
+        col_res1, col_res2 = st.columns([1.0, 1.25])
         
-        # Combined Impact Card
-        status_color = BRAND["green"] if total_impact_val >= 0 else BRAND["red"]
-        sign_char = "+" if total_impact_val >= 0 else ""
-        st.markdown(
-            f"""
-            <div style="background-color:#152847; border:1px solid #1e3a5f; border-left:4px solid {status_color}; border-radius:8px; padding:12px 16px; margin-bottom:12px; text-align:center;">
-                <div style="color:#94a3b8; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Estimated Combined Stress Impact</div>
-                <div style="color:#e2e8f0; font-size:24px; font-weight:800; margin-top:4px;">{sign_char}${total_impact_val:,.2f}</div>
-                <div style="color:{status_color}; font-size:14px; font-weight:700; margin-top:2px;">{total_impact_pct:+.2f}% of Capital Base</div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        
-        # Individual Greek Breakdown Metrics
-        c_m1, c_m2 = st.columns(2)
-        with c_m1:
+        with col_res1:
+            # Combined Impact Card
+            status_color = BRAND["green"] if total_impact_val >= 0 else BRAND["red"]
+            sign_char = "+" if total_impact_val >= 0 else ""
+            st.markdown(
+                f"""
+                <div style="background-color:#152847; border:1px solid #1e3a5f; border-left:4px solid {status_color}; border-radius:8px; padding:16px; margin-bottom:16px; text-align:center;">
+                    <div style="color:#94a3b8; font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Estimated Combined Stress Impact</div>
+                    <div style="color:#e2e8f0; font-size:32px; font-weight:800; margin-top:6px;">{sign_char}${total_impact_val:,.2f}</div>
+                    <div style="color:{status_color}; font-size:16px; font-weight:700; margin-top:4px;">{total_impact_pct:+.2f}% of Capital Base</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            
+            # Individual metrics
             st.metric(
                 "Delta Directional Shift",
                 f"${delta_impact_val:+,.2f}",
@@ -1808,16 +1826,15 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 delta_color="normal"
             )
             st.metric(
-                "Vega Volatility Shift",
-                f"${vega_impact_val:+,.2f}",
-                delta=f"{(vega_impact_val/capital_base)*100:+.2f}%",
-                delta_color="normal"
-            )
-        with c_m2:
-            st.metric(
                 "Gamma Convexity Shift",
                 f"${gamma_impact_val:+,.2f}",
                 delta=f"{(gamma_impact_val/capital_base)*100:+.2f}%",
+                delta_color="normal"
+            )
+            st.metric(
+                "Vega Volatility Shift",
+                f"${vega_impact_val:+,.2f}",
+                delta=f"{(vega_impact_val/capital_base)*100:+.2f}%",
                 delta_color="normal"
             )
             st.metric(
@@ -1827,88 +1844,87 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 delta_color="normal"
             )
             
-        # 5. Plotly Stress Test Curve
-        st.markdown("<p style='font-size:12px;color:#94a3b8;margin-top:10px;margin-bottom:4px;font-weight:600;'>Simulated P/L vs. SPY Shift (%)</p>", unsafe_allow_html=True)
-        
-        x_range = np.linspace(-15.0, 15.0, 100)
-        y_range = (net_delta * x_range) + (0.2 * net_gamma * (x_range ** 2)) + vega_impact_val + name_impact_val
-        
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=x_range,
-            y=y_range,
-            mode='lines',
-            line=dict(color=BRAND["blue"], width=2.5),
-            name="Stress Curve",
-            hovertemplate="SPY Shift: %{x:.1f}%<br>Simulated P/L: $%{y:,.2f}<extra></extra>"
-        ))
-        
-        # Add marker at current slider value
-        fig.add_trace(go.Scatter(
-            x=[spy_shock],
-            y=[total_impact_val],
-            mode='markers',
-            marker=dict(color=status_color, size=10, line=dict(color='#ffffff', width=1.5)),
-            name="Current Shift",
-            hovertemplate="Current Shock: %{x:.1f}%<br>Simulated P/L: $%{y:,.2f}<extra></extra>"
-        ))
-        
-        fig.add_hline(y=0.0, line_dash="dash", line_color="#475569", line_width=1.0)
-        fig.add_vline(x=spy_shock, line_dash="dot", line_color="#94a3b8", line_width=1.0)
-        
-        style_figure(fig, height=180)
-        fig.update_layout(
-            margin=dict(l=10, r=10, t=5, b=5),
-            showlegend=False,
-            xaxis=dict(ticksuffix="%", showgrid=True, gridcolor="#1e3a5f"),
-            yaxis=dict(tickprefix="$", showgrid=True, gridcolor="#1e3a5f")
-        )
-        st.plotly_chart(fig, use_container_width=True, theme=None)
-        
-        # 6. Proactive Protection Advisory
-        st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
-        with st.expander("🛡️ Proactive Profit Protection Advisory", expanded=total_impact_val < 0):
-            if total_impact_val >= 0:
-                st.success("👍 **Constructive Stress Profile**: Simulated parameters show a positive or neutral net return. Continue monitoring your Greek concentrations.")
-            else:
-                st.warning("⚠️ **Profit Risk Warning**: Stress simulation models a negative portfolio return. See suggested protective adjustments below.")
-                
-            # Delta hedge advice
-            if delta_impact_val < -100:
-                st.markdown(
-                    f"**Directional Risk**: Your long delta is vulnerable to market declines. To protect profits:\n"
-                    f"*   Buy out-of-the-money SPY put options to establish a portfolio floor.\n"
-                    f"*   Sell call options / call spreads against current stock positions (covered calls) to accumulate credit protection."
-                )
-            elif delta_impact_val > 100:
-                st.markdown(
-                    f"**Upside Directional Risk**: Your short delta posture will lose on a sharp rally. To hedge:\n"
-                    f"*   Purchase SPY call spreads or buy back short calls to cap upside risk."
-                )
-                
-            # Gamma hedge advice
-            if gamma_impact_val < -50:
-                st.markdown(
-                    f"**Convexity Danger (Short Gamma)**: Negative Gamma accelerates losses during large moves. To protect profits:\n"
-                    f"*   Convert naked short options to defined-risk vertical spreads (e.g. Iron Condors, credit spreads) to cap negative gamma acceleration.\n"
-                    f"*   Buy long options (calls/puts) to introduce positive gamma."
-                )
-                
-            # Vega hedge advice
-            if vega_impact_val < -50:
-                st.markdown(
-                    f"**Volatility Danger (Short Vega)**: Volatility expansion will hurt your short options. To protect profits:\n"
-                    f"*   Buy VIX call options or back-spreads to profit from volatility spikes.\n"
-                    f"*   Structure calendar spreads (buy back-month, sell front-month) to maintain positive net vega."
-                )
-                
-            # Idiosyncratic advice
-            if name_impact_val < -50:
-                st.markdown(
-                    f"**Concentration Danger ({largest_ticker})**: Your largest single-name position accounts for a large portion of risk. To protect profits:\n"
-                    f"*   Trim {largest_ticker} exposure below 20.00% weight.\n"
-                    f"*   Purchase a protective collar (buy put, sell call) on {largest_ticker} to lock in paper profits without trigger-selling the shares."
-                )
+        with col_res2:
+            st.markdown("<p style='font-size:13px;color:#94a3b8;margin-bottom:6px;font-weight:600;'>Simulated P/L vs. SPY Shift (%)</p>", unsafe_allow_html=True)
+            
+            # Draw curve
+            x_range = np.linspace(-15.0, 15.0, 100)
+            y_range = (net_delta * x_range) + (0.2 * net_gamma * (x_range ** 2)) + vega_impact_val + name_impact_val
+            
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=x_range,
+                y=y_range,
+                mode='lines',
+                line=dict(color=BRAND["blue"], width=3.0),
+                name="Stress Curve",
+                hovertemplate="SPY Shift: %{x:.1f}%<br>Simulated P/L: $%{y:,.2f}<extra></extra>"
+            ))
+            
+            fig.add_trace(go.Scatter(
+                x=[spy_shock],
+                y=[total_impact_val],
+                mode='markers',
+                marker=dict(color=status_color, size=12, line=dict(color='#ffffff', width=2.0)),
+                name="Current Shift",
+                hovertemplate="Current Shock: %{x:.1f}%<br>Simulated P/L: $%{y:,.2f}<extra></extra>"
+            ))
+            
+            fig.add_hline(y=0.0, line_dash="dash", line_color="#475569", line_width=1.0)
+            fig.add_vline(x=spy_shock, line_dash="dot", line_color="#94a3b8", line_width=1.0)
+            
+            style_figure(fig, height=270)
+            fig.update_layout(
+                margin=dict(l=10, r=10, t=5, b=5),
+                showlegend=False,
+                xaxis=dict(ticksuffix="%", showgrid=True, gridcolor="#1e3a5f"),
+                yaxis=dict(tickprefix="$", showgrid=True, gridcolor="#1e3a5f")
+            )
+            st.plotly_chart(fig, use_container_width=True, theme=None)
+            
+            # Advisory box
+            with st.expander("🛡️ Proactive Profit Protection Advisory", expanded=True):
+                if total_impact_val >= 0:
+                    st.success("👍 **Constructive Stress Profile**: Simulated parameters show a positive or neutral net return. Continue monitoring your Greek concentrations.")
+                else:
+                    st.warning("⚠️ **Profit Risk Warning**: Stress simulation models a negative portfolio return. See suggested protective adjustments below.")
+                    
+                # Delta hedge advice
+                if delta_impact_val < -100:
+                    st.markdown(
+                        f"**Directional Risk**: Your long delta is vulnerable to market declines. To protect profits:\n"
+                        f"*   Buy out-of-the-money SPY put options to establish a portfolio floor.\n"
+                        f"*   Sell call options / call spreads against current stock positions (covered calls) to accumulate credit protection."
+                    )
+                elif delta_impact_val > 100:
+                    st.markdown(
+                        f"**Upside Directional Risk**: Your short delta posture will lose on a sharp rally. To hedge:\n"
+                        f"*   Purchase SPY call spreads or buy back short calls to cap upside risk."
+                    )
+                    
+                # Gamma hedge advice
+                if gamma_impact_val < -50:
+                    st.markdown(
+                        f"**Convexity Danger (Short Gamma)**: Negative Gamma accelerates losses during large moves. To protect profits:\n"
+                        f"*   Convert naked short options to defined-risk vertical spreads (e.g. Iron Condors, credit spreads) to cap negative gamma acceleration.\n"
+                        f"*   Buy long options (calls/puts) to introduce positive gamma."
+                    )
+                    
+                # Vega hedge advice
+                if vega_impact_val < -50:
+                    st.markdown(
+                        f"**Volatility Danger (Short Vega)**: Volatility expansion will hurt your short options. To protect profits:\n"
+                        f"*   Buy VIX call options or back-spreads to profit from volatility spikes.\n"
+                        f"*   Structure calendar spreads (buy back-month, sell front-month) to maintain positive net vega."
+                    )
+                    
+                # Idiosyncratic advice
+                if name_impact_val < -50:
+                    st.markdown(
+                        f"**Concentration Danger ({largest_ticker})**: Your largest single-name position accounts for a large portion of risk. To protect profits:\n"
+                        f"*   Trim {largest_ticker} exposure below 20.00% weight.\n"
+                        f"*   Purchase a protective collar (buy put, sell call) on {largest_ticker} to lock in paper profits without trigger-selling the shares."
+                    )
 
     def _render_behavior_metrics(self, df: pd.DataFrame, totals: dict[str, float]):
         st.markdown("### Portfolio Behavior")
