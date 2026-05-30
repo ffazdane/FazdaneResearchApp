@@ -98,11 +98,23 @@ def fetch_regime_snapshot() -> dict[str, float | str]:
         vix_percentile = float((vix.rank(pct=True).iloc[-1]) * 100)
         breadth_score = float(np.clip(50 + spy_trend * 6 + qqq_trend * 4, 0, 100))
         volatility_score = float(np.clip(vix_percentile, 0, 100))
+        
+        # Skewness of SPY daily returns
+        spy_returns = spy.pct_change().dropna()
+        spy_skew = float(spy_returns.skew())
+        if spy_skew < -0.15:
+            skew_label = "Negative Skew (Fat Left Tail / Downside Risk Heavy)"
+        elif spy_skew > 0.15:
+            skew_label = "Positive Skew (Fat Right Tail / Upside Momentum Heavy)"
+        else:
+            skew_label = "Symmetrical / Neutral Skew"
     except Exception:
         vix_last = 18.0
         breadth_score = 58.0
         volatility_score = 45.0
         spy_trend = 0.8
+        spy_skew = -0.45
+        skew_label = "Negative Skew (Fat Left Tail / Downside Risk Heavy)"
 
     if breadth_score >= 65 and volatility_score < 70:
         regime = "Moderate Bullish Risk-On"
@@ -125,6 +137,8 @@ def fetch_regime_snapshot() -> dict[str, float | str]:
         "volatility_score": volatility_score,
         "spy_trend": spy_trend,
         "gamma_flip": "Above Spot" if breadth_score >= 55 else "Below Spot",
+        "spy_skew": spy_skew,
+        "skew_label": skew_label,
     }
 
 
@@ -2379,9 +2393,56 @@ class PortfolioRiskManagementModule(FazDaneModule):
         else:
             port_by_scenario = pd.DataFrame()
 
-        # ── Sub-panel 2: Portfolio P/L by SPY Scenario ───────────────────────
         st.markdown("#### Portfolio P/L by SPY Scenario")
         if not port_by_scenario.empty:
+            # Calculate standard deviation for next 20 calendar days from VIX
+            vix_val = 16.0
+            if regime is not None and "vix" in regime:
+                try:
+                    vix_val = float(regime["vix"])
+                except Exception:
+                    pass
+            if vix_val <= 0:
+                vix_val = 16.0
+                
+            import math
+            one_std = vix_val * math.sqrt(20.0 / 365.0)
+
+            # Retrieve dynamic skewness from regime
+            spy_skew = -0.45
+            skew_label = "Negative Skew (Fat Left Tail / Downside Risk Heavy)"
+            if regime is not None and "spy_skew" in regime:
+                try:
+                    spy_skew = float(regime.get("spy_skew", -0.45))
+                    skew_label = str(regime.get("skew_label", skew_label))
+                except Exception:
+                    pass
+
+            # Calculate probability and standard deviation move for each scenario
+            def _calc_prob_and_sigma(row):
+                move = float(row["SPY Move"])
+                if move == 0.0:
+                    return 0.0, 100.0, "Base Case"
+                
+                z = move / one_std
+                # Cumulative distribution function of standard normal
+                cdf = 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+                
+                if move < 0.0:
+                    prob = cdf * 100.0
+                    text = "Prob(SPY &le; " + f"{move:+.1f}%)"
+                else:
+                    prob = (1.0 - cdf) * 100.0
+                    text = "Prob(SPY &ge; " + f"{move:+.1f}%)"
+                
+                return z, prob, text
+
+            prob_res = port_by_scenario.apply(_calc_prob_and_sigma, axis=1)
+            port_by_scenario["sigma_move"] = [r[0] for r in prob_res]
+            port_by_scenario["prob_happening"] = [r[1] for r in prob_res]
+            port_by_scenario["prob_text"] = [r[2] for r in prob_res]
+            port_by_scenario["skew_desc"] = skew_label
+
             # Metric cards for key scenarios
             key_scenarios = [-10.0, -5.0, 0.0, 5.0, 10.0]
             metric_cols = st.columns(len(key_scenarios))
@@ -2406,19 +2467,6 @@ class PortfolioRiskManagementModule(FazDaneModule):
                             unsafe_allow_html=True,
                         )
 
-            # Calculate standard deviation for next 20 calendar days from VIX
-            vix_val = 16.0
-            if regime is not None and "vix" in regime:
-                try:
-                    vix_val = float(regime["vix"])
-                except Exception:
-                    pass
-            if vix_val <= 0:
-                vix_val = 16.0
-                
-            import math
-            one_std = vix_val * math.sqrt(20.0 / 365.0)
-
             # 9-scenario bar chart — beta-adjusted via matrix
             fig_scen = go.Figure(go.Bar(
                 x=port_by_scenario["SPY Move"],
@@ -2427,11 +2475,13 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 text=port_by_scenario["Portfolio P/L"].map(lambda v: f"${v:+,.0f}"),
                 textposition="outside",
                 cliponaxis=False,
-                customdata=port_by_scenario[["pct_of_capital", "SPY Label"]].values,
+                customdata=port_by_scenario[["pct_of_capital", "SPY Label", "sigma_move", "prob_happening", "prob_text", "skew_desc"]].values,
                 hovertemplate=(
-                    "<b>SPY %{customdata[1]}</b><br>"
-                    "Portfolio P/L: $%{y:,.2f}<br>"
-                    "Capital Impact: %{customdata[0]:+.2f}%<extra></extra>"
+                    "<b>SPY %{customdata[1]} Scenario</b><br>"
+                    "Portfolio P/L: $%{y:,.2f} (%{customdata[0]:+.2f}%)<br>"
+                    "Distance from mean: %{customdata[2]:+.2f}σ<br>"
+                    "%{customdata[4]}: <b>%{customdata[3]:.1f}%</b><br><br>"
+                    "Current Market Skew:<br><i>%{customdata[5]}</i><extra></extra>"
                 ),
             ))
             fig_scen.add_hline(y=0, line_dash="dash", line_color="#475569", line_width=1)
