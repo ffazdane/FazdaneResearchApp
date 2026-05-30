@@ -2303,7 +2303,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                     hovertemplate=(
                         "<b>%{y}</b><br>"
                         f"Beta vs {beta_benchmark}: %{{x:.2f}}<br>"
-                        "Position Weight: %{customdata[0]:.1f}%<br>"
+                        "Position Weight: %{customdata[0]:.2f}%<br>"
                         "Weighted Contribution: %{customdata[1]:.4f}<extra></extra>"
                     ),
                 ))
@@ -2360,7 +2360,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 vix_override = None
 
         # Display the live VIX shock table for the 9 scenarios
-        auto_vix_row = {f"{s:+.0f}%": f"{_vix_shock_from_spy(s):+.0f}%" for s in _SPY_SCENARIOS}
+        auto_vix_row = {f"{s:+.2f}%": f"{_vix_shock_from_spy(s):+.2f}%" for s in _SPY_SCENARIOS}
         if vix_auto:
             st.markdown(
                 "<p style='font-size:11.5px;color:#64748b;margin-top:-4px;'>Auto VIX shocks applied per scenario ↓</p>",
@@ -2385,7 +2385,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 .reset_index()
                 .rename(columns={"spy_pct": "SPY Move", "total_pnl": "Portfolio P/L"})
             )
-            port_by_scenario["SPY Label"] = port_by_scenario["SPY Move"].map(lambda v: f"{v:+.0f}%")
+            port_by_scenario["SPY Label"] = port_by_scenario["SPY Move"].map(lambda v: f"{v:+.2f}%")
             port_by_scenario["color"] = port_by_scenario["Portfolio P/L"].apply(
                 lambda v: BRAND["green"] if v >= 0 else BRAND["red"]
             )
@@ -2443,6 +2443,11 @@ class PortfolioRiskManagementModule(FazDaneModule):
             port_by_scenario["prob_text"] = [r[2] for r in prob_res]
             port_by_scenario["skew_desc"] = skew_label
 
+            # Format as strings with 2 decimal places in python directly to avoid Plotly parser bugs
+            port_by_scenario["pct_of_capital_str"] = port_by_scenario["pct_of_capital"].map(lambda v: f"{v:+.2f}%")
+            port_by_scenario["sigma_move_str"] = port_by_scenario["sigma_move"].map(lambda v: f"{v:+.2f}σ")
+            port_by_scenario["prob_happening_str"] = port_by_scenario["prob_happening"].map(lambda v: f"{v:.2f}%")
+
             # Metric cards for key scenarios
             key_scenarios = [-10.0, -5.0, 0.0, 5.0, 10.0]
             metric_cols = st.columns(len(key_scenarios))
@@ -2458,10 +2463,10 @@ class PortfolioRiskManagementModule(FazDaneModule):
                             f"""
                             <div style="background:#0f1e36;border:1px solid #1e3a5f;border-top:3px solid {card_color};
                                 border-radius:8px;padding:10px;text-align:center;margin-bottom:6px;">
-                                <div style="color:#94a3b8;font-size:11px;font-weight:800;text-transform:uppercase;">SPY {spy_val:+.0f}%</div>
+                                <div style="color:#94a3b8;font-size:11px;font-weight:800;text-transform:uppercase;">SPY {spy_val:+.2f}%</div>
                                 <div style="color:{card_color};font-size:20px;font-weight:900;margin:4px 0;">${pnl:+,.0f}</div>
-                                <div style="color:#64748b;font-size:10px;">{pct:+.1f}% capital</div>
-                                <div style="color:#475569;font-size:10px;">VIX {vix_at:+.0f}%</div>
+                                <div style="color:#64748b;font-size:10px;">{pct:+.2f}% capital</div>
+                                <div style="color:#475569;font-size:10px;">VIX {vix_at:+.2f}%</div>
                             </div>
                             """,
                             unsafe_allow_html=True,
@@ -2475,12 +2480,12 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 text=port_by_scenario["Portfolio P/L"].map(lambda v: f"${v:+,.0f}"),
                 textposition="outside",
                 cliponaxis=False,
-                customdata=port_by_scenario[["pct_of_capital", "SPY Label", "sigma_move", "prob_happening", "prob_text", "skew_desc"]].values,
+                customdata=port_by_scenario[["pct_of_capital_str", "SPY Label", "sigma_move_str", "prob_happening_str", "prob_text", "skew_desc"]].values,
                 hovertemplate=(
                     "<b>SPY %{customdata[1]} Scenario</b><br>"
-                    "Portfolio P/L: $%{y:,.2f} (%{customdata[0]:+.2f}%)<br>"
-                    "Distance from mean: %{customdata[2]:+.2f}σ<br>"
-                    "%{customdata[4]}: <b>%{customdata[3]:.1f}%</b><br><br>"
+                    "Portfolio P/L: $%{y:,.2f} (%{customdata[0]})<br>"
+                    "Distance from mean: %{customdata[2]}<br>"
+                    "%{customdata[4]}: <b>%{customdata[3]}</b><br><br>"
                     "Current Market Skew:<br><i>%{customdata[5]}</i><extra></extra>"
                 ),
             ))
@@ -2560,7 +2565,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                         fig_scen.add_annotation(
                             x=breakeven_spy,
                             y=0,
-                            text=f"Breakeven ≈ SPY {breakeven_spy:+.1f}%",
+                            text=f"Breakeven ≈ SPY {breakeven_spy:+.2f}%",
                             showarrow=True,
                             arrowhead=2,
                             arrowcolor=BRAND["yellow"],
@@ -2589,7 +2594,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 f"<p style='font-size:11px;color:#94a3b8;margin-top:-8px;'>"  
                 f"Delta &amp; Gamma impact scaled by per-ticker beta. VIX shock auto-correlated to SPY move when toggle is ON. "
                 f"Theta decay applied for selected days. Shaded regions represent 1-3 Standard Deviations for the next 20 days "
-                f"based on current VIX of {vix_val:.1f} (1σ = ±{one_std:.1f}%). P/L is an approximation — not a full revaluation.</p>",
+                f"based on current VIX of {vix_val:.2f} (1σ = ±{one_std:.2f}%). P/L is an approximation — not a full revaluation.</p>",
                 unsafe_allow_html=True,
             )
         else:
@@ -2610,13 +2615,11 @@ class PortfolioRiskManagementModule(FazDaneModule):
             ).reset_index()
             pivot.columns = (
                 ["Ticker", "Strategy", "Beta"]
-                + [f"SPY {v:+.0f}%" for v in key_spy_vals]
+                + [f"SPY {v:+.2f}%" for v in key_spy_vals]
             )
 
-            # Add scenario-aware action signal using base scenario (0%)
-            base_col = "SPY +0%" if "SPY +0%" in pivot.columns else "SPY  0%"
-            # Reconstruct base column name reliably
-            base_col_candidates = [c for c in pivot.columns if "0%" in c]
+            # Add scenario-aware action signal using base scenario (0.00%)
+            base_col_candidates = [c for c in pivot.columns if "0.00%" in c or "0%" in c]
             base_col = base_col_candidates[0] if base_col_candidates else pivot.columns[3]
 
             scenario_pnl_cols = [c for c in pivot.columns if c.startswith("SPY ")]
