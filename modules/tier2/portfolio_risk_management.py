@@ -1101,7 +1101,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
         with tabs[2]:
             self._render_greeks(enriched, totals, regime, heat)
         with tabs[3]:
-            self._render_what_if_tab(enriched, totals, position_betas, portfolio_beta, beta_benchmark, details=details)
+            self._render_what_if_tab(enriched, totals, position_betas, portfolio_beta, beta_benchmark, details=details, regime=regime)
         with tabs[4]:
             self._render_correlation(enriched)
         with tabs[5]:
@@ -2194,6 +2194,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
         portfolio_beta: float = 1.0,
         beta_benchmark: str = "SPY",
         details: pd.DataFrame | None = None,
+        regime: dict | None = None,
     ):
         """SPY Scenario Portfolio Impact Simulator — full rebuild with 3-layer engine."""
         st.markdown("### SPY Scenario Portfolio Impact Simulator")
@@ -2405,38 +2406,91 @@ class PortfolioRiskManagementModule(FazDaneModule):
                             unsafe_allow_html=True,
                         )
 
+            # Calculate standard deviation for next 20 calendar days from VIX
+            vix_val = 16.0
+            if regime is not None and "vix" in regime:
+                try:
+                    vix_val = float(regime["vix"])
+                except Exception:
+                    pass
+            if vix_val <= 0:
+                vix_val = 16.0
+                
+            import math
+            one_std = vix_val * math.sqrt(20.0 / 365.0)
+
             # 9-scenario bar chart — beta-adjusted via matrix
             fig_scen = go.Figure(go.Bar(
-                x=port_by_scenario["SPY Label"],
+                x=port_by_scenario["SPY Move"],
                 y=port_by_scenario["Portfolio P/L"],
                 marker_color=port_by_scenario["color"].tolist(),
                 text=port_by_scenario["Portfolio P/L"].map(lambda v: f"${v:+,.0f}"),
                 textposition="outside",
                 cliponaxis=False,
-                customdata=port_by_scenario[["pct_of_capital", "SPY Move"]].values,
+                customdata=port_by_scenario[["pct_of_capital", "SPY Label"]].values,
                 hovertemplate=(
-                    "<b>SPY %{x}</b><br>"
+                    "<b>SPY %{customdata[1]}</b><br>"
                     "Portfolio P/L: $%{y:,.2f}<br>"
                     "Capital Impact: %{customdata[0]:+.2f}%<extra></extra>"
                 ),
             ))
             fig_scen.add_hline(y=0, line_dash="dash", line_color="#475569", line_width=1)
 
+            # Standard Deviation Shaded Regions (Probability Cones)
+            # 1st Standard Deviation: [-one_std, one_std] -> Green
+            fig_scen.add_vrect(
+                x0=-one_std, x1=one_std,
+                fillcolor="#10b981", opacity=0.06, line_width=0, layer="below",
+                annotation_text="1σ (68% prob)", annotation_position="top center",
+                annotation_font=dict(color="#10b981", size=10)
+            )
+            # 2nd Standard Deviation Left: [-2*one_std, -one_std] -> Yellow
+            fig_scen.add_vrect(
+                x0=-2*one_std, x1=-one_std,
+                fillcolor="#facc15", opacity=0.06, line_width=0, layer="below"
+            )
+            # 2nd Standard Deviation Right: [one_std, 2*one_std] -> Yellow
+            fig_scen.add_vrect(
+                x0=one_std, x1=2*one_std,
+                fillcolor="#facc15", opacity=0.06, line_width=0, layer="below",
+                annotation_text="2σ (95% prob)", annotation_position="top center",
+                annotation_font=dict(color="#facc15", size=10)
+            )
+            # 3rd Standard Deviation Left: [-3*one_std, -2*one_std] -> Red
+            fig_scen.add_vrect(
+                x0=-3*one_std, x1=-2*one_std,
+                fillcolor="#ef4444", opacity=0.06, line_width=0, layer="below"
+            )
+            # 3rd Standard Deviation Right: [2*one_std, 3*one_std] -> Red
+            fig_scen.add_vrect(
+                x0=2*one_std, x1=3*one_std,
+                fillcolor="#ef4444", opacity=0.06, line_width=0, layer="below",
+                annotation_text="3σ (99% prob)", annotation_position="top center",
+                annotation_font=dict(color="#ef4444", size=10)
+            )
+
+            # Boundary dashed lines
+            fig_scen.add_vline(x=-one_std, line_dash="dash", line_color="#10b981", line_width=1.0)
+            fig_scen.add_vline(x=one_std, line_dash="dash", line_color="#10b981", line_width=1.0)
+            fig_scen.add_vline(x=-2*one_std, line_dash="dash", line_color="#facc15", line_width=1.0)
+            fig_scen.add_vline(x=2*one_std, line_dash="dash", line_color="#facc15", line_width=1.0)
+            fig_scen.add_vline(x=-3*one_std, line_dash="dash", line_color="#ef4444", line_width=1.0)
+            fig_scen.add_vline(x=3*one_std, line_dash="dash", line_color="#ef4444", line_width=1.0)
+
             # Breakeven annotation: find first scenario where P/L crosses zero
             pos_vals = port_by_scenario[port_by_scenario["Portfolio P/L"] >= 0]["SPY Move"]
             neg_vals = port_by_scenario[port_by_scenario["Portfolio P/L"] < 0]["SPY Move"]
             if not pos_vals.empty and not neg_vals.empty:
-                # Approximate breakeven by interpolating between adjacent scenarios
                 sorted_df = port_by_scenario.sort_values("SPY Move")
                 for i in range(len(sorted_df) - 1):
                     p1 = float(sorted_df.iloc[i]["Portfolio P/L"])
                     p2 = float(sorted_df.iloc[i + 1]["Portfolio P/L"])
                     s1 = float(sorted_df.iloc[i]["SPY Move"])
                     s2 = float(sorted_df.iloc[i + 1]["SPY Move"])
-                    if p1 * p2 < 0:  # sign change → breakeven between these two
+                    if p1 * p2 < 0:
                         breakeven_spy = s1 - p1 * (s2 - s1) / (p2 - p1)
                         fig_scen.add_annotation(
-                            x=f"{s1:+.0f}%",
+                            x=breakeven_spy,
                             y=0,
                             text=f"Breakeven ≈ SPY {breakeven_spy:+.1f}%",
                             showarrow=True,
@@ -2452,15 +2506,22 @@ class PortfolioRiskManagementModule(FazDaneModule):
             style_figure(fig_scen, height=320)
             fig_scen.update_layout(
                 margin=dict(l=10, r=10, t=10, b=10),
-                xaxis=dict(title="SPY Scenario", showgrid=False),
+                xaxis=dict(
+                    title="SPY Scenario (%)",
+                    showgrid=False,
+                    tickmode="array",
+                    tickvals=list(port_by_scenario["SPY Move"]),
+                    ticktext=list(port_by_scenario["SPY Label"])
+                ),
                 yaxis=dict(title="Estimated Portfolio P/L ($)", tickprefix="$", showgrid=True, gridcolor="#1e3a5f"),
                 showlegend=False,
             )
             st.plotly_chart(fig_scen, use_container_width=True, theme=None)
             st.markdown(
-                "<p style='font-size:11px;color:#475569;margin-top:-8px;'>"  
-                "Delta &amp; Gamma impact scaled by per-ticker beta. VIX shock auto-correlated to SPY move when toggle is ON. "
-                "Theta decay applied for selected days. P/L is an approximation — not a full revaluation.</p>",
+                f"<p style='font-size:11px;color:#94a3b8;margin-top:-8px;'>"  
+                f"Delta &amp; Gamma impact scaled by per-ticker beta. VIX shock auto-correlated to SPY move when toggle is ON. "
+                f"Theta decay applied for selected days. Shaded regions represent 1-3 Standard Deviations for the next 20 days "
+                f"based on current VIX of {vix_val:.1f} (1σ = ±{one_std:.1f}%). P/L is an approximation — not a full revaluation.</p>",
                 unsafe_allow_html=True,
             )
         else:
