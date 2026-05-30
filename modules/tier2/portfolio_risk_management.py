@@ -2440,9 +2440,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             # 1st Standard Deviation: [-one_std, one_std] -> Green
             fig_scen.add_vrect(
                 x0=-one_std, x1=one_std,
-                fillcolor="#10b981", opacity=0.06, line_width=0, layer="below",
-                annotation_text="1σ (68% prob)", annotation_position="top center",
-                annotation_font=dict(color="#10b981", size=10)
+                fillcolor="#10b981", opacity=0.06, line_width=0, layer="below"
             )
             # 2nd Standard Deviation Left: [-2*one_std, -one_std] -> Yellow
             fig_scen.add_vrect(
@@ -2452,9 +2450,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             # 2nd Standard Deviation Right: [one_std, 2*one_std] -> Yellow
             fig_scen.add_vrect(
                 x0=one_std, x1=2*one_std,
-                fillcolor="#facc15", opacity=0.06, line_width=0, layer="below",
-                annotation_text="2σ (95% prob)", annotation_position="top center",
-                annotation_font=dict(color="#facc15", size=10)
+                fillcolor="#facc15", opacity=0.06, line_width=0, layer="below"
             )
             # 3rd Standard Deviation Left: [-3*one_std, -2*one_std] -> Red
             fig_scen.add_vrect(
@@ -2464,9 +2460,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             # 3rd Standard Deviation Right: [2*one_std, 3*one_std] -> Red
             fig_scen.add_vrect(
                 x0=2*one_std, x1=3*one_std,
-                fillcolor="#ef4444", opacity=0.06, line_width=0, layer="below",
-                annotation_text="3σ (99% prob)", annotation_position="top center",
-                annotation_font=dict(color="#ef4444", size=10)
+                fillcolor="#ef4444", opacity=0.06, line_width=0, layer="below"
             )
 
             # Boundary vertical bars
