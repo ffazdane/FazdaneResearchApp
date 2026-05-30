@@ -230,6 +230,17 @@ def enrich_positions(
     df["entry_value"] = df["entry_value"].where(df["market_value"].abs() > 0, df["pl_open"].abs())
 
     df = _apply_leg_detail_metrics(df, details)
+
+    # Extract underlying stock price from details (equity_description row) if available
+    df["underlying_price"] = 0.0
+    if details is not None and not details.empty:
+        eq_rows = details[details["row_type"].astype(str).eq("equity_description")].copy()
+        if not eq_rows.empty:
+            eq_rows["ticker_clean"] = eq_rows["underlying"].apply(clean_ticker_for_lookup)
+            price_map = eq_rows.groupby("ticker_clean")["mark_price"].first().to_dict()
+            df["ticker_clean_tmp"] = df["ticker"].apply(clean_ticker_for_lookup)
+            df["underlying_price"] = df["ticker_clean_tmp"].map(price_map).fillna(0.0)
+            df.drop(columns=["ticker_clean_tmp"], inplace=True)
     for column in [
         "leg_count",
         "gross_contracts",
@@ -346,6 +357,8 @@ def _apply_leg_detail_metrics(df: pd.DataFrame, details: pd.DataFrame | None) ->
         min_dte=("days", "min"),
         max_dte=("days", "max"),
         avg_dte=("days", "mean"),
+        min_strike=("strike", "min"),
+        max_strike=("strike", "max"),
         leg_gross_exposure=("gross_leg_exposure", "sum"),
         gross_entry_value=("gross_entry_value", "sum"),
         gross_current_value=("gross_current_value", "sum"),
@@ -388,6 +401,8 @@ def _apply_leg_detail_metrics(df: pd.DataFrame, details: pd.DataFrame | None) ->
         "min_dte",
         "max_dte",
         "avg_dte",
+        "min_strike",
+        "max_strike",
         "leg_gross_exposure",
         "gross_entry_value",
         "gross_current_value",
@@ -658,6 +673,337 @@ def _leader_name(df: pd.DataFrame, column: str) -> str:
     return str(ordered.iloc[0]["ticker"])
 
 
+# ── Scenario Shock Engine ─────────────────────────────────────────────────────
+
+_SPY_SCENARIOS: list[float] = [-10.0, -7.0, -5.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0]
+
+_VIX_SHOCK_TABLE: list[tuple[float, float]] = [
+    (-10.0, 30.0),
+    (-7.0, 20.0),
+    (-5.0, 12.0),
+    (-3.0, 6.0),
+    (0.0, 0.0),
+    (3.0, -4.0),
+    (5.0, -7.0),
+    (7.0, -10.0),
+    (10.0, -15.0),
+]
+
+
+def _vix_shock_from_spy(spy_pct: float) -> float:
+    """Empirical VIX response (% change in IV) for a given SPY % move.
+    Uses linear interpolation between calibrated breakpoints."""
+    xs = [t[0] for t in _VIX_SHOCK_TABLE]
+    ys = [t[1] for t in _VIX_SHOCK_TABLE]
+    if spy_pct <= xs[0]:
+        return ys[0]
+    if spy_pct >= xs[-1]:
+        return ys[-1]
+    for i in range(len(xs) - 1):
+        if xs[i] <= spy_pct <= xs[i + 1]:
+            frac = (spy_pct - xs[i]) / (xs[i + 1] - xs[i])
+            return ys[i] + frac * (ys[i + 1] - ys[i])
+    return 0.0
+
+
+def _reprice_position(
+    row: pd.Series,
+    spy_pct: float,
+    vix_shock_pct: float,
+    days_passed: float,
+    position_betas: dict[str, float],
+) -> dict:
+    """Estimate per-position P/L under a given SPY move and IV shock using Greek approximation.
+
+    P/L ≈ Delta × ΔPrice + 0.5 × Gamma × ΔPrice² + Vega × ΔIV + Theta × days
+    ΔPrice is beta-adjusted to the underlying price.
+    """
+    ticker_clean = clean_ticker_for_lookup(str(row.get("ticker", "")))
+    beta = float(position_betas.get(ticker_clean, 1.0))
+
+    # Beta-adjusted underlying price change (in dollars)
+    underlying_price = float(row.get("underlying_price", 0.0))
+    if underlying_price <= 0:
+        underlying_price = float(row.get("mark_price", 0.0))
+    if underlying_price <= 0:
+        # Fallback to strike proxy if options position
+        min_s = float(row.get("min_strike", 0.0))
+        max_s = float(row.get("max_strike", 0.0))
+        if min_s > 0 or max_s > 0:
+            underlying_price = (min_s + max_s) / 2.0 if min_s > 0 and max_s > 0 else (min_s if min_s > 0 else max_s)
+    if underlying_price <= 0:
+        underlying_price = float(row.get("current_value", 0.0))
+    ticker_move_pct = spy_pct * beta
+    price_change = underlying_price * ticker_move_pct / 100.0
+
+    delta = float(row.get("delta", 0.0))
+    gamma = float(row.get("gamma", 0.0))
+    vega = float(row.get("vega", 0.0))
+    theta = float(row.get("theta", 0.0))
+
+    delta_pnl = delta * price_change
+    gamma_pnl = 0.5 * gamma * (price_change ** 2)
+    vega_pnl = vega * (vix_shock_pct / 100.0)
+    theta_pnl = theta * days_passed
+    total_pnl = delta_pnl + gamma_pnl + vega_pnl + theta_pnl
+
+    return {
+        "ticker": str(row.get("ticker", ticker_clean)),
+        "strategy": str(row.get("strategy", "Position Basket")),
+        "beta": round(beta, 3),
+        "ticker_move_pct": round(ticker_move_pct, 2),
+        "spy_pct": spy_pct,
+        "vix_shock_pct": round(vix_shock_pct, 1),
+        "delta_pnl": round(delta_pnl, 2),
+        "gamma_pnl": round(gamma_pnl, 2),
+        "vega_pnl": round(vega_pnl, 2),
+        "theta_pnl": round(theta_pnl, 2),
+        "total_pnl": round(total_pnl, 2),
+    }
+
+
+def _scenario_action_signal(
+    scenario_pnls: list[float],
+    base_pnl: float,
+    current_pnl: float,
+    risk_score: float,
+    weight_pct: float,
+) -> str:
+    """Derive a scenario-aware action signal based on how a position performs across all 9 scenarios."""
+    negative_count = sum(1 for v in scenario_pnls if v < 0)
+    worst = min(scenario_pnls)
+    best = max(scenario_pnls)
+
+    if negative_count >= 7:
+        return "Eliminate"
+    if negative_count >= 5 and worst < -200:
+        return "Trim"
+    if risk_score < 35:
+        return "Hedge"
+    # Take profit: profitable now, upside capped (best scenario not much better than current)
+    if current_pnl > 50 and best < current_pnl * 1.15:
+        return "Take Profit"
+    if weight_pct > 18 and negative_count >= 3:
+        return "Trim"
+    if base_pnl >= 0 and negative_count <= 2:
+        return "Keep"
+    if negative_count <= 4 and risk_score >= 60:
+        return "Hold"
+    return "Redeploy"
+
+
+def _calendar_risk_checks(
+    row: pd.Series,
+    spy_pct: float,
+    vix_shock_pct: float,
+    median_theta_abs: float,
+    median_vega: float,
+) -> list[tuple[str, str]]:
+    """Return list of (check_name, alert_level) for calendar spread positions.
+    alert_level: 'Safe', 'Monitor', or 'Danger'
+    """
+    alerts: list[tuple[str, str]] = []
+    strategy = str(row.get("strategy", ""))
+    is_calendar = any(kw in strategy for kw in ("Calander", "Calendar"))
+    if not is_calendar:
+        return alerts
+
+    underlying_price = float(row.get("mark_price", 0.0))
+    ticker_clean = clean_ticker_for_lookup(str(row.get("ticker", "")))
+    min_strike = float(row.get("min_strike", 0.0))
+    max_strike = float(row.get("max_strike", 0.0))
+    strike_width = abs(max_strike - min_strike)
+
+    # Strike distance: how far underlying moves under this scenario
+    beta = 1.0  # use 1.0 as conservative default here (betas passed separately)
+    price_move = abs(underlying_price * spy_pct * beta / 100.0)
+    if strike_width > 0:
+        breach_ratio = price_move / strike_width
+        if breach_ratio >= 0.8:
+            alerts.append(("Short Strike Distance", "Danger"))
+        elif breach_ratio >= 0.5:
+            alerts.append(("Short Strike Distance", "Monitor"))
+        else:
+            alerts.append(("Short Strike Distance", "Safe"))
+    else:
+        alerts.append(("Short Strike Distance", "Monitor"))
+
+    # Front expiry DTE decay risk
+    min_dte = float(row.get("min_dte", 30.0))
+    theta_abs = abs(float(row.get("theta", 0.0)))
+    if min_dte < 7:
+        alerts.append(("Front-Leg Expiry", "Danger"))
+    elif min_dte < 14 and theta_abs > median_theta_abs:
+        alerts.append(("Front-Leg Expiry", "Monitor"))
+    else:
+        alerts.append(("Front-Leg Expiry", "Safe"))
+
+    # IV crush risk (calendars lose if IV drops too much — they are long vega)
+    vega = float(row.get("vega", 0.0))
+    if vix_shock_pct < -10 and vega > median_vega * 0.5:
+        alerts.append(("IV Crush Risk", "Danger"))
+    elif vix_shock_pct < -5 and vega > 0:
+        alerts.append(("IV Crush Risk", "Monitor"))
+    else:
+        alerts.append(("IV Crush Risk", "Safe"))
+
+    # Gamma acceleration near short strike
+    gamma_component = float(row.get("gamma_component", 80.0))
+    if gamma_component < 45:
+        alerts.append(("Gamma Near Strike", "Danger"))
+    elif gamma_component < 60:
+        alerts.append(("Gamma Near Strike", "Monitor"))
+    else:
+        alerts.append(("Gamma Near Strike", "Safe"))
+
+    return alerts
+
+
+def _build_scenario_matrix(
+    df: pd.DataFrame,
+    position_betas: dict[str, float],
+    vix_override: float | None,
+    days_passed: float,
+    details: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Run all 13 SPY scenarios × all positions and return a long P/L DataFrame.
+    If details (leg-level data) is provided, repricing is done at the leg level with
+    directional risk bounds (capping long option losses at premium and short option
+    gains at credit received) to avoid quadratic Gamma extrapolation errors.
+    """
+    if df.empty:
+        return pd.DataFrame()
+    rows: list[dict] = []
+    
+    # Extract underlying stock prices from details (equity_description row) if available
+    stock_prices = {}
+    if details is not None and not details.empty:
+        eq_rows = details[details["row_type"].astype(str).eq("equity_description")].copy()
+        if not eq_rows.empty:
+            eq_rows["ticker_clean"] = eq_rows["underlying"].apply(clean_ticker_for_lookup)
+            stock_prices = eq_rows.groupby("ticker_clean")["mark_price"].first().to_dict()
+
+    for spy_pct in _SPY_SCENARIOS:
+        vix_shock = vix_override if vix_override is not None else _vix_shock_from_spy(spy_pct)
+        
+        # Check if we can do leg-level repricing
+        if details is not None and not details.empty:
+            details_copy = details.copy()
+            details_copy["ticker_clean"] = details_copy["underlying"].apply(clean_ticker_for_lookup)
+            
+            for und, group in details_copy.groupby("ticker_clean"):
+                ticker_df = df[df["ticker"].apply(clean_ticker_for_lookup) == und]
+                if ticker_df.empty:
+                    continue
+                
+                ticker_name = ticker_df.iloc[0]["ticker"]
+                strategy_name = ticker_df.iloc[0]["strategy"]
+                beta = float(position_betas.get(und, 1.0))
+                ticker_move_pct = spy_pct * beta
+                
+                # Retrieve stock price
+                underlying_price = stock_prices.get(und, 0.0)
+                if underlying_price <= 0:
+                    eq_in_group = group[group["row_type"] == "equity_description"]
+                    if not eq_in_group.empty:
+                        underlying_price = float(eq_in_group.iloc[0].get("mark_price", 0.0))
+                if underlying_price <= 0:
+                    opt_in_group = group[group["row_type"] == "option_leg"]
+                    if not opt_in_group.empty:
+                        min_s = opt_in_group["strike"].min()
+                        max_s = opt_in_group["strike"].max()
+                        underlying_price = (min_s + max_s) / 2.0 if min_s > 0 and max_s > 0 else (min_s if min_s > 0 else max_s)
+                if underlying_price <= 0:
+                    underlying_price = float(group.iloc[0].get("mark_price", 0.0))
+                
+                price_change = underlying_price * ticker_move_pct / 100.0
+                
+                tot_delta_pnl = 0.0
+                tot_gamma_pnl = 0.0
+                tot_vega_pnl = 0.0
+                tot_theta_pnl = 0.0
+                tot_total_pnl = 0.0
+                
+                for _, row in group.iterrows():
+                    row_type = str(row.get("row_type", ""))
+                    qty = float(row.get("quantity", 0.0))
+                    mark = float(row.get("mark_price", 0.0))
+                    
+                    if row_type == "option_leg":
+                        delta = float(row.get("delta", 0.0))
+                        gamma = float(row.get("gamma", 0.0))
+                        vega = float(row.get("vega", 0.0))
+                        theta = float(row.get("theta", 0.0))
+                        
+                        delta_pnl = delta * price_change
+                        gamma_pnl = 0.5 * gamma * (price_change ** 2)
+                        vega_pnl = vega * (vix_shock / 100.0)
+                        theta_pnl = theta * days_passed
+                        
+                        leg_pnl = delta_pnl + gamma_pnl + vega_pnl + theta_pnl
+                        
+                        # Apply Directional Bounds Capping
+                        bounded_pnl = leg_pnl
+                        cur_val = qty * mark * 100
+                        cp = str(row.get("call_put", "")).upper()
+                        
+                        if cp == "CALL":
+                            if price_change < 0: # Down move
+                                if qty > 0: # Long Call
+                                    bounded_pnl = np.clip(leg_pnl, -cur_val, 0.0)
+                                else: # Short Call
+                                    bounded_pnl = np.clip(leg_pnl, 0.0, -cur_val)
+                            else: # Up move
+                                if qty > 0: # Long Call
+                                    bounded_pnl = max(0.0, leg_pnl)
+                                else: # Short Call
+                                    bounded_pnl = min(0.0, leg_pnl)
+                        elif cp == "PUT":
+                            if price_change < 0: # Down move
+                                if qty > 0: # Long Put
+                                    bounded_pnl = max(0.0, leg_pnl)
+                                else: # Short Put
+                                    bounded_pnl = min(0.0, leg_pnl)
+                            else: # Up move
+                                if qty > 0: # Long Put
+                                    bounded_pnl = np.clip(leg_pnl, -cur_val, 0.0)
+                                else: # Short Put
+                                    bounded_pnl = np.clip(leg_pnl, 0.0, -cur_val)
+                        
+                        tot_delta_pnl += delta_pnl
+                        tot_gamma_pnl += gamma_pnl
+                        tot_vega_pnl += vega_pnl
+                        tot_theta_pnl += theta_pnl
+                        tot_total_pnl += bounded_pnl
+                        
+                    elif row_type == "equity_description" and qty != 0:
+                        leg_pnl = qty * price_change
+                        tot_delta_pnl += leg_pnl
+                        tot_total_pnl += leg_pnl
+                
+                rows.append({
+                    "ticker": str(ticker_name),
+                    "strategy": str(strategy_name),
+                    "beta": round(beta, 3),
+                    "ticker_move_pct": round(ticker_move_pct, 2),
+                    "spy_pct": spy_pct,
+                    "vix_shock_pct": round(vix_shock, 1),
+                    "delta_pnl": round(tot_delta_pnl, 2),
+                    "gamma_pnl": round(tot_gamma_pnl, 2),
+                    "vega_pnl": round(tot_vega_pnl, 2),
+                    "theta_pnl": round(tot_theta_pnl, 2),
+                    "total_pnl": round(tot_total_pnl, 2),
+                })
+        else:
+            for spy_pct_fallback in _SPY_SCENARIOS:
+                vix_shock_fallback = vix_override if vix_override is not None else _vix_shock_from_spy(spy_pct_fallback)
+                for _, row in df.iterrows():
+                    result = _reprice_position(row, spy_pct_fallback, vix_shock_fallback, days_passed, position_betas)
+                    rows.append(result)
+                
+    return pd.DataFrame(rows)
+
+
 class PortfolioRiskManagementModule(FazDaneModule):
     MODULE_NAME = "Portfolio Performance & Risk Management"
     MODULE_ICON = "PR"
@@ -755,7 +1101,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
         with tabs[2]:
             self._render_greeks(enriched, totals, regime, heat)
         with tabs[3]:
-            self._render_what_if_tab(enriched, totals, position_betas, portfolio_beta, beta_benchmark)
+            self._render_what_if_tab(enriched, totals, position_betas, portfolio_beta, beta_benchmark, details=details)
         with tabs[4]:
             self._render_correlation(enriched)
         with tabs[5]:
@@ -1749,6 +2095,33 @@ class PortfolioRiskManagementModule(FazDaneModule):
             with cols[idx]:
                 self._risk_kpi_card(f"Top 3 {label}", _fmt_pct(value), f"{label.lower()} from largest contributors", status)
 
+        # Gross Option Exposure Concentration Chart
+        st.markdown("<br>", unsafe_allow_html=True)
+        df_exp = df.copy()
+        total_gross = df_exp["gross_exposure"].sum()
+        if total_gross > 0:
+            df_exp["gross_exposure_pct"] = (df_exp["gross_exposure"] / total_gross) * 100
+            df_exp = df_exp.sort_values("gross_exposure_pct", ascending=True)
+            
+            fig_exp = go.Figure(go.Bar(
+                x=df_exp["gross_exposure_pct"],
+                y=df_exp["ticker"],
+                orientation="h",
+                marker_color=[BRAND["blue"] if v < 15 else (BRAND["yellow"] if v <= 25 else BRAND["red"]) for v in df_exp["gross_exposure_pct"]],
+                text=df_exp["gross_exposure_pct"].map(lambda v: f"{v:.1f}%"),
+                textposition="auto",
+                hovertemplate="<b>%{y}</b><br>Gross Exposure: %{x:.2f}%<extra></extra>"
+            ))
+            
+            style_figure(fig_exp, height=max(240, 26 * len(df_exp) + 50))
+            fig_exp.update_layout(
+                title=dict(text="Portfolio Concentration by Gross Option Exposure (%)", font=dict(size=12)),
+                margin=dict(l=10, r=40, t=30, b=10),
+                xaxis=dict(title="Exposure Percentage (%)", ticksuffix="%", showgrid=True, gridcolor="#1e3a5f"),
+                yaxis=dict(anchor="free", position=0.0),
+            )
+            st.plotly_chart(fig_exp, use_container_width=True, theme=None)
+
     def _render_expiration_risk_heatmap(self, df: pd.DataFrame):
         st.markdown("### Expiration Risk Heatmap")
         buckets = ["0-7 DTE", "8-14 DTE", "15-30 DTE", "30-60 DTE"]
@@ -1820,18 +2193,22 @@ class PortfolioRiskManagementModule(FazDaneModule):
         position_betas: dict[str, float] | None = None,
         portfolio_beta: float = 1.0,
         beta_benchmark: str = "SPY",
+        details: pd.DataFrame | None = None,
     ):
-        st.markdown("### Interactive Stress Simulator")
+        """SPY Scenario Portfolio Impact Simulator — full rebuild with 3-layer engine."""
+        st.markdown("### SPY Scenario Portfolio Impact Simulator")
+        st.markdown("""
+        <p style='color:#94a3b8;font-size:13px;margin-bottom:4px;'>
+        3-layer engine: <b>SPY Market Shock → Per-Position Repricing (beta-adjusted, VIX-correlated) → Scenario Action Signals</b>
+        </p>""", unsafe_allow_html=True)
 
-        # ── Beta Analytics Panel ────────────────────────────────────────────
-        st.markdown("#### Portfolio Beta Analytics")
         position_betas = position_betas or {}
-
         port_val = float(totals.get("total_market_value", 0.0))
         gross_exp = max(float(df["notional_abs"].sum()), 1.0)
         capital_base = port_val if port_val > 10.0 else gross_exp
 
-        # Beta health classification
+        # ── Sub-panel 0: Beta Analytics (preserved) ──────────────────────────
+        st.markdown("#### Portfolio Beta Analytics")
         if portfolio_beta < 0.5:
             beta_label, beta_color = "Very Defensive", BRAND["green"]
         elif portfolio_beta < 0.85:
@@ -1859,7 +2236,6 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 unsafe_allow_html=True,
             )
         with beta_col2:
-            # Beta-adjusted 1% SPY stress quick metrics
             beta_1pct_dollar = capital_base * portfolio_beta * 0.01
             beta_5pct_dollar = capital_base * portfolio_beta * 0.05
             beta_10pct_dollar = capital_base * portfolio_beta * 0.10
@@ -1885,7 +2261,6 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 unsafe_allow_html=True,
             )
         with beta_col3:
-            # Per-position beta bar chart
             if position_betas and not df.empty:
                 beta_rows = []
                 for _, row in df.iterrows():
@@ -1930,186 +2305,476 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 st.info("Beta data is loading. Ensure \"Fetch market regime\" is enabled and positions are loaded.")
 
         st.markdown("---")
-        st.markdown("#### Greek Stress Simulator")
 
-        # 1. Pull portfolio greeks and parameters
-        net_delta = float(totals.get("total_delta", df["delta_exposure"].sum()) if "total_delta" in totals else df["delta_exposure"].sum())
-        net_gamma = float(totals.get("total_gamma", df["gamma_exposure"].sum()) if "total_gamma" in totals else df["gamma_exposure"].sum())
-        net_vega = float(totals.get("total_vega", df["vega_exposure"].sum()) if "total_vega" in totals else df["vega_exposure"].sum())
+        # ── Sub-panel 1: Scenario Assumptions (Control Panel) ─────────────────
+        st.markdown("#### Scenario Assumptions")
+        ctrl1, ctrl2, ctrl3 = st.columns([1.5, 1.5, 1.0])
+        with ctrl1:
+            vix_auto = st.toggle(
+                "Auto-correlate VIX to SPY move",
+                value=True,
+                key="tab_whatif_vix_auto",
+                help="When ON, VIX shock is automatically derived from the SPY move using an empirical table (e.g. SPY -10% → VIX +30%). Turn OFF to set VIX shock manually.",
+            )
+        with ctrl2:
+            days_passed = st.slider(
+                "Days of Theta Decay to Include",
+                min_value=0,
+                max_value=5,
+                value=1,
+                step=1,
+                key="tab_whatif_days_passed",
+                help="Number of trading days of theta decay to add to the P/L estimate.",
+            )
+        with ctrl3:
+            if not vix_auto:
+                vix_manual = st.slider(
+                    "VIX Shock Override (%)",
+                    min_value=-50.0,
+                    max_value=100.0,
+                    value=15.0,
+                    step=5.0,
+                    key="tab_whatif_vix_manual",
+                )
+                vix_override: float | None = vix_manual
+            else:
+                st.markdown(
+                    "<div style='color:#94a3b8;font-size:12px;padding-top:28px;'>VIX auto-linked to SPY</div>",
+                    unsafe_allow_html=True,
+                )
+                vix_override = None
 
-        # Get largest position weight and ticker
-        largest_weight = 0.0
-        largest_ticker = "Largest Position"
-        if not df.empty and "weight_pct" in df.columns:
-            largest_row = df.sort_values("weight_pct", ascending=False).iloc[0]
-            largest_weight = float(largest_row["weight_pct"])
-            largest_ticker = str(largest_row["ticker"])
-            
-        # 2. Controls Row
-        col_ctrl1, col_ctrl2, col_ctrl3 = st.columns(3)
-        with col_ctrl1:
-            spy_shock = st.slider(
-                "SPY Index Move (%)",
-                min_value=-15.0,
-                max_value=15.0,
-                value=-2.0,
-                step=0.5,
-                key="tab_whatif_spy_shock"
-            )
-        with col_ctrl2:
-            vix_shock = st.slider(
-                "VIX Implied Vol Shock (%)",
-                min_value=-50.0,
-                max_value=100.0,
-                value=15.0,
-                step=5.0,
-                key="tab_whatif_vix_shock"
-            )
-        with col_ctrl3:
-            name_shock = st.slider(
-                f"{largest_ticker} Move (%)",
-                min_value=-25.0,
-                max_value=10.0,
-                value=-5.0,
-                step=1.0,
-                key="tab_whatif_name_shock"
-            )
-            
-        # 3. Calculations
-        delta_impact_val = net_delta * spy_shock
-        gamma_impact_val = 0.2 * net_gamma * (spy_shock ** 2)
-        vega_impact_val = net_vega * (vix_shock / 100.0)
-        largest_val = capital_base * (largest_weight / 100.0)
-        name_impact_val = largest_val * (name_shock / 100.0)
-        
-        total_impact_val = delta_impact_val + gamma_impact_val + vega_impact_val + name_impact_val
-        total_impact_pct = (total_impact_val / capital_base) * 100.0
-        
-        # 4. Results Columns
-        col_res1, col_res2 = st.columns([1.0, 1.25])
-        
-        with col_res1:
-            # Combined Impact Card
-            status_color = BRAND["green"] if total_impact_val >= 0 else BRAND["red"]
-            sign_char = "+" if total_impact_val >= 0 else ""
+        # Display the live VIX shock table for the 9 scenarios
+        auto_vix_row = {f"{s:+.0f}%": f"{_vix_shock_from_spy(s):+.0f}%" for s in _SPY_SCENARIOS}
+        if vix_auto:
             st.markdown(
-                f"""
-                <div style="background-color:#152847; border:1px solid #1e3a5f; border-left:4px solid {status_color}; border-radius:8px; padding:16px; margin-bottom:16px; text-align:center;">
-                    <div style="color:#94a3b8; font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Estimated Combined Stress Impact</div>
-                    <div style="color:#e2e8f0; font-size:32px; font-weight:800; margin-top:6px;">{sign_char}${total_impact_val:,.2f}</div>
-                    <div style="color:{status_color}; font-size:16px; font-weight:700; margin-top:4px;">{total_impact_pct:+.2f}% of Capital Base</div>
-                </div>
-                """,
-                unsafe_allow_html=True
+                "<p style='font-size:11.5px;color:#64748b;margin-top:-4px;'>Auto VIX shocks applied per scenario ↓</p>",
+                unsafe_allow_html=True,
             )
-            
-            # Individual metrics
-            st.metric(
-                "Delta Directional Shift",
-                f"${delta_impact_val:+,.2f}",
-                delta=f"{(delta_impact_val/capital_base)*100:+.2f}%",
-                delta_color="normal"
+            st.dataframe(
+                pd.DataFrame([auto_vix_row], index=["VIX Shock"]),
+                use_container_width=True,
+                hide_index=False,
             )
-            st.metric(
-                "Gamma Convexity Shift",
-                f"${gamma_impact_val:+,.2f}",
-                delta=f"{(gamma_impact_val/capital_base)*100:+.2f}%",
-                delta_color="normal"
+
+        st.markdown("---")
+
+        # ── Build scenario matrix (Layer 1 + 2) ──────────────────────────────
+        matrix = _build_scenario_matrix(df, position_betas, vix_override, float(days_passed), details=details)
+
+        # Portfolio-level totals per scenario
+        if not matrix.empty:
+            port_by_scenario = (
+                matrix.groupby("spy_pct")["total_pnl"]
+                .sum()
+                .reset_index()
+                .rename(columns={"spy_pct": "SPY Move", "total_pnl": "Portfolio P/L"})
             )
-            st.metric(
-                "Vega Volatility Shift",
-                f"${vega_impact_val:+,.2f}",
-                delta=f"{(vega_impact_val/capital_base)*100:+.2f}%",
-                delta_color="normal"
+            port_by_scenario["SPY Label"] = port_by_scenario["SPY Move"].map(lambda v: f"{v:+.0f}%")
+            port_by_scenario["color"] = port_by_scenario["Portfolio P/L"].apply(
+                lambda v: BRAND["green"] if v >= 0 else BRAND["red"]
             )
-            st.metric(
-                f"Idiosyncratic ({largest_ticker})",
-                f"${name_impact_val:+,.2f}",
-                delta=f"{(name_impact_val/capital_base)*100:+.2f}%",
-                delta_color="normal"
-            )
-            
-        with col_res2:
-            st.markdown("<p style='font-size:13px;color:#94a3b8;margin-bottom:6px;font-weight:600;'>Simulated P/L vs. SPY Shift (%)</p>", unsafe_allow_html=True)
-            
-            # Draw curve
-            x_range = np.linspace(-15.0, 15.0, 100)
-            y_range = (net_delta * x_range) + (0.2 * net_gamma * (x_range ** 2)) + vega_impact_val + name_impact_val
-            
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=x_range,
-                y=y_range,
-                mode='lines',
-                line=dict(color=BRAND["blue"], width=3.0),
-                name="Stress Curve",
-                hovertemplate="SPY Shift: %{x:.1f}%<br>Simulated P/L: $%{y:,.2f}<extra></extra>"
+            port_by_scenario["pct_of_capital"] = port_by_scenario["Portfolio P/L"] / max(capital_base, 1.0) * 100
+        else:
+            port_by_scenario = pd.DataFrame()
+
+        # ── Sub-panel 2: Portfolio P/L by SPY Scenario ───────────────────────
+        st.markdown("#### Portfolio P/L by SPY Scenario")
+        if not port_by_scenario.empty:
+            # Metric cards for key scenarios
+            key_scenarios = [-10.0, -5.0, 0.0, 5.0, 10.0]
+            metric_cols = st.columns(len(key_scenarios))
+            for idx, spy_val in enumerate(key_scenarios):
+                row_data = port_by_scenario[port_by_scenario["SPY Move"] == spy_val]
+                if not row_data.empty:
+                    pnl = float(row_data["Portfolio P/L"].iloc[0])
+                    pct = float(row_data["pct_of_capital"].iloc[0])
+                    vix_at = _vix_shock_from_spy(spy_val) if vix_override is None else vix_override
+                    with metric_cols[idx]:
+                        card_color = BRAND["green"] if pnl >= 0 else BRAND["red"]
+                        st.markdown(
+                            f"""
+                            <div style="background:#0f1e36;border:1px solid #1e3a5f;border-top:3px solid {card_color};
+                                border-radius:8px;padding:10px;text-align:center;margin-bottom:6px;">
+                                <div style="color:#94a3b8;font-size:11px;font-weight:800;text-transform:uppercase;">SPY {spy_val:+.0f}%</div>
+                                <div style="color:{card_color};font-size:20px;font-weight:900;margin:4px 0;">${pnl:+,.0f}</div>
+                                <div style="color:#64748b;font-size:10px;">{pct:+.1f}% capital</div>
+                                <div style="color:#475569;font-size:10px;">VIX {vix_at:+.0f}%</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+
+            # 9-scenario bar chart — beta-adjusted via matrix
+            fig_scen = go.Figure(go.Bar(
+                x=port_by_scenario["SPY Label"],
+                y=port_by_scenario["Portfolio P/L"],
+                marker_color=port_by_scenario["color"].tolist(),
+                text=port_by_scenario["Portfolio P/L"].map(lambda v: f"${v:+,.0f}"),
+                textposition="outside",
+                cliponaxis=False,
+                customdata=port_by_scenario[["pct_of_capital", "SPY Move"]].values,
+                hovertemplate=(
+                    "<b>SPY %{x}</b><br>"
+                    "Portfolio P/L: $%{y:,.2f}<br>"
+                    "Capital Impact: %{customdata[0]:+.2f}%<extra></extra>"
+                ),
             ))
-            
-            fig.add_trace(go.Scatter(
-                x=[spy_shock],
-                y=[total_impact_val],
-                mode='markers',
-                marker=dict(color=status_color, size=12, line=dict(color='#ffffff', width=2.0)),
-                name="Current Shift",
-                hovertemplate="Current Shock: %{x:.1f}%<br>Simulated P/L: $%{y:,.2f}<extra></extra>"
-            ))
-            
-            fig.add_hline(y=0.0, line_dash="dash", line_color="#475569", line_width=1.0)
-            fig.add_vline(x=spy_shock, line_dash="dot", line_color="#94a3b8", line_width=1.0)
-            
-            style_figure(fig, height=270)
-            fig.update_layout(
-                margin=dict(l=10, r=10, t=5, b=5),
+            fig_scen.add_hline(y=0, line_dash="dash", line_color="#475569", line_width=1)
+
+            # Breakeven annotation: find first scenario where P/L crosses zero
+            pos_vals = port_by_scenario[port_by_scenario["Portfolio P/L"] >= 0]["SPY Move"]
+            neg_vals = port_by_scenario[port_by_scenario["Portfolio P/L"] < 0]["SPY Move"]
+            if not pos_vals.empty and not neg_vals.empty:
+                # Approximate breakeven by interpolating between adjacent scenarios
+                sorted_df = port_by_scenario.sort_values("SPY Move")
+                for i in range(len(sorted_df) - 1):
+                    p1 = float(sorted_df.iloc[i]["Portfolio P/L"])
+                    p2 = float(sorted_df.iloc[i + 1]["Portfolio P/L"])
+                    s1 = float(sorted_df.iloc[i]["SPY Move"])
+                    s2 = float(sorted_df.iloc[i + 1]["SPY Move"])
+                    if p1 * p2 < 0:  # sign change → breakeven between these two
+                        breakeven_spy = s1 - p1 * (s2 - s1) / (p2 - p1)
+                        fig_scen.add_annotation(
+                            x=f"{s1:+.0f}%",
+                            y=0,
+                            text=f"Breakeven ≈ SPY {breakeven_spy:+.1f}%",
+                            showarrow=True,
+                            arrowhead=2,
+                            arrowcolor=BRAND["yellow"],
+                            font=dict(color=BRAND["yellow"], size=11, family="monospace"),
+                            bgcolor="#0f1e36",
+                            bordercolor=BRAND["yellow"],
+                            borderpad=4,
+                        )
+                        break
+
+            style_figure(fig_scen, height=320)
+            fig_scen.update_layout(
+                margin=dict(l=10, r=10, t=10, b=10),
+                xaxis=dict(title="SPY Scenario", showgrid=False),
+                yaxis=dict(title="Estimated Portfolio P/L ($)", tickprefix="$", showgrid=True, gridcolor="#1e3a5f"),
                 showlegend=False,
-                xaxis=dict(ticksuffix="%", showgrid=True, gridcolor="#1e3a5f"),
-                yaxis=dict(tickprefix="$", showgrid=True, gridcolor="#1e3a5f")
             )
-            st.plotly_chart(fig, use_container_width=True, theme=None)
-            
-            # Advisory box
+            st.plotly_chart(fig_scen, use_container_width=True, theme=None)
+            st.markdown(
+                "<p style='font-size:11px;color:#475569;margin-top:-8px;'>"  
+                "Delta &amp; Gamma impact scaled by per-ticker beta. VIX shock auto-correlated to SPY move when toggle is ON. "
+                "Theta decay applied for selected days. P/L is an approximation — not a full revaluation.</p>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info("No position data to build scenario matrix.")
+
+        st.markdown("---")
+
+        # ── Sub-panel 3: Position-Level Shock Table ───────────────────────────
+        st.markdown("#### Position-Level Shock Table")
+        if not matrix.empty:
+            # Added increments around zero (-2%, -1%, +1%, +2%)
+            key_spy_vals = [-10.0, -5.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 5.0, 10.0]
+            pivot = matrix[matrix["spy_pct"].isin(key_spy_vals)].pivot_table(
+                index=["ticker", "strategy", "beta"],
+                columns="spy_pct",
+                values="total_pnl",
+                aggfunc="sum",
+            ).reset_index()
+            pivot.columns = (
+                ["Ticker", "Strategy", "Beta"]
+                + [f"SPY {v:+.0f}%" for v in key_spy_vals]
+            )
+
+            # Add scenario-aware action signal using base scenario (0%)
+            base_col = "SPY +0%" if "SPY +0%" in pivot.columns else "SPY  0%"
+            # Reconstruct base column name reliably
+            base_col_candidates = [c for c in pivot.columns if "0%" in c]
+            base_col = base_col_candidates[0] if base_col_candidates else pivot.columns[3]
+
+            scenario_pnl_cols = [c for c in pivot.columns if c.startswith("SPY ")]
+            action_signals = []
+            for _, prow in pivot.iterrows():
+                pnl_vals = [float(prow.get(c, 0.0)) for c in scenario_pnl_cols]
+                base_pnl_val = float(prow.get(base_col, 0.0))
+                # Look up risk_score from enriched df
+                ticker_clean = clean_ticker_for_lookup(str(prow["Ticker"]))
+                risk_row = df[df["ticker"].apply(clean_ticker_for_lookup) == ticker_clean]
+                risk_score_val = float(risk_row["risk_score"].iloc[0]) if not risk_row.empty else 50.0
+                weight_pct_val = float(risk_row["weight_pct"].iloc[0]) if not risk_row.empty else 0.0
+                current_pnl_val = float(risk_row["pl_open"].iloc[0]) if not risk_row.empty else 0.0
+                signal = _scenario_action_signal(
+                    pnl_vals, base_pnl_val, current_pnl_val, risk_score_val, weight_pct_val
+                )
+                action_signals.append(signal)
+            pivot["Signal"] = action_signals
+
+            # Add Total row to pivot table
+            pnl_cols = [c for c in pivot.columns if c.startswith("SPY ")]
+            totals_row = {
+                "Ticker": "Total",
+                "Strategy": "",
+                "Beta": portfolio_beta,
+                "Signal": "",
+            }
+            for c in pnl_cols:
+                totals_row[c] = pivot[c].sum()
+            totals_df = pd.DataFrame([totals_row])
+            pivot = pd.concat([pivot, totals_df], ignore_index=True)
+
+            pnl_cols = [c for c in pivot.columns if c.startswith("SPY ")]
+
+            def _color_pnl(val: float) -> str:
+                if not isinstance(val, (int, float)):
+                    return ""
+                if val > 0:
+                    return f"color: {BRAND['green']}; font-weight: 700"
+                if val < 0:
+                    return f"color: {BRAND['red']}; font-weight: 700"
+                return "color: #94a3b8"
+
+            def _bold_total_row(row):
+                if row["Ticker"] == "Total":
+                    return ["font-weight: 900; background-color: #0f274a; border-top: 2px solid #1e3a5f;"] * len(row)
+                return [""] * len(row)
+
+            fmt_dict = {c: "${:+,.2f}" for c in pnl_cols}
+            fmt_dict["Beta"] = "{:.2f}"
+            styled = pivot.style.map(_color_pnl, subset=pnl_cols).apply(_bold_total_row, axis=1).format(fmt_dict)
+            st.dataframe(styled, use_container_width=True, hide_index=True)
+        else:
+            st.info("Scenario matrix not available.")
+
+        st.markdown("---")
+
+        # ── Sub-panel 4: SPY Stress Heatmap (Ticker × Scenario) ──────────────
+        st.markdown("#### SPY Stress Heatmap — Ticker × Scenario")
+        if not matrix.empty:
+            heat_pivot = matrix.pivot_table(
+                index="ticker",
+                columns="spy_pct",
+                values="total_pnl",
+                aggfunc="sum",
+            )
+            heat_pivot.columns = [f"{v:+.0f}%" for v in heat_pivot.columns]
+            heat_pivot = heat_pivot.sort_values(heat_pivot.columns[0], ascending=True)  # worst scenario first
+
+            z_vals = heat_pivot.values
+            abs_max = max(float(np.abs(z_vals).max()), 1.0)
+            text_vals = [[f"${v:+,.0f}" for v in row_vals] for row_vals in z_vals]
+
+            fig_heat = go.Figure(go.Heatmap(
+                z=z_vals,
+                x=list(heat_pivot.columns),
+                y=list(heat_pivot.index),
+                text=text_vals,
+                texttemplate="%{text}",
+                zmin=-abs_max,
+                zmax=abs_max,
+                colorscale=[[0, BRAND["red"]], [0.5, "#1e293b"], [1, BRAND["green"]]],
+                hovertemplate="<b>%{y}</b><br>SPY %{x}<br>Est. P/L: %{text}<extra></extra>",
+            ))
+            style_figure(fig_heat, height=max(320, 28 * len(heat_pivot) + 80))
+            fig_heat.update_layout(
+                margin=dict(l=10, r=10, t=10, b=10),
+                xaxis=dict(title="SPY Scenario"),
+                yaxis=dict(title="", automargin=True),
+            )
+            st.plotly_chart(fig_heat, use_container_width=True, theme=None)
+
+        st.markdown("---")
+
+        # ── Sub-panel 5: Contribution Breakdown (Ticker + Strategy) ──────────
+        st.markdown("#### Contribution Breakdown")
+        if not matrix.empty:
+            # Use the SPY -5% scenario for contribution charts
+            contrib_scenario = -5.0
+            contrib_df = matrix[matrix["spy_pct"] == contrib_scenario].copy()
+            if contrib_df.empty and not matrix.empty:
+                contrib_scenario = float(matrix["spy_pct"].unique()[0])
+                contrib_df = matrix[matrix["spy_pct"] == contrib_scenario].copy()
+
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                ticker_contrib = (
+                    contrib_df.groupby("ticker")["total_pnl"]
+                    .sum()
+                    .sort_values()
+                    .reset_index()
+                )
+                ticker_contrib["color"] = ticker_contrib["total_pnl"].apply(
+                    lambda v: BRAND["green"] if v >= 0 else BRAND["red"]
+                )
+                fig_tc = go.Figure(go.Bar(
+                    x=ticker_contrib["total_pnl"],
+                    y=ticker_contrib["ticker"],
+                    orientation="h",
+                    marker_color=ticker_contrib["color"].tolist(),
+                    text=ticker_contrib["total_pnl"].map(lambda v: f"${v:+,.0f}"),
+                    textposition="auto",
+                    cliponaxis=False,
+                    hovertemplate=f"<b>%{{y}}</b><br>P/L at SPY {contrib_scenario:+.0f}%: $%{{x:,.2f}}<extra></extra>",
+                ))
+                fig_tc.add_vline(x=0, line_color="#475569", line_width=1)
+                style_figure(fig_tc, height=max(280, 26 * len(ticker_contrib) + 60))
+                fig_tc.update_layout(
+                    title=dict(text=f"Ticker P/L at SPY {contrib_scenario:+.0f}%", font=dict(size=12)),
+                    margin=dict(l=10, r=40, t=36, b=10),
+                    xaxis=dict(tickprefix="$", showgrid=True, gridcolor="#1e3a5f"),
+                    yaxis=dict(anchor="free", position=0.0),
+                )
+                st.plotly_chart(fig_tc, use_container_width=True, theme=None)
+
+            with cc2:
+                strat_contrib = (
+                    contrib_df.groupby("strategy")["total_pnl"]
+                    .sum()
+                    .sort_values()
+                    .reset_index()
+                )
+                strat_contrib["color"] = strat_contrib["total_pnl"].apply(
+                    lambda v: BRAND["green"] if v >= 0 else BRAND["red"]
+                )
+                fig_sc = go.Figure(go.Bar(
+                    x=strat_contrib["total_pnl"],
+                    y=strat_contrib["strategy"],
+                    orientation="h",
+                    marker_color=strat_contrib["color"].tolist(),
+                    text=strat_contrib["total_pnl"].map(lambda v: f"${v:+,.0f}"),
+                    textposition="auto",
+                    cliponaxis=False,
+                    hovertemplate="<b>%{y}</b><br>Strategy P/L: $%{x:,.2f}<extra></extra>",
+                ))
+                fig_sc.add_vline(x=0, line_color="#475569", line_width=1)
+                style_figure(fig_sc, height=max(280, 26 * len(strat_contrib) + 60))
+                fig_sc.update_layout(
+                    title=dict(text=f"Strategy P/L at SPY {contrib_scenario:+.0f}%", font=dict(size=12)),
+                    margin=dict(l=10, r=40, t=36, b=10),
+                    xaxis=dict(tickprefix="$", showgrid=True, gridcolor="#1e3a5f"),
+                    yaxis=dict(anchor="free", position=0.0),
+                )
+                st.plotly_chart(fig_sc, use_container_width=True, theme=None)
+
+        st.markdown("---")
+
+        # ── Sub-panel 6: Calendar Risk Alerts ────────────────────────────────
+        calendar_positions = df[
+            df["strategy"].apply(lambda s: any(kw in str(s) for kw in ("Calander", "Calendar")))
+        ] if "strategy" in df.columns else pd.DataFrame()
+
+        if not calendar_positions.empty:
+            st.markdown("#### 📅 Calendar Spread Risk Monitor")
+            # Use SPY -5% as the reference scenario for calendar checks
+            cal_spy = -5.0
+            cal_vix = vix_override if vix_override is not None else _vix_shock_from_spy(cal_spy)
+            median_theta_abs = float(df["theta"].abs().median()) if not df.empty else 0.0
+            median_vega = float(df["vega"].median()) if not df.empty else 0.0
+
+            alert_level_map = {"Safe": "🟢", "Monitor": "🟡", "Danger": "🔴"}
+            cal_rows = []
+            for _, cal_row in calendar_positions.iterrows():
+                alerts = _calendar_risk_checks(
+                    cal_row, cal_spy, cal_vix, median_theta_abs, median_vega
+                )
+                row_dict: dict = {
+                    "Ticker": clean_ticker_for_lookup(str(cal_row.get("ticker", ""))),
+                    "Strategy": str(cal_row.get("strategy", "")),
+                    "Front DTE": int(float(cal_row.get("min_dte", 0))),
+                    "Back DTE": int(float(cal_row.get("max_dte", 0))),
+                }
+                for check_name, level in alerts:
+                    row_dict[check_name] = f"{alert_level_map.get(level, '⚪')} {level}"
+                cal_rows.append(row_dict)
+
+            cal_table = pd.DataFrame(cal_rows)
+            st.dataframe(cal_table, use_container_width=True, hide_index=True)
+
+            danger_count = sum(
+                1 for r in cal_rows
+                for k, v in r.items()
+                if k not in {"Ticker", "Strategy", "Front DTE", "Back DTE"} and "Danger" in str(v)
+            )
+            if danger_count > 0:
+                st.error(
+                    f"⚠️ **{danger_count} calendar risk alert(s) at Danger level** under SPY {cal_spy:+.0f}% scenario. "
+                    "Review short-strike distance and IV crush exposure before earnings or macro events."
+                )
+            st.markdown("---")
+
+        # ── Sub-panel 7: Proactive Advisory (scenario-driven) ────────────────
+        st.markdown("#### Proactive Profit Protection Advisory")
+        if not port_by_scenario.empty:
+            base_impact = float(
+                port_by_scenario.loc[port_by_scenario["SPY Move"] == 0.0, "Portfolio P/L"].sum()
+                if 0.0 in port_by_scenario["SPY Move"].values
+                else 0.0
+            )
+            stress_impact = float(
+                port_by_scenario.loc[port_by_scenario["SPY Move"] == -5.0, "Portfolio P/L"].sum()
+                if -5.0 in port_by_scenario["SPY Move"].values
+                else 0.0
+            )
+            worst_impact = float(port_by_scenario["Portfolio P/L"].min())
+            best_impact = float(port_by_scenario["Portfolio P/L"].max())
+            negative_scenarios = int((port_by_scenario["Portfolio P/L"] < 0).sum())
+
             with st.expander("🛡️ Proactive Profit Protection Advisory", expanded=True):
-                if total_impact_val >= 0:
-                    st.success("👍 **Constructive Stress Profile**: Simulated parameters show a positive or neutral net return. Continue monitoring your Greek concentrations.")
+                advisory_color = BRAND["green"] if stress_impact >= 0 else BRAND["red"]
+                st.markdown(
+                    f"""
+                    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;">
+                        <div style="background:#0f1e36;border:1px solid #1e3a5f;border-left:4px solid {BRAND['blue']};border-radius:6px;padding:10px 14px;flex:1;min-width:140px;">
+                            <div style="color:#94a3b8;font-size:11px;">Best Scenario</div>
+                            <div style="color:{BRAND['green']};font-size:18px;font-weight:800;">${best_impact:+,.0f}</div>
+                        </div>
+                        <div style="background:#0f1e36;border:1px solid #1e3a5f;border-left:4px solid {advisory_color};border-radius:6px;padding:10px 14px;flex:1;min-width:140px;">
+                            <div style="color:#94a3b8;font-size:11px;">SPY -5% Impact</div>
+                            <div style="color:{advisory_color};font-size:18px;font-weight:800;">${stress_impact:+,.0f}</div>
+                        </div>
+                        <div style="background:#0f1e36;border:1px solid #1e3a5f;border-left:4px solid {BRAND['red']};border-radius:6px;padding:10px 14px;flex:1;min-width:140px;">
+                            <div style="color:#94a3b8;font-size:11px;">Worst Scenario</div>
+                            <div style="color:{BRAND['red']};font-size:18px;font-weight:800;">${worst_impact:+,.0f}</div>
+                        </div>
+                        <div style="background:#0f1e36;border:1px solid #1e3a5f;border-left:4px solid {'#f97316' if negative_scenarios >= 5 else BRAND['green']};border-radius:6px;padding:10px 14px;flex:1;min-width:140px;">
+                            <div style="color:#94a3b8;font-size:11px;">Negative Scenarios</div>
+                            <div style="color:{'#f97316' if negative_scenarios >= 5 else BRAND['green']};font-size:18px;font-weight:800;">{negative_scenarios}/9</div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                if negative_scenarios == 0:
+                    st.success("✅ **All-Clear**: Portfolio shows positive P/L across all 9 SPY scenarios. Current structure appears resilient to tested market shocks.")
+                elif negative_scenarios <= 2:
+                    st.info("ℹ️ **Selective Risk**: Portfolio underperforms in extreme tail scenarios only. Monitor positions with high negative scenario contributions in the heatmap above.")
+                elif negative_scenarios <= 5:
+                    st.warning(
+                        f"⚠️ **Scenario Risk Detected**: {negative_scenarios} of 9 SPY scenarios produce negative P/L. "
+                        "Review the Ticker Contribution chart to identify which positions drive losses and consider defensive adjustments."
+                    )
                 else:
-                    st.warning("⚠️ **Profit Risk Warning**: Stress simulation models a negative portfolio return. See suggested protective adjustments below.")
-                    
-                # Delta hedge advice
-                if delta_impact_val < -100:
-                    st.markdown(
-                        f"**Directional Risk**: Your long delta is vulnerable to market declines. To protect profits:\n"
-                        f"*   Buy out-of-the-money SPY put options to establish a portfolio floor.\n"
-                        f"*   Sell call options / call spreads against current stock positions (covered calls) to accumulate credit protection."
+                    st.error(
+                        f"🚨 **High Scenario Risk**: {negative_scenarios} of 9 scenarios are negative (worst: ${worst_impact:,.0f}). "
+                        "Immediate action advised — reduce directional exposure, buy portfolio protection (SPY puts), or trim the highest-beta positions identified in the shock table above."
                     )
-                elif delta_impact_val > 100:
-                    st.markdown(
-                        f"**Upside Directional Risk**: Your short delta posture will lose on a sharp rally. To hedge:\n"
-                        f"*   Purchase SPY call spreads or buy back short calls to cap upside risk."
-                    )
-                    
-                # Gamma hedge advice
-                if gamma_impact_val < -50:
-                    st.markdown(
-                        f"**Convexity Danger (Short Gamma)**: Negative Gamma accelerates losses during large moves. To protect profits:\n"
-                        f"*   Convert naked short options to defined-risk vertical spreads (e.g. Iron Condors, credit spreads) to cap negative gamma acceleration.\n"
-                        f"*   Buy long options (calls/puts) to introduce positive gamma."
-                    )
-                    
-                # Vega hedge advice
-                if vega_impact_val < -50:
-                    st.markdown(
-                        f"**Volatility Danger (Short Vega)**: Volatility expansion will hurt your short options. To protect profits:\n"
-                        f"*   Buy VIX call options or back-spreads to profit from volatility spikes.\n"
-                        f"*   Structure calendar spreads (buy back-month, sell front-month) to maintain positive net vega."
-                    )
-                    
-                # Idiosyncratic advice
-                if name_impact_val < -50:
-                    st.markdown(
-                        f"**Concentration Danger ({largest_ticker})**: Your largest single-name position accounts for a large portion of risk. To protect profits:\n"
-                        f"*   Trim {largest_ticker} exposure below 20.00% weight.\n"
-                        f"*   Purchase a protective collar (buy put, sell call) on {largest_ticker} to lock in paper profits without trigger-selling the shares."
-                    )
+
+                # Scenario-driven action checklist
+                net_delta_val = float(totals.get("total_delta", 0.0))
+                net_vega_val = float(totals.get("total_vega", 0.0))
+                net_theta_val = float(totals.get("total_theta", 0.0))
+
+                actions_text = []
+                if stress_impact < -capital_base * 0.03:
+                    actions_text.append(f"**Delta Hedge**: SPY -5% costs ~${abs(stress_impact):,.0f}. Buy SPY put spreads or reduce long delta positions.")
+                if net_vega_val < -1000 and (vix_override or _vix_shock_from_spy(-5.0)) > 5:
+                    actions_text.append("**Vega Hedge**: Short vega book is exposed to IV expansion. Consider VIX calls or calendar back-spreads.")
+                if net_theta_val < 0:
+                    actions_text.append("**Theta Drain**: Book carries negative theta. Close losing structures with DTE < 14 or add premium-selling trades.")
+                if portfolio_beta > 1.3:
+                    actions_text.append(f"**Beta Reduction**: Portfolio beta {portfolio_beta:.2f} amplifies market moves. Reduce high-beta names or add inverse ETF hedge.")
+                if not actions_text:
+                    actions_text.append("Maintain current structure — no critical action signals from scenario analysis.")
+                for action in actions_text:
+                    st.markdown(f"- {action}")
 
     def _render_behavior_metrics(self, df: pd.DataFrame, totals: dict[str, float]):
         st.markdown("### Portfolio Behavior")
