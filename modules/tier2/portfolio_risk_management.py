@@ -2469,13 +2469,37 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 annotation_font=dict(color="#ef4444", size=10)
             )
 
-            # Boundary dashed lines
-            fig_scen.add_vline(x=-one_std, line_dash="dash", line_color="#10b981", line_width=1.0)
-            fig_scen.add_vline(x=one_std, line_dash="dash", line_color="#10b981", line_width=1.0)
-            fig_scen.add_vline(x=-2*one_std, line_dash="dash", line_color="#facc15", line_width=1.0)
-            fig_scen.add_vline(x=2*one_std, line_dash="dash", line_color="#facc15", line_width=1.0)
-            fig_scen.add_vline(x=-3*one_std, line_dash="dash", line_color="#ef4444", line_width=1.0)
-            fig_scen.add_vline(x=3*one_std, line_dash="dash", line_color="#ef4444", line_width=1.0)
+            # Boundary vertical bars
+            fig_scen.add_vline(
+                x=-one_std, line_color="#10b981", line_width=4.0,
+                annotation_text="<b>-1σ</b>", annotation_position="top left",
+                annotation_font=dict(color="#10b981", size=11)
+            )
+            fig_scen.add_vline(
+                x=one_std, line_color="#10b981", line_width=4.0,
+                annotation_text="<b>+1σ</b>", annotation_position="top right",
+                annotation_font=dict(color="#10b981", size=11)
+            )
+            fig_scen.add_vline(
+                x=-2*one_std, line_color="#facc15", line_width=4.0,
+                annotation_text="<b>-2σ</b>", annotation_position="top left",
+                annotation_font=dict(color="#facc15", size=11)
+            )
+            fig_scen.add_vline(
+                x=2*one_std, line_color="#facc15", line_width=4.0,
+                annotation_text="<b>+2σ</b>", annotation_position="top right",
+                annotation_font=dict(color="#facc15", size=11)
+            )
+            fig_scen.add_vline(
+                x=-3*one_std, line_color="#ef4444", line_width=4.0,
+                annotation_text="<b>-3σ</b>", annotation_position="top left",
+                annotation_font=dict(color="#ef4444", size=11)
+            )
+            fig_scen.add_vline(
+                x=3*one_std, line_color="#ef4444", line_width=4.0,
+                annotation_text="<b>+3σ</b>", annotation_position="top right",
+                annotation_font=dict(color="#ef4444", size=11)
+            )
 
             # Breakeven annotation: find first scenario where P/L crosses zero
             pos_vals = port_by_scenario[port_by_scenario["Portfolio P/L"] >= 0]["SPY Move"]
