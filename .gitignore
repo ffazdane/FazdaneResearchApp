@@ -61,4 +61,7 @@ data/calendar_scoring.sqlite
 data/calendar_scoring.sqlite-*
 data/calendar_scoring_test.sqlite
 data/calendar_scoring_test.sqlite-*
+data/price_action_story/*.sqlite
+data/price_action_story/*.sqlite-*
+
 

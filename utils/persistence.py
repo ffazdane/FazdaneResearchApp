@@ -41,6 +41,10 @@ DATABASES = {
         "env_var": "CALENDAR_SCORING_DB_PATH",
         "default_path": REPO_ROOT / "data" / "calendar_scoring.sqlite",
     },
+    "price_action_story": {
+        "env_var": "PRICE_ACTION_STORY_DB_PATH",
+        "default_path": REPO_ROOT / "data" / "price_action_story" / "price_action_story.sqlite",
+    },
 }
 
 BACKUP_DIR = REPO_ROOT / "data" / "backups"

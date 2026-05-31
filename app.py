@@ -886,6 +886,7 @@ with st.sidebar:
             "Stock Sentiment Analysis",
             "Social Stock Stories",
             "Calendar Opportunity Scoring Engine",
+            "Price Action Story Engine",
         ]
         tier2_sel = st.radio(
             "tier2",
@@ -1142,6 +1143,17 @@ elif active_module == "Calendar Opportunity Scoring Engine":
         st.error(f"Failed to load Calendar Opportunity Scoring Engine: {e}")
         st.code(traceback.format_exc())
 
+elif active_module == "Price Action Story Engine":
+    try:
+        from modules.tier2.price_action_story import PriceActionStoryModule
+        module = PriceActionStoryModule()
+        module.run()
+        logger.info("Price Action Story Engine")
+    except Exception as e:
+        import traceback
+        st.error(f"Failed to load Price Action Story Engine: {e}")
+        st.code(traceback.format_exc())
+
 elif "Bradley Siderograph" in active_module:
     from modules.tier3.bradley_siderograph import BradleySiderographModule
     module = BradleySiderographModule()
@@ -1241,6 +1253,7 @@ else:
                 {"label": "Stock Sentiment Analysis", "module": "Stock Sentiment Analysis", "tier": 2, "key": "macro_sentiment"},
                 {"label": "Social Stock Stories", "module": "Social Stock Stories", "tier": 2, "key": "macro_social_stories"},
                 {"label": "Calendar Opportunity Scoring Engine", "module": "Calendar Opportunity Scoring Engine", "tier": 2, "key": "macro_calendar_scoring"},
+                {"label": "Price Action Story Engine", "module": "Price Action Story Engine", "tier": 2, "key": "macro_price_action_story"},
             ],
         },
         {

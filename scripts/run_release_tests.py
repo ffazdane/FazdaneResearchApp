@@ -61,6 +61,7 @@ def test_imports():
         ("modules.tier2.stock_sentiment", "StockSentimentModule"),
         ("modules.tier2.social_stock_stories", "SocialStockStoriesModule"),
         ("modules.tier2.universe_intelligence", "UniverseIntelligenceModule"),
+        ("modules.tier2.price_action_story", "PriceActionStoryModule"),
         # Tier 3
         ("modules.tier3.bradley_siderograph", "BradleySiderographModule"),
         ("modules.tier3.elliott_wave_analysis", "ElliottWaveAnalysisModule"),
