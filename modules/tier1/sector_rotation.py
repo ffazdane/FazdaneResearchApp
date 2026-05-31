@@ -220,6 +220,7 @@ class SectorRotationModule(FazDaneModule):
         period_number = st.slider("Periods:", 3, 52, 12, 1, key="sr_pnum")
         tail_len = st.slider("Tail Length:", 3, 15, 6, 1, key="sr_tail")
         ema_span = st.slider("Smooth (EMA Span):", 2, 10, 4, 1, key="sr_ema")
+        st.checkbox("Show Transition Trails", value=True, key="sr_show_trails")
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         scan_clicked = st.button("🔄 Generate Matrix", use_container_width=True, type="primary")
@@ -280,9 +281,18 @@ class SectorRotationModule(FazDaneModule):
         rs_ratio_df = rs_ratio_df.tail(max(period_number, tail_length))
         rs_momentum_df = rs_momentum_df.tail(max(period_number, tail_length))
         
-        self._render_plot(rs_ratio_df, rs_momentum_df, ticker_dict, tail_length, fdts_signals)
+        show_trails = st.session_state.get("sr_show_trails", True)
 
-    def _render_plot(self, ratio_df, mom_df, ticker_dict, tail_length, fdts_signals):
+        # Tabbed interface for standard vs visual format
+        tab_std, tab_viz = st.tabs(["Standard Matrix", "Visual RRG Matrix"])
+        
+        with tab_std:
+            self._render_plot(rs_ratio_df, rs_momentum_df, ticker_dict, tail_length, fdts_signals, show_trails=show_trails)
+            
+        with tab_viz:
+            self._render_visual_rrg_plot(rs_ratio_df, rs_momentum_df, ticker_dict, tail_length, fdts_signals, show_trails=show_trails, state=state)
+
+    def _render_plot(self, ratio_df, mom_df, ticker_dict, tail_length, fdts_signals, show_trails=True):
         fig = go.Figure()
         
         all_x_vals, all_y_vals = [], []
@@ -310,24 +320,25 @@ class SectorRotationModule(FazDaneModule):
             
             x_smooth, y_smooth = smooth_tail_path(x.values, y.values, points=120)
             
-            # --- The Dotted Trace exactly as requested ---
-            fig.add_trace(go.Scatter(
-                x=x_smooth, y=y_smooth,
-                mode="lines",
-                name=f"{asset_name} ({ticker})",
-                line=dict(color=color, width=1.5, dash="dot"),
-                hoverinfo='skip',
-                showlegend=False
-            ))
-            
-            # Trail points
-            fig.add_trace(go.Scatter(
-                x=x.values, y=y.values,
-                mode="markers",
-                marker=dict(size=4, color=color, opacity=0.75),
-                hoverinfo='skip',
-                showlegend=False
-            ))
+            if show_trails:
+                # --- The Dotted Trace exactly as requested ---
+                fig.add_trace(go.Scatter(
+                    x=x_smooth, y=y_smooth,
+                    mode="lines",
+                    name=f"{asset_name} ({ticker})",
+                    line=dict(color=color, width=1.5, dash="dot"),
+                    hoverinfo='skip',
+                    showlegend=False
+                ))
+                
+                # Trail points
+                fig.add_trace(go.Scatter(
+                    x=x.values, y=y.values,
+                    mode="markers",
+                    marker=dict(size=4, color=color, opacity=0.75),
+                    hoverinfo='skip',
+                    showlegend=False
+                ))
             
             # Head point
             fig.add_trace(go.Scatter(
@@ -361,22 +372,44 @@ class SectorRotationModule(FazDaneModule):
         x_min, x_max = min(x_min, 99), max(x_max, 101)
         y_min, y_max = min(y_min, 99), max(y_max, 101)
         
-        # Quadrant backgrounds
-        fig.add_shape(type="rect", x0=100, y0=100, x1=x_max, y1=y_max, fillcolor="rgba(58,181,74,0.08)", line_width=0)
-        fig.add_shape(type="rect", x0=100, y0=y_min, x1=x_max, y1=100, fillcolor="rgba(245,158,11,0.08)", line_width=0)
-        fig.add_shape(type="rect", x0=x_min, y0=y_min, x1=100, y1=100, fillcolor="rgba(239,68,68,0.08)", line_width=0)
-        fig.add_shape(type="rect", x0=x_min, y0=100, x1=100, y1=y_max, fillcolor="rgba(59,130,246,0.08)", line_width=0)
+        # Quadrant backgrounds (solid shading extended to full block limits)
+        fig.add_shape(type="rect", x0=100, y0=100, x1=9999, y1=9999, fillcolor="rgba(58,181,74,0.08)", line_width=0, layer="below")
+        fig.add_shape(type="rect", x0=100, y0=-9999, x1=9999, y1=100, fillcolor="rgba(245,158,11,0.08)", line_width=0, layer="below")
+        fig.add_shape(type="rect", x0=-9999, y0=-9999, x1=100, y1=100, fillcolor="rgba(239,68,68,0.08)", line_width=0, layer="below")
+        fig.add_shape(type="rect", x0=-9999, y0=100, x1=100, y1=9999, fillcolor="rgba(59,130,246,0.08)", line_width=0, layer="below")
         
         fig.add_hline(y=100, line_color="#1e3a5f", line_width=1.5)
         fig.add_vline(x=100, line_color="#1e3a5f", line_width=1.5)
         
-        diff_x = (x_max - x_min) * 0.05
-        diff_y = (y_max - y_min) * 0.05
-        
-        fig.add_annotation(x=x_max - diff_x, y=y_max - diff_y, text="LEADING", showarrow=False, font=dict(color="rgba(58,181,74,0.3)", size=26, family="Inter", weight="bold"))
-        fig.add_annotation(x=x_max - diff_x, y=y_min + diff_y, text="WEAKENING", showarrow=False, font=dict(color="rgba(245,158,11,0.3)", size=26, family="Inter", weight="bold"))
-        fig.add_annotation(x=x_min + diff_x, y=y_min + diff_y, text="LAGGING", showarrow=False, font=dict(color="rgba(239,68,68,0.3)", size=26, family="Inter", weight="bold"))
-        fig.add_annotation(x=x_min + diff_x, y=y_max - diff_y, text="IMPROVING", showarrow=False, font=dict(color="rgba(59,130,246,0.3)", size=26, family="Inter", weight="bold"))
+        # Quadrant corner label annotations using paper coordinates
+        fig.add_annotation(
+            x=0.98, y=0.98,
+            xref="paper", yref="paper",
+            text="LEADING", showarrow=False, 
+            font=dict(color="rgba(58,181,74,0.3)", size=26, family="Inter", weight="bold"),
+            xanchor="right", yanchor="top"
+        )
+        fig.add_annotation(
+            x=0.98, y=0.02,
+            xref="paper", yref="paper",
+            text="WEAKENING", showarrow=False, 
+            font=dict(color="rgba(245,158,11,0.3)", size=26, family="Inter", weight="bold"),
+            xanchor="right", yanchor="bottom"
+        )
+        fig.add_annotation(
+            x=0.02, y=0.02,
+            xref="paper", yref="paper",
+            text="LAGGING", showarrow=False, 
+            font=dict(color="rgba(239,68,68,0.3)", size=26, family="Inter", weight="bold"),
+            xanchor="left", yanchor="bottom"
+        )
+        fig.add_annotation(
+            x=0.02, y=0.98,
+            xref="paper", yref="paper",
+            text="IMPROVING", showarrow=False, 
+            font=dict(color="rgba(59,130,246,0.3)", size=26, family="Inter", weight="bold"),
+            xanchor="left", yanchor="top"
+        )
 
         fig.update_layout(
             paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e",
@@ -409,7 +442,7 @@ class SectorRotationModule(FazDaneModule):
                 st.markdown(
                     f"""
                     <div style="background:rgba(21,40,71,0.6); border-top:3px solid {color}; padding:15px; border-radius:8px; min-height:220px;">
-                        <h4 style="color:{color}; margin-top:0; margin-bottom:12px; font-family:'Inter',sans-serif;">{title}</h4>
+                        <div style="color:{color}; font-weight:bold; font-size:16px; margin-top:0; margin-bottom:12px; font-family:'Inter',sans-serif;">{title}</div>
                         <div style="color:#e2e8f0; font-size:14px; line-height:2.0;">
                             {'<br>'.join(items) if items else '<i style="color:#64748b;">None</i>'}
                         </div>
@@ -422,3 +455,220 @@ class SectorRotationModule(FazDaneModule):
         render_col(c2, "WEAKENING", "#f59e0b", weakening)
         render_col(c3, "LAGGING", "#ef4444", lagging)
         render_col(c4, "IMPROVING", "#3b82f6", improving)
+
+    def _render_visual_rrg_plot(self, ratio_df, mom_df, ticker_dict, tail_length, fdts_signals, show_trails=True, state=None):
+        fig = go.Figure()
+        
+        all_x_vals, all_y_vals = [], []
+        latest_rows = []
+        
+        # Color definitions for Visual RRG (matching light theme and latest quadrant color)
+        QUADRANT_COLORS = {
+            "Leading": "#16a34a",     # Green
+            "Weakening": "#d97706",   # Gold/Yellow
+            "Lagging": "#ef4444",     # Red
+            "Improving": "#2563eb"    # Blue
+        }
+        
+        for ticker, asset_name in ticker_dict.items():
+            if ticker not in ratio_df.columns:
+                continue
+
+            x = ratio_df[ticker].tail(tail_length).dropna()
+            y = mom_df[ticker].tail(tail_length).dropna()
+
+            common_idx = x.index.intersection(y.index)
+            x, y = x.loc[common_idx], y.loc[common_idx]
+
+            if len(x) < 2: continue
+
+            latest_x, latest_y = x.iloc[-1], y.iloc[-1]
+            all_x_vals.extend(x.values)
+            all_y_vals.extend(y.values)
+            
+            # Determine color based on latest quadrant
+            quad = get_quadrant(latest_x, latest_y)
+            color = QUADRANT_COLORS.get(quad, "#64748b")
+            
+            x_smooth, y_smooth = smooth_tail_path(x.values, y.values, points=120)
+            
+            if show_trails:
+                # Solid smooth curve line matching the image style
+                fig.add_trace(go.Scatter(
+                    x=x_smooth, y=y_smooth,
+                    mode="lines",
+                    name=f"{asset_name} ({ticker})",
+                    line=dict(color=color, width=2.5),
+                    hoverinfo='skip',
+                    showlegend=False
+                ))
+                
+                # Trail points along the path
+                fig.add_trace(go.Scatter(
+                    x=x.values, y=y.values,
+                    mode="markers",
+                    marker=dict(size=4, color=color, opacity=0.85),
+                    hoverinfo='skip',
+                    showlegend=False
+                ))
+            
+            # Head point (larger, filled circle with a thin black border)
+            fig.add_trace(go.Scatter(
+                x=[latest_x], y=[latest_y],
+                mode="markers+text",
+                name=f"{asset_name} ({ticker})",
+                text=[f"<b>{ticker}</b>"],
+                textposition="top right",
+                textfont=dict(color="#000000", size=13, family="Inter", weight="bold"),
+                marker=dict(size=14, color=color, line=dict(color="#000000", width=1.2)),
+                hovertemplate=f"<b>{asset_name} ({ticker})</b><br>RS-Ratio: %{{x:.2f}}<br>RS-Mom: %{{y:.2f}}<br>FDTS Signal: {fdts_signals.get(ticker, '⚪ No Trade')}<extra></extra>"
+            ))
+            
+            latest_rows.append({
+                "Ticker": ticker,
+                "Name": asset_name,
+                "RS Ratio": latest_x,
+                "RS Momentum": latest_y,
+                "Quadrant": quad,
+                "Color": color,
+                "FDTS": fdts_signals.get(ticker, "⚪ No Trade")
+            })
+
+        if not all_x_vals:
+            st.warning("Not enough data to plot. Try increasing periods.")
+            return
+
+        x_min, x_max = min(all_x_vals) - 1.0, max(all_x_vals) + 1.0
+        y_min, y_max = min(all_y_vals) - 1.0, max(all_y_vals) + 1.0
+        x_min, x_max = min(x_min, 99), max(x_max, 101)
+        y_min, y_max = min(y_min, 99), max(y_max, 101)
+        
+        # Quadrant backgrounds (solid pastel shading for light mode visual matrix, extended to full block limits, layer set to below)
+        fig.add_shape(type="rect", x0=100, y0=100, x1=9999, y1=9999, fillcolor="rgba(220, 252, 231, 0.7)", line_width=0, layer="below") # Leading
+        fig.add_shape(type="rect", x0=100, y0=-9999, x1=9999, y1=100, fillcolor="rgba(254, 249, 195, 0.7)", line_width=0, layer="below") # Weakening
+        fig.add_shape(type="rect", x0=-9999, y0=-9999, x1=100, y1=100, fillcolor="rgba(254, 226, 226, 0.7)", line_width=0, layer="below") # Lagging
+        fig.add_shape(type="rect", x0=-9999, y0=100, x1=100, y1=9999, fillcolor="rgba(219, 234, 254, 0.7)", line_width=0, layer="below") # Improving
+        
+        # Center axes lines (bold black lines)
+        fig.add_hline(y=100, line_color="#000000", line_width=1.5)
+        fig.add_vline(x=100, line_color="#000000", line_width=1.5)
+        
+        # Quadrant corner label annotations using paper coordinates to keep them pinned to the four corners
+        fig.add_annotation(
+            x=0.98, y=0.98,
+            xref="paper", yref="paper",
+            text="Leading", showarrow=False, 
+            font=dict(color="#16a34a", size=26, family="Inter", weight="bold"),
+            xanchor="right", yanchor="top"
+        )
+        fig.add_annotation(
+            x=0.98, y=0.02,
+            xref="paper", yref="paper",
+            text="Weakening", showarrow=False, 
+            font=dict(color="#d97706", size=26, family="Inter", weight="bold"),
+            xanchor="right", yanchor="bottom"
+        )
+        fig.add_annotation(
+            x=0.02, y=0.02,
+            xref="paper", yref="paper",
+            text="Lagging", showarrow=False, 
+            font=dict(color="#ef4444", size=26, family="Inter", weight="bold"),
+            xanchor="left", yanchor="bottom"
+        )
+        fig.add_annotation(
+            x=0.02, y=0.98,
+            xref="paper", yref="paper",
+            text="Improving", showarrow=False, 
+            font=dict(color="#2563eb", size=26, family="Inter", weight="bold"),
+            xanchor="left", yanchor="top"
+        )
+
+        # Footer annotation
+        fig.add_annotation(
+            x=0.5,
+            y=-0.12,
+            xref="paper",
+            yref="paper",
+            text=f"© FazDane Analytics | Universe: {state['universe_name']} | Benchmark: {state['benchmark']}",
+            showarrow=False,
+            font=dict(color="#64748b", size=11, family="Inter"),
+            xanchor="center"
+        )
+
+        fig.update_layout(
+            paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
+            font=dict(color="#000000", family="Inter"),
+            xaxis=dict(
+                title=dict(text="Relative Strength Ratio", font=dict(color="#000000", size=14, weight="bold")),
+                range=[x_min, x_max], 
+                gridcolor="#e2e8f0", 
+                tickfont=dict(color="#000000", size=11),
+                zeroline=False,
+                showline=True,
+                linecolor="#000000",
+                linewidth=1.5,
+                mirror=True
+            ),
+            yaxis=dict(
+                title=dict(text="Relative Strength Momentum", font=dict(color="#000000", size=14, weight="bold")),
+                range=[y_min, y_max], 
+                gridcolor="#e2e8f0", 
+                tickfont=dict(color="#000000", size=11), 
+                scaleanchor="x", 
+                scaleratio=1,
+                zeroline=False,
+                showline=True,
+                linecolor="#000000",
+                linewidth=1.5,
+                mirror=True
+            ),
+            margin=dict(l=60, r=60, t=50, b=80),
+            height=700,
+            showlegend=False
+        )
+        
+        # Center-aligned main title
+        fig.update_layout(
+            title=dict(
+                text=f"Custom Stock / ETF Rotation Matrix vs {state['benchmark']} | Last {tail_length} {state['period_type']}",
+                x=0.5,
+                xanchor="center",
+                font=dict(size=18, color="#000000", family="Inter", weight="bold")
+            )
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("### 📊 Matrix Status Summary")
+        
+        leading, weakening, lagging, improving = [], [], [], []
+        
+        for row in latest_rows:
+            # Create a styled item (using the quadrant-specific color instead of individual colors)
+            item = f"<span style='color:{row['Color']};font-weight:bold;'>■</span> <b>{row['Ticker']}</b> ({row['FDTS']}) <span style='color:#64748b;font-size:12px;'>({row['Name']})</span>"
+            quad = row['Quadrant']
+            if quad == "Leading": leading.append(item)
+            elif quad == "Weakening": weakening.append(item)
+            elif quad == "Lagging": lagging.append(item)
+            else: improving.append(item)
+            
+        c1, c2, c3, c4 = st.columns(4)
+        
+        def render_col(col, title, color, items):
+            with col:
+                st.markdown(
+                    f"""
+                    <div style="background:#f8fafc; border:1px solid #e2e8f0; border-top:3px solid {color}; padding:15px; border-radius:8px; min-height:220px;">
+                        <div style="color:{color}; font-weight:bold; font-size:16px; margin-top:0; margin-bottom:12px; font-family:'Inter',sans-serif;">{title}</div>
+                        <div style="color:#0f172a; font-size:14px; line-height:2.0;">
+                            {'<br>'.join(items) if items else '<i style="color:#64748b;">None</i>'}
+                        </div>
+                    </div>
+                    """, 
+                    unsafe_allow_html=True
+                )
+                
+        render_col(c1, "LEADING", "#16a34a", leading)
+        render_col(c2, "WEAKENING", "#d97706", weakening)
+        render_col(c3, "LAGGING", "#ef4444", lagging)
+        render_col(c4, "IMPROVING", "#2563eb", improving)

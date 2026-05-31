@@ -36,6 +36,7 @@ from utils.portfolio_performance_store import (
     get_portfolio_logs,
     get_portfolio_log_images,
 )
+from utils.universe_manager import update_fazdane_portfolio_universe
 
 
 ACTION_COLORS = {
@@ -1039,6 +1040,15 @@ class PortfolioRiskManagementModule(FazDaneModule):
         self.load_latest_saved = st.checkbox("Use latest saved snapshot", value=True, key="prm_use_latest")
         self.auto_save = st.checkbox("Save parsed upload", value=True, key="prm_auto_save")
 
+        if st.button("🔄 Sync 'FazDane Portfolio'", key="prm_sync_universe_btn", use_container_width=True):
+            pos, det, meta, label = self._load_active_snapshot()
+            if not pos.empty:
+                raw_tickers = pos["ticker"].apply(clean_ticker_for_lookup).unique().tolist()
+                update_fazdane_portfolio_universe(raw_tickers)
+                st.success(f"Updated 'FazDane Portfolio' universe with {len(raw_tickers)} tickers!")
+            else:
+                st.warning("No active portfolio positions loaded to sync.")
+
         st.markdown("**Risk Controls**")
         self.top_n = st.slider("Focus list size", 3, 20, 8, key="prm_top_n")
         self.lookback_days = st.selectbox("Correlation Lookback", [30, 60, 90, 180, 365], index=2, key="prm_corr_days")
@@ -1062,6 +1072,14 @@ class PortfolioRiskManagementModule(FazDaneModule):
         st.markdown("<div style='font-size:13px;color:#888;margin-bottom:12px;'>Source: 🔴 Tastytrade | 🔵 Schwab</div>", unsafe_allow_html=True)
 
         positions, details, metadata, source_label = self._load_active_snapshot()
+        
+        # Auto-update the "FazDane Portfolio" universe on new statement upload
+        if self.uploaded_files and not positions.empty:
+            file_hash = metadata.get("file_sha256")
+            if file_hash and st.session_state.get("prm_last_synced_universe_hash") != file_hash:
+                raw_tickers = positions["ticker"].apply(clean_ticker_for_lookup).unique().tolist()
+                update_fazdane_portfolio_universe(raw_tickers)
+                st.session_state["prm_last_synced_universe_hash"] = file_hash
         if positions.empty:
             self._render_welcome()
             self._render_history()

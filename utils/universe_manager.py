@@ -592,3 +592,33 @@ def get_company_name(ticker: str) -> str:
 
 def _safe_key(value: str) -> str:
     return "".join(ch if ch.isalnum() else "_" for ch in value).strip("_").lower() or "universe"
+
+
+def update_fazdane_portfolio_universe(tickers: list[str]) -> None:
+    """Update 'FazDane Portfolio' universe in config/universes.json with clean tickers."""
+    universes = load_universes()
+    cleaned = []
+    for t in tickers:
+        clean_t = str(t).strip().upper()
+        clean_t = clean_t.replace("🔵", "").replace("🔴", "").replace("⚪", "").strip()
+        if "(" in clean_t:
+            clean_t = clean_t.split("(")[0].strip()
+        if clean_t and clean_t not in cleaned:
+            cleaned.append(clean_t)
+            
+    cleaned = sorted(cleaned)
+    ticker_names = {}
+    for t in cleaned:
+        if t in KNOWN_TICKER_NAMES:
+            ticker_names[t] = KNOWN_TICKER_NAMES[t]
+        else:
+            ticker_names[t] = get_company_name(t)
+            
+    universes["FazDane Portfolio"] = {
+        "tickers": cleaned,
+        "ticker_names": ticker_names,
+        "benchmark": "SPY",
+        "description": "FazDane personal portfolio (auto-updated from portfolio upload)",
+        "module": "general"
+    }
+    save_universes(universes)
