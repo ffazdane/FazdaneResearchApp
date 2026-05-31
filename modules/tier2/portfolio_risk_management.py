@@ -2096,6 +2096,60 @@ class PortfolioRiskManagementModule(FazDaneModule):
         style_figure(fig, height=520)
         st.plotly_chart(fig, use_container_width=True, theme=None)
 
+    def _fetch_latest_price_action_info(self, tickers: list[str]) -> dict[str, dict]:
+        """Fetch the latest and previous Stage & FDTS signals for given tickers from price_action_story DB."""
+        import sqlite3
+        from utils.persistence import get_db_path
+        
+        results = {}
+        if not tickers:
+            return results
+            
+        try:
+            db_path = get_db_path("price_action_story")
+            if not db_path.exists():
+                return results
+                
+            clean_tickers = [clean_ticker_for_lookup(t) for t in tickers]
+            clean_tickers = list(set(clean_tickers))
+            
+            with sqlite3.connect(db_path) as conn:
+                placeholders = ",".join(["?"] * len(clean_tickers))
+                query = f"""
+                    SELECT ticker, stage, fdts, scan_ts
+                    FROM ticker_stage_history
+                    WHERE ticker IN ({placeholders})
+                    ORDER BY ticker ASC, scan_ts DESC
+                """
+                rows = conn.execute(query, clean_tickers).fetchall()
+                
+                ticker_history = {}
+                for ticker, stage, fdts, scan_ts in rows:
+                    t_upper = ticker.upper()
+                    if t_upper not in ticker_history:
+                        ticker_history[t_upper] = []
+                    ticker_history[t_upper].append({
+                        "stage": stage,
+                        "fdts": fdts,
+                        "scan_ts": scan_ts
+                    })
+                    
+                for t_upper, history in ticker_history.items():
+                    latest = history[0]
+                    prev = history[1] if len(history) > 1 else None
+                    
+                    results[t_upper] = {
+                        "current_stage": latest["stage"],
+                        "current_fdts": latest["fdts"],
+                        "prev_stage": prev["stage"] if prev else None,
+                        "prev_fdts": prev["fdts"] if prev else None,
+                        "changed": prev is not None and (latest["stage"] != prev["stage"] or latest["fdts"] != prev["fdts"])
+                    }
+        except Exception:
+            pass
+            
+        return results
+
     def _render_greek_concentration(self, df: pd.DataFrame):
         st.markdown("### Greek Concentration Risk")
         metrics = [
@@ -2117,24 +2171,179 @@ class PortfolioRiskManagementModule(FazDaneModule):
             df_exp["gross_exposure_pct"] = (df_exp["gross_exposure"] / total_gross) * 100
             df_exp = df_exp.sort_values("gross_exposure_pct", ascending=True)
             
+            # Fetch latest stages and signals from Price Action Story Engine database
+            tickers_list = df_exp["ticker"].tolist()
+            stages_data = self._fetch_latest_price_action_info(tickers_list)
+            
+            display_labels = []
+            current_stages = []
+            current_fdts_list = []
+            shift_texts = []
+            custom_data_list = []
+            
+            for idx, row in df_exp.iterrows():
+                raw_ticker = row["ticker"]
+                t_clean = clean_ticker_for_lookup(raw_ticker)
+                pa_info = stages_data.get(t_clean, {})
+                
+                curr_stage = pa_info.get("current_stage", "N/A")
+                curr_fdts = pa_info.get("current_fdts", "⚪ No Trade")
+                prev_stage = pa_info.get("prev_stage")
+                prev_fdts = pa_info.get("prev_fdts")
+                changed = pa_info.get("changed", False)
+                
+                formatted_ticker = format_ticker_for_display(raw_ticker)
+                short_stage = curr_stage.replace(" / Expansion", "")
+                
+                # Y-axis will show clean ticker (e.g. 🔵 SPY)
+                display_labels.append(formatted_ticker)
+                
+                current_stages.append(curr_stage)
+                current_fdts_list.append(curr_fdts)
+                
+                if changed:
+                    parts = []
+                    if prev_stage and prev_stage != curr_stage:
+                        parts.append(f"{prev_stage.replace(' / Expansion', '')} ➔ {short_stage}")
+                    if prev_fdts and prev_fdts != curr_fdts:
+                        clean_prev = prev_fdts.replace("🟢 ", "").replace("🔴 ", "").replace("⚪ ", "")
+                        clean_curr = curr_fdts.replace("🟢 ", "").replace("🔴 ", "").replace("⚪ ", "")
+                        parts.append(f"FDTS: {clean_prev} ➔ {clean_curr}")
+                    shift_texts.append(" | ".join(parts))
+                else:
+                    shift_texts.append("Stable" if curr_stage != "N/A" else "No History")
+                
+                custom_data_list.append([
+                    formatted_ticker,
+                    row["gross_exposure_pct"],
+                    curr_fdts,
+                    prev_fdts if prev_fdts else "N/A",
+                    curr_stage,
+                    prev_stage if prev_stage else "N/A",
+                    "Yes" if changed else "No"
+                ])
+                
+            df_exp["display_label"] = display_labels
+            df_exp["stage"] = current_stages
+            df_exp["fdts"] = current_fdts_list
+            df_exp["shift_text"] = shift_texts
+            
             fig_exp = go.Figure(go.Bar(
                 x=df_exp["gross_exposure_pct"],
-                y=df_exp["ticker"],
+                y=df_exp["display_label"],
                 orientation="h",
                 marker_color=[BRAND["blue"] if v < 15 else (BRAND["yellow"] if v <= 25 else BRAND["red"]) for v in df_exp["gross_exposure_pct"]],
                 text=df_exp["gross_exposure_pct"].map(lambda v: f"{v:.1f}%"),
                 textposition="auto",
-                hovertemplate="<b>%{y}</b><br>Gross Exposure: %{x:.2f}%<extra></extra>"
+                customdata=custom_data_list,
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "Gross Exposure: %{customdata[1]:.2f}%<br>"
+                    "FDTS Signal: %{customdata[2]} (Prev: %{customdata[3]})<br>"
+                    "PA Lifecycle: %{customdata[4]} (Prev: %{customdata[5]})<br>"
+                    "Changed: %{customdata[6]}<extra></extra>"
+                )
             ))
+            
+            # Add aligned annotations on the right side of the chart
+            max_x = float(df_exp["gross_exposure_pct"].max()) if not df_exp.empty else 10.0
+            for idx, row in df_exp.iterrows():
+                raw_ticker = row["ticker"]
+                t_clean = clean_ticker_for_lookup(raw_ticker)
+                pa_info = stages_data.get(t_clean, {})
+                
+                curr_stage = pa_info.get("current_stage", "N/A")
+                curr_fdts = pa_info.get("current_fdts", "⚪ No Trade")
+                changed = pa_info.get("changed", False)
+                
+                short_stage = curr_stage.replace(" / Expansion", "")
+                change_marker = " 🔄" if changed else ""
+                
+                annotation_text = f"{curr_fdts}  •  {short_stage}{change_marker}"
+                
+                fig_exp.add_annotation(
+                    x=max_x + 0.5,
+                    y=format_ticker_for_display(raw_ticker),
+                    text=annotation_text,
+                    showarrow=False,
+                    xanchor="left",
+                    yanchor="middle",
+                    font=dict(color="#cbd5e1", size=10)
+                )
             
             style_figure(fig_exp, height=max(240, 26 * len(df_exp) + 50))
             fig_exp.update_layout(
                 title=dict(text="Portfolio Concentration by Gross Option Exposure (%)", font=dict(size=12)),
-                margin=dict(l=10, r=40, t=30, b=10),
-                xaxis=dict(title="Exposure Percentage (%)", ticksuffix="%", showgrid=True, gridcolor="#1e3a5f"),
+                margin=dict(l=80, r=180, t=30, b=10),
+                xaxis=dict(title="Exposure Percentage (%)", ticksuffix="%", showgrid=True, gridcolor="#1e3a5f", range=[0, max_x + 6.0]),
                 yaxis=dict(anchor="free", position=0.0),
             )
             st.plotly_chart(fig_exp, use_container_width=True, theme=None)
+            
+            # Companion concentration & lifecycle details table
+            st.markdown("<br><b>Concentration & Lifecycle Detail Table</b>", unsafe_allow_html=True)
+            df_table = df_exp.sort_values("gross_exposure_pct", ascending=False).copy()
+            df_table["Ticker"] = df_table["ticker"].apply(format_ticker_for_display)
+            
+            table_cols = ["Ticker", "gross_exposure_pct", "fdts", "stage", "shift_text"]
+            df_display = df_table[table_cols].rename(columns={
+                "gross_exposure_pct": "Gross Exposure %",
+                "fdts": "FDTS Signal",
+                "stage": "Price Action Stage",
+                "shift_text": "Stage Shift / Trend"
+            })
+            
+            def style_stage_and_fdts(styler):
+                stage_colors = {
+                    "Early Bull / Expansion": "background-color: rgba(34,197,94,0.12); color: #22c55e; font-weight: bold;",
+                    "Strong Bull": "background-color: rgba(16,185,129,0.12); color: #10b981; font-weight: bold;",
+                    "Mature Bull": "background-color: rgba(234,179,8,0.12); color: #eab308; font-weight: bold;",
+                    "Fading Bull": "background-color: rgba(249,115,22,0.12); color: #f97316; font-weight: bold;",
+                    "Distribution": "background-color: rgba(239,68,68,0.12); color: #ef4444; font-weight: bold;",
+                    "Breakdown": "background-color: rgba(153,27,27,0.15); color: #ef4444; font-weight: bold;",
+                }
+                
+                def apply_stage_style(val):
+                    return stage_colors.get(val, "color: #94a3b8;")
+                    
+                def apply_fdts_style(val):
+                    if "Buy" in str(val):
+                        return "background-color: rgba(34,197,94,0.12); color: #22c55e; font-weight: bold;"
+                    elif "Sell" in str(val):
+                        return "background-color: rgba(239,68,68,0.12); color: #ef4444; font-weight: bold;"
+                    return "color: #94a3b8;"
+
+                def apply_shift_style(val):
+                    if "➔" in str(val):
+                        return "background-color: rgba(234,179,8,0.08); color: #eab308; font-weight: bold;"
+                    elif val == "Stable":
+                        return "color: #475569;"
+                    return "color: #64748b;"
+
+                return styler.map(apply_stage_style, subset=["Price Action Stage"])\
+                             .map(apply_fdts_style, subset=["FDTS Signal"])\
+                             .map(apply_shift_style, subset=["Stage Shift / Trend"])\
+                             .set_properties(subset=["Ticker"], **{"font-weight": "800", "color": "#e2e8f0"})
+
+            st.dataframe(
+                style_stage_and_fdts(df_display.style),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Ticker": st.column_config.TextColumn("Ticker", width="medium"),
+                    "Gross Exposure %": st.column_config.ProgressColumn(
+                        "Gross Exposure %",
+                        help="Percentage of total gross option exposure",
+                        format="%.1f%%",
+                        min_value=0.0,
+                        max_value=100.0,
+                        width="medium"
+                    ),
+                    "FDTS Signal": st.column_config.TextColumn("FDTS Signal", width="small"),
+                    "Price Action Stage": st.column_config.TextColumn("Price Action Stage", width="medium"),
+                    "Stage Shift / Trend": st.column_config.TextColumn("Stage Shift / Trend", width="medium")
+                }
+            )
 
     def _render_expiration_risk_heatmap(self, df: pd.DataFrame):
         st.markdown("### Expiration Risk Heatmap")
