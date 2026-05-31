@@ -195,6 +195,7 @@ class CorrelationMatrixModule(FazDaneModule):
                 automargin=True,
             ),
             yaxis=dict(
+                autorange="reversed",
                 tickmode="array",
                 tickvals=asset_labels,
                 ticktext=asset_labels,

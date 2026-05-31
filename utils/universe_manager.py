@@ -525,7 +525,10 @@ def _normalize_universes(universes: dict) -> dict:
         if isinstance(data, list):
             tickers = _clean_tickers(data)
             ticker_names = _build_ticker_names(tickers)
-            sorted_tickers = sorted(tickers, key=lambda t: ticker_names.get(t, t).strip().lower())
+            if name == "Correlation Matrix Assets":
+                sorted_tickers = tickers
+            else:
+                sorted_tickers = sorted(tickers, key=lambda t: t.strip().upper())
             normalized[name] = {
                 "tickers": sorted_tickers,
                 "ticker_names": {t: ticker_names[t] for t in sorted_tickers if t in ticker_names},
@@ -536,7 +539,10 @@ def _normalize_universes(universes: dict) -> dict:
             continue
         tickers = _clean_tickers(data.get("tickers", []))
         ticker_names = _normalize_ticker_names(tickers, data.get("ticker_names", {}))
-        sorted_tickers = sorted(tickers, key=lambda t: ticker_names.get(t, t).strip().lower())
+        if name == "Correlation Matrix Assets":
+            sorted_tickers = tickers
+        else:
+            sorted_tickers = sorted(tickers, key=lambda t: t.strip().upper())
         normalized[name] = {
             "tickers": sorted_tickers,
             "ticker_names": {t: ticker_names[t] for t in sorted_tickers if t in ticker_names},

@@ -3171,6 +3171,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 hovertemplate="<b>%{y} vs %{x}</b><br>Correlation: %{customdata:.0f}%<extra></extra>",
             ))
             style_figure(fig, height=max(440, 32 * len(corr)))
+            fig.update_layout(yaxis=dict(autorange="reversed"))
             st.plotly_chart(fig, use_container_width=True, theme=None)
 
         sector = df.groupby("sector", as_index=False).agg(weight_pct=("weight_pct", "sum"), net_delta=("delta_exposure", "sum"), tickers=("ticker", "nunique"))
