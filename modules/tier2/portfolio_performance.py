@@ -341,8 +341,8 @@ class PortfolioPerformanceModule(FazDaneModule):
         self._render_source_banner(metadata, source_label, saved_info)
         self._render_metrics(totals, positions)
 
-        tab_overview, tab_risk, tab_history, tab_data, tab_details, tab_logs = st.tabs(
-            ["Overview", "Risk Map", "Daily History", "Position Data", "Raw Details", "Portfolio Logs"]
+        tab_overview, tab_risk, tab_history, tab_value_tracker, tab_data, tab_details, tab_logs = st.tabs(
+            ["Overview", "Risk Map", "Daily History", "Value & Delta Tracker", "Position Data", "Raw Details", "Portfolio Logs"]
         )
         with tab_overview:
             self._render_overview(positions, totals)
@@ -350,6 +350,8 @@ class PortfolioPerformanceModule(FazDaneModule):
             self._render_risk_map(positions)
         with tab_history:
             self._render_history()
+        with tab_value_tracker:
+            self._render_value_tracker()
         with tab_data:
             self._render_data_tab(positions, metadata)
         with tab_details:
@@ -1066,6 +1068,145 @@ class PortfolioPerformanceModule(FazDaneModule):
                     "total_delta": st.column_config.NumberColumn("Delta", format="%.2f"),
                 },
             )
+
+    def _render_value_tracker(self):
+        st.markdown("### Portfolio Value & Daily Delta Progress")
+        
+        # Load snapshot history
+        history = get_portfolio_history(days=self.history_days)
+        if history.empty:
+            st.info("No saved portfolio snapshots yet. Upload statements to populate the database daily history.")
+            return
+
+        # Prepare base dataframe
+        df = history.copy()
+        df["snapshot_ts"] = pd.to_datetime(df["snapshot_ts"], errors="coerce")
+        df = df.sort_values("snapshot_ts").reset_index(drop=True)
+
+        # Ensure we have the total_market_value column
+        if "total_market_value" not in df.columns:
+            st.warning("Total Portfolio Value history is unavailable in the database. Ensure statements have market value information.")
+            return
+
+        # Controls row
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            group_mode = st.radio(
+                "Grouping Mode:",
+                ["Clean Daily (One per day)", "Show All Runs"],
+                index=0,
+                horizontal=True,
+                key="pp_vt_group_mode"
+            )
+        with col_c2:
+            delta_metric = st.selectbox(
+                "Delta Chart Metric:",
+                ["Daily Value Change (Difference between consecutive loads)", "Statement Daily P/L (Broker reported)"],
+                index=0,
+                key="pp_vt_delta_metric"
+            )
+
+        # Apply grouping if selected
+        if group_mode == "Clean Daily (One per day)":
+            chart_df = df.groupby("snapshot_date").last().reset_index()
+            chart_df["snapshot_ts"] = pd.to_datetime(chart_df["snapshot_ts"])
+            chart_df = chart_df.sort_values("snapshot_date").reset_index(drop=True)
+        else:
+            chart_df = df.copy()
+
+        # Compute consecutive value difference delta
+        chart_df["val_delta"] = chart_df["total_market_value"].diff()
+
+        # Latest metrics
+        latest = chart_df.iloc[-1]
+        prev = chart_df.iloc[-2] if len(chart_df) > 1 else None
+
+        # Display Metrics Row
+        m1, m2, m3, m4 = st.columns(4)
+        
+        # 1. Total Value
+        val_delta_str = None
+        if prev is not None:
+            change = latest["total_market_value"] - prev["total_market_value"]
+            val_delta_str = f"${change:+,.2f}"
+        m1.metric("Portfolio Value", f"${latest['total_market_value']:,.2f}", delta=val_delta_str)
+
+        # 2. Daily Delta (Value Change)
+        latest_val_delta = latest["val_delta"] if pd.notna(latest["val_delta"]) else 0.0
+        m2.metric(
+            "Latest Value Delta (+/-)",
+            f"${latest_val_delta:+,.2f}",
+            delta="Difference from last load"
+        )
+
+        # 3. Statement Daily P/L
+        m3.metric(
+            "Statement Daily P/L",
+            fmt_money(latest["total_pl_day"]),
+            delta=None
+        )
+
+        # 4. Period High / Low
+        max_val = chart_df["total_market_value"].max()
+        min_val = chart_df["total_market_value"].min()
+        m4.metric("Period High / Low", f"${max_val:,.0f}", delta=f"Low: ${min_val:,.0f}", delta_color="off")
+
+        # --- Chart 1: Portfolio Value Progress (Line + Shaded Area) ---
+        fig_val = go.Figure()
+        fig_val.add_trace(go.Scatter(
+            x=chart_df["snapshot_ts"],
+            y=chart_df["total_market_value"],
+            mode="lines+markers",
+            name="Portfolio Value",
+            line=dict(color=BRAND["blue"], width=3),
+            fill="tozeroy",
+            fillcolor="rgba(147, 197, 253, 0.08)",
+            hovertemplate="<b>Date:</b> %{x|%Y-%m-%d %H:%M}<br><b>Portfolio Value:</b> $%{y:,.2f}<extra></extra>"
+        ))
+        fig_val.update_layout(
+            title="Portfolio Value Progress",
+            xaxis=dict(title="Date / Time", gridcolor=BRAND["grid"]),
+            yaxis=dict(title="Portfolio Value ($)", gridcolor=BRAND["grid"], tickformat="$,.2f"),
+        )
+        style_figure(fig_val, height=400)
+        st.plotly_chart(fig_val, use_container_width=True, theme=None)
+
+        # --- Chart 2: Daily Delta (Bar Chart) ---
+        fig_delta = go.Figure()
+        
+        # Select target metric column
+        if delta_metric.startswith("Daily Value Change"):
+            delta_col = "val_delta"
+            chart_title = "Daily Value Delta (+/-)"
+            y_axis_title = "Value Change ($)"
+        else:
+            delta_col = "total_pl_day"
+            chart_title = "Statement Daily P/L"
+            y_axis_title = "P/L ($)"
+
+        # Fill NaNs with 0.0 for delta plotting
+        plot_df = chart_df.copy()
+        plot_df[delta_col] = plot_df[delta_col].fillna(0.0)
+
+        # Set bar colors dynamically (green for positive, red for negative)
+        bar_colors = plot_df[delta_col].map(lambda val: BRAND["green"] if val >= 0 else BRAND["red"]).tolist()
+
+        fig_delta.add_trace(go.Bar(
+            x=plot_df["snapshot_ts"],
+            y=plot_df[delta_col],
+            name="Daily Delta",
+            marker_color=bar_colors,
+            opacity=0.85,
+            hovertemplate="<b>Date:</b> %{x|%Y-%m-%d %H:%M}<br><b>Delta:</b> $%{y:+,.2f}<extra></extra>"
+        ))
+        fig_delta.update_layout(
+            title=chart_title,
+            xaxis=dict(title="Date / Time", gridcolor=BRAND["grid"]),
+            yaxis=dict(title=y_axis_title, gridcolor=BRAND["grid"], tickformat="$,.2f"),
+        )
+        fig_delta.add_hline(y=0, line_width=1, line_color=BRAND["muted"])
+        style_figure(fig_delta, height=350)
+        st.plotly_chart(fig_delta, use_container_width=True, theme=None)
 
     def _render_database_status(self):
         status = get_database_status()
