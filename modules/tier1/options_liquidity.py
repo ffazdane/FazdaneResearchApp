@@ -910,8 +910,14 @@ class OptionsLiquidityModule(FazDaneModule):
 
     #  Tab 1: Heatmap
 
-    def _render_trade_signal_buckets(self, symbols: list[str], focus_symbol: str | None = None):
+    def _render_trade_signal_buckets(self, symbols: list[str], focus_symbol: str | None = None, put_hedging_symbols: set[str] = None):
         st.markdown("### FDTS + MACD Trade Signal Buckets")
+        if put_hedging_symbols is None:
+            put_hedging_symbols = set()
+            
+        if put_hedging_symbols:
+            st.caption("🛡️ indicates symbols with higher Put option volume than Call option volume (hedging bias on Puts).")
+
         with st.spinner("Calculating daily FDTS + MACD regimes..."):
             signals = fetch_trade_signal_buckets(tuple(symbols))
 
@@ -931,21 +937,22 @@ class OptionsLiquidityModule(FazDaneModule):
                     "No Trade": "#f59e0b",
                     "Sell": "#ef4444",
                 }.get(str(focus["Signal"]), "#94a3b8")
+                
+                is_focus_hedging = focus_symbol in put_hedging_symbols
+                hedging_badge = (
+                    f'<span style="background-color:rgba(249, 115, 22, 0.25);color:#fdba74;border:1px solid rgba(249, 115, 22, 0.6);border-radius:4px;padding:2px 6px;font-size:11px;font-weight:700;margin-left:10px;">🛡️ HEDGING PUTS</span>'
+                    if is_focus_hedging
+                    else ""
+                )
+                
                 st.markdown(
-                    f"""
-                    <div style="
-                        border:1px solid {signal_color};
-                        border-left:5px solid {signal_color};
-                        background:rgba(21,40,71,0.78);
-                        border-radius:8px;
-                        padding:10px 12px;
-                        margin:4px 0 12px;
-                    ">
-                        <span style="color:#e2e8f0;font-weight:800;">{focus_symbol}</span>
-                        <span style="color:{signal_color};font-weight:800;margin-left:10px;">{focus['Signal']}</span>
-                        <span style="color:#94a3b8;margin-left:10px;">from {focus['Previous']} on {focus['Start']} | {focus['Days']} days | delta {focus['Delta']:.2f}</span>
-                    </div>
-                    """,
+                    f'<div style="border:1px solid {signal_color};border-left:5px solid {signal_color};'
+                    f'background:rgba(21,40,71,0.78);border-radius:8px;padding:10px 12px;margin:4px 0 12px;">'
+                    f'<span style="color:#e2e8f0;font-weight:800;">{focus_symbol}</span>'
+                    f'<span style="color:{signal_color};font-weight:800;margin-left:10px;">{focus["Signal"]}</span>'
+                    f'{hedging_badge}'
+                    f'<span style="color:#94a3b8;margin-left:10px;">from {focus["Previous"]} on {focus["Start"]} | {focus["Days"]} days | delta {focus["Delta"]:.2f}</span>'
+                    f'</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -975,12 +982,15 @@ class OptionsLiquidityModule(FazDaneModule):
                     st.caption("No symbols in this bucket.")
                     continue
 
-                display_df = bucket_df[["Ticker", "Previous", "Start", "Days", "Entry", "Last", "Delta"]]
+                display_df = bucket_df[["Ticker", "Previous", "Start", "Days", "Entry", "Last", "Delta"]].copy()
+                display_df["Ticker"] = display_df["Ticker"].apply(
+                    lambda t: f"{t} 🛡️" if str(t).upper() in put_hedging_symbols else t
+                )
                 if focus_symbol:
                     styled_df = display_df.style.apply(
                         lambda row: [
                             "background-color: rgba(250, 204, 21, 0.22); color: #ffffff; font-weight: 800;"
-                            if str(row["Ticker"]).upper() == focus_symbol
+                            if str(row["Ticker"]).split(" ")[0].upper() == focus_symbol
                             else ""
                             for _ in row
                         ],
@@ -1003,10 +1013,13 @@ class OptionsLiquidityModule(FazDaneModule):
                     },
                 )
 
-        self._render_trade_signal_rotation(signals, focus_symbol=focus_symbol)
+        self._render_trade_signal_rotation(signals, focus_symbol=focus_symbol, put_hedging_symbols=put_hedging_symbols)
 
-    def _render_trade_signal_rotation(self, signals: pd.DataFrame, focus_symbol: str | None = None):
+    def _render_trade_signal_rotation(self, signals: pd.DataFrame, focus_symbol: str | None = None, put_hedging_symbols: set[str] = None):
         st.markdown("### Ticker Signal Rotation")
+        if put_hedging_symbols is None:
+            put_hedging_symbols = set()
+            
         if signals.empty or not {"Previous", "Signal", "Ticker"}.issubset(signals.columns):
             st.info("No signal rotation data available.")
             return
@@ -1036,6 +1049,7 @@ class OptionsLiquidityModule(FazDaneModule):
             current = row["SignalText"]
             color = bucket_color.get(current, "#94a3b8")
             is_focus = str(row["Ticker"]).upper() == focus_symbol
+            ticker_label = f"{row['Ticker']} 🛡️" if str(row['Ticker']).upper() in put_hedging_symbols else row['Ticker']
             fig.add_trace(go.Scatter(
                 x=[bucket_x.get(previous, 0), bucket_x.get(current, 0)],
                 y=[row["Lane"], row["Lane"]],
@@ -1046,7 +1060,7 @@ class OptionsLiquidityModule(FazDaneModule):
                     color=[bucket_color.get(previous, "#94a3b8"), color],
                     line=dict(color="#facc15" if is_focus else color, width=3 if is_focus else 0),
                 ),
-                text=["", row["Ticker"]],
+                text=["", ticker_label],
                 textposition="middle right",
                 hovertemplate=(
                     "<b>%{customdata[0]}</b><br>"
@@ -1113,14 +1127,28 @@ class OptionsLiquidityModule(FazDaneModule):
             st.info("Insufficient data for heatmap.")
             return
 
-        pivot = (
+        full_pivot = (
             df.groupby(["symbol", "option_type"])["volume"]
             .sum()
             .unstack(fill_value=0)
             .reset_index()
         )
-        pivot = pivot.sort_values(
-            by=[c for c in ["Call", "Put"] if c in pivot.columns],
+        # Ensure Call and Put columns exist
+        for col in ["Call", "Put"]:
+            if col not in full_pivot.columns:
+                full_pivot[col] = 0
+
+        # Calculate set of symbols with Put hedging bias (Put Volume > Call Volume)
+        put_hedging_symbols = set(
+            full_pivot[full_pivot["Put"] > full_pivot["Call"]]["symbol"]
+            .dropna()
+            .astype(str)
+            .str.upper()
+            .unique()
+        )
+
+        pivot = full_pivot.sort_values(
+            by=[c for c in ["Call", "Put"] if c in full_pivot.columns],
             ascending=False
         ).head(20)
 
@@ -1149,6 +1177,20 @@ class OptionsLiquidityModule(FazDaneModule):
             )
             if focus_symbol != st.session_state.get(focus_state_key):
                 st.session_state[focus_state_key] = focus_symbol
+
+            # Show orange hedging warning if focus_symbol has higher Put volume
+            if focus_symbol and focus_symbol.upper() in put_hedging_symbols:
+                fs_data = full_pivot[full_pivot["symbol"] == focus_symbol]
+                if not fs_data.empty:
+                    c_vol = int(fs_data["Call"].values[0]) if "Call" in fs_data.columns else 0
+                    p_vol = int(fs_data["Put"].values[0]) if "Put" in fs_data.columns else 0
+                    st.markdown(
+                        f'<div style="background:rgba(249,115,22,0.15);border:1px solid rgba(249,115,22,0.4);'
+                        f'border-radius:6px;padding:6px 12px;margin-top:8px;color:#fdba74;font-size:12px;font-weight:600;">'
+                        f'🛡️ <b>Hedging Bias:</b> Puts Volume ({p_vol:,}) exceeds Call Volume ({c_vol:,}) for {focus_symbol} - Hedging more on Puts.'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
         with control_cols[1]:
             volume_cols = [c for c in ["Call", "Put"] if c in pivot.columns]
             focused_volume = 0
@@ -1189,12 +1231,21 @@ class OptionsLiquidityModule(FazDaneModule):
             hovertemplate="<b>%{x}</b><br>Puts: %{y:,}<extra></extra>",
         ))
 
+        # Check which syms have Put > Call for ticktext
+        tick_labels = [f"{sym} 🛡️" if sym.upper() in put_hedging_symbols else sym for sym in syms]
+
         fig.update_layout(
             barmode="group",
             paper_bgcolor="#0d1b2e",
             plot_bgcolor="#0d1b2e",
             font=dict(color="#e2e8f0", family="Inter"),
-            xaxis=dict(gridcolor="#1e3a5f", tickfont=dict(color="#e2e8f0", size=11)),
+            xaxis=dict(
+                gridcolor="#1e3a5f",
+                tickfont=dict(color="#e2e8f0", size=11),
+                tickmode="array",
+                tickvals=syms,
+                ticktext=tick_labels,
+            ),
             yaxis=dict(gridcolor="#1e3a5f", title="Total Volume", tickfont=dict(color="#e2e8f0")),
             legend=dict(
                 bgcolor="rgba(21,40,71,0.85)",
@@ -1202,8 +1253,19 @@ class OptionsLiquidityModule(FazDaneModule):
                 borderwidth=1,
                 font=dict(color="#e2e8f0", size=13),
             ),
-            margin=dict(l=0, r=0, t=30, b=0),
+            margin=dict(l=0, r=0, t=35, b=0),
             height=380,
+            annotations=[
+                dict(
+                    text="🛡️ = Put Volume > Call Volume (Hedging Bias)",
+                    xref="paper",
+                    yref="paper",
+                    x=0.01,
+                    y=1.05,
+                    showarrow=False,
+                    font=dict(size=11, color="#f97316", family="Inter"),
+                )
+            ],
         )
         try:
             heatmap_event = st.plotly_chart(
@@ -1227,7 +1289,7 @@ class OptionsLiquidityModule(FazDaneModule):
             st.plotly_chart(fig, use_container_width=True, key="ol_volume_heatmap_static")
 
         signal_symbols = sorted(df["symbol"].dropna().astype(str).str.upper().unique())
-        self._render_trade_signal_buckets(signal_symbols, focus_symbol=focus_symbol)
+        self._render_trade_signal_buckets(signal_symbols, focus_symbol=focus_symbol, put_hedging_symbols=put_hedging_symbols)
 
 
     #  Tab 2: Chain Table
