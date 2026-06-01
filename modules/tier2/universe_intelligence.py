@@ -71,59 +71,16 @@ def get_underlying_ticker(ticker: str) -> str:
 
 # --- Caching Data Fetches ---
 
-def _ema(series: pd.Series, span: int) -> pd.Series:
-    return series.ewm(span=span, adjust=False).mean()
-
-def _tema(series: pd.Series, period: int) -> pd.Series:
-    ema1 = _ema(series, period)
-    ema2 = _ema(ema1, period)
-    ema3 = _ema(ema2, period)
-    return 3 * ema1 - 3 * ema2 + ema3
+from modules.calendar_scoring.technical_indicators import (
+    calculate_rsi,
+    calculate_macd,
+    calculate_fdts_ha_signal,
+    compute_rrg_ratio_sma as compute_rrg_metrics
+)
 
 def calculate_fdts_signal(symbol: str, ticker_df: pd.DataFrame, period: int = 20) -> str:
     """Calculate the FDTS + MACD Trade Signal (Buy/No Trade/Sell)."""
-    required = {"Open", "High", "Low", "Close"}
-    if ticker_df.empty or not required.issubset(ticker_df.columns):
-        return "No Trade"
-
-    data = ticker_df[["Open", "High", "Low", "Close"]].dropna().copy()
-    if len(data) < 60:
-        return "No Trade"
-
-    price = (data["High"] + data["Low"] + data["Close"]) / 3
-    tma1 = _tema(price, period)
-    tma2 = _tema(tma1, period)
-    typical_tema = tma1 + (tma1 - tma2)
-
-    raw_ha_close = (data["Open"] + data["High"] + data["Low"] + data["Close"]) / 4
-    ha_open = pd.Series(index=data.index, dtype="float64")
-    ha_open.iloc[0] = (data["High"].iloc[0] + data["Low"].iloc[0]) / 2
-    for i in range(1, len(data)):
-        ha_open.iloc[i] = (raw_ha_close.iloc[i - 1] + ha_open.iloc[i - 1]) / 2
-
-    ha_close = (
-        raw_ha_close
-        + ha_open
-        + pd.concat([data["High"], ha_open], axis=1).max(axis=1)
-        + pd.concat([data["Low"], ha_open], axis=1).min(axis=1)
-    ) / 4
-
-    ha_tma1 = _tema(ha_close, period)
-    ha_tma2 = _tema(ha_tma1, period)
-    ha_tema = ha_tma1 + (ha_tma1 - ha_tma2)
-    fdts_dev = typical_tema - ha_tema
-
-    macd_long = _ema(data["Close"], 3) - _ema(data["Close"], 10)
-    macd_long_dev = macd_long - _ema(macd_long, 16)
-    macd_short = _ema(data["Close"], 12) - _ema(data["Close"], 26)
-    macd_short_dev = macd_short - _ema(macd_short, 9)
-
-    state = pd.Series(0, index=data.index, dtype="int64")
-    state[(fdts_dev > 0) & (macd_long_dev > 0)] = 1
-    state[(fdts_dev < 0) & (macd_short_dev < 0)] = -1
-
-    current_state = int(state.iloc[-1])
-    return "Buy" if current_state == 1 else "Sell" if current_state == -1 else "No Trade"
+    return calculate_fdts_ha_signal(ticker_df, period)
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_historical_prices(tickers: tuple[str, ...], lookback_days: int = 365) -> tuple[pd.DataFrame, pd.DataFrame, dict, dict]:
@@ -240,36 +197,6 @@ def calculate_historical_beta(asset_series: pd.Series, index_series: pd.Series) 
 
 # --- Core Calculations ---
 
-def compute_rrg_metrics(close_df: pd.DataFrame, benchmark_ticker: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Compute Relative Strength Ratio (RS-Ratio) and Relative Momentum (RS-Momentum).
-    RS-Ratio = 100 * (PriceRatio / SMA(PriceRatio, 100))
-    RS-Momentum = 100 * (RS-Ratio / SMA(RS-Ratio, 20))
-    """
-    if benchmark_ticker not in close_df.columns:
-        # Fallback to mean of all tickers if benchmark is missing
-        bench_series = close_df.mean(axis=1)
-    else:
-        bench_series = close_df[benchmark_ticker]
-
-    rs_ratio_df = pd.DataFrame(index=close_df.index)
-    rs_mom_df = pd.DataFrame(index=close_df.index)
-
-    for col in close_df.columns:
-        ratio = close_df[col] / bench_series
-        # SMA 100 for RS-Ratio
-        ratio_sma = ratio.rolling(100, min_periods=30).mean()
-        rs_ratio = 100 * (ratio / ratio_sma)
-        
-        # SMA 20 for RS-Momentum
-        rs_ratio_sma = rs_ratio.rolling(20, min_periods=5).mean()
-        rs_mom = 100 * (rs_ratio / rs_ratio_sma)
-        
-        rs_ratio_df[col] = rs_ratio
-        rs_mom_df[col] = rs_mom
-        
-    return rs_ratio_df.dropna(how="all"), rs_mom_df.dropna(how="all")
-
 def classify_stage(rs: float, mom: float) -> str:
     """Classify based on RS-Ratio and RS-Momentum relative to 100."""
     if rs >= 100 and mom >= 100:
@@ -286,25 +213,20 @@ def compute_technical_indicators(prices: pd.Series, volumes: pd.Series) -> dict:
     if len(prices) < 30:
         return {"rsi": 50, "macd_line": 0, "macd_signal": 0, "adx": 20, "cvd": 0, "atr": 1.0, "bollinger_sqz": False}
         
-    # RSI (14)
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / loss.replace(0, 1e-5)
-    rsi = 100 - (100 / (1 + rs)).iloc[-1]
+    # RSI (14) using core
+    rsi_s = calculate_rsi(prices)
+    rsi = rsi_s.iloc[-1]
     
-    # MACD (12, 26, 9)
-    exp1 = prices.ewm(span=12, adjust=False).mean()
-    exp2 = prices.ewm(span=26, adjust=False).mean()
-    macd = exp1 - exp2
-    signal = macd.ewm(span=9, adjust=False).mean()
+    # MACD using core
+    macd_line, signal_line, _ = calculate_macd(prices)
     
     # CVD (Cumulative Volume Delta) proxy
+    delta = prices.diff()
     cvd_series = (np.where(delta >= 0, 1, -1) * volumes).cumsum()
     cvd_val = cvd_series.iloc[-1] if len(cvd_series) else 0
 
-    # ATR (14)
-    high_low = prices.rolling(2).max() - prices.rolling(2).min() # proxy since yfinance fetch group_by close only
+    # ATR (14) proxy
+    high_low = prices.rolling(2).max() - prices.rolling(2).min()
     atr = high_low.rolling(14).mean().iloc[-1]
 
     # Bollinger Bands & Squeeze Indicator
@@ -315,8 +237,8 @@ def compute_technical_indicators(prices: pd.Series, volumes: pd.Series) -> dict:
 
     return {
         "rsi": rsi,
-        "macd_line": macd.iloc[-1],
-        "macd_signal": signal.iloc[-1],
+        "macd_line": macd_line.iloc[-1],
+        "macd_signal": signal_line.iloc[-1],
         "cvd": cvd_val,
         "atr": atr,
         "bollinger_sqz": is_sqz
@@ -1760,6 +1682,15 @@ class UniverseIntelligenceModule(FazDaneModule):
                     key="drill_ticker",
                     format_func=lambda ticker: format_ticker_display(ticker, ticker_names)
                 )
+                
+                # Reset visual canvas on ticker transition to clear stale visualizations immediately
+                if "ui_last_drill_ticker" not in st.session_state:
+                    st.session_state["ui_last_drill_ticker"] = sel_ticker
+
+                if sel_ticker != st.session_state["ui_last_drill_ticker"]:
+                    st.session_state["ui_last_drill_ticker"] = sel_ticker
+                    st.info(f"🔄 Fetching profile details and price action chart for {sel_ticker}...")
+                    st.rerun()
                 
                 if sel_ticker:
                     tick_info = fetch_info_details(sel_ticker)

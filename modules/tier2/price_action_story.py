@@ -16,6 +16,16 @@ from pathlib import Path
 from modules.base_module import FazDaneModule
 from utils.universe_manager import render_universe_manager, format_ticker_display, get_ticker_names
 from utils.persistence import get_db_path, backup_database
+from modules.calendar_scoring.technical_indicators import (
+    calculate_rsi,
+    calculate_macd,
+    calculate_adx,
+    calculate_atr,
+    compute_rrg_ratio_ema as calculate_rrg_values,
+    calculate_fdts_ha_signal,
+    format_fdts_signal,
+    evaluate_price_action_lifecycle as evaluate_ticker_price_action
+)
 
 logger = logging.getLogger("PriceActionStory")
 
@@ -171,301 +181,9 @@ def get_historical_stages(ticker: str) -> pd.DataFrame:
 # Math & Indicators Calculations
 # =====================================================================
 
-def calculate_adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> tuple[pd.Series, pd.Series, pd.Series]:
-    """Calculate Average Directional Index (ADX) and +/- Directional Indicators."""
-    plus_dm = high.diff()
-    minus_dm = low.diff()
-    plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0.0)
-    minus_dm = np.where((minus_dm > plus_dm) & (minus_dm > 0), minus_dm, 0.0)
-    
-    tr = pd.concat([
-        high - low,
-        (high - close.shift(1)).abs(),
-        (low - close.shift(1)).abs()
-    ], axis=1).max(axis=1)
-    
-    tr_smooth = tr.ewm(alpha=1/period, adjust=False).mean()
-    plus_dm_smooth = pd.Series(plus_dm, index=high.index).ewm(alpha=1/period, adjust=False).mean()
-    minus_dm_smooth = pd.Series(minus_dm, index=low.index).ewm(alpha=1/period, adjust=False).mean()
-    
-    plus_di = 100 * (plus_dm_smooth / tr_smooth.replace(0, 1e-5))
-    minus_di = 100 * (minus_dm_smooth / tr_smooth.replace(0, 1e-5))
-    
-    dx = 100 * ((plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-5))
-    adx = dx.ewm(alpha=1/period, adjust=False).mean()
-    return adx, plus_di, minus_di
-
-def calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
-    """Calculate Average True Range (ATR)."""
-    tr = pd.concat([
-        high - low,
-        (high - close.shift(1)).abs(),
-        (low - close.shift(1)).abs()
-    ], axis=1).max(axis=1)
-    return tr.rolling(period).mean()
-
-def calculate_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
-    """Calculate Relative Strength Index (RSI)."""
-    delta = prices.diff()
-    gain = (delta.where(delta > 0, 0.0)).ewm(alpha=1/period, adjust=False).mean()
-    loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/period, adjust=False).mean()
-    rs = gain / loss.replace(0, 1e-5)
-    return 100 - (100 / (1 + rs))
-
-def calculate_macd(prices: pd.Series) -> tuple[pd.Series, pd.Series, pd.Series]:
-    """Calculate MACD Line, Signal Line, and Histogram."""
-    exp1 = prices.ewm(span=12, adjust=False).mean()
-    exp2 = prices.ewm(span=26, adjust=False).mean()
-    macd_line = exp1 - exp2
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    hist = macd_line - signal_line
-    return macd_line, signal_line, hist
-
-def calculate_rrg_values(ticker_prices: pd.Series, bench_prices: pd.Series, ema_span: int = 4) -> tuple[pd.Series, pd.Series]:
-    """Compute RS-Ratio and RS-Momentum relative to benchmark (RRG model)."""
-    rel_strength = ticker_prices / bench_prices
-    rel_strength_smooth = rel_strength.ewm(span=ema_span, adjust=False).mean()
-    
-    rs_ratio_raw = 100 * (rel_strength_smooth / rel_strength_smooth.rolling(10).mean())
-    rs_ratio = rs_ratio_raw.ewm(span=ema_span, adjust=False).mean()
-    
-    rs_mom_raw = 100 * (rs_ratio / rs_ratio.rolling(5).mean())
-    rs_momentum = rs_mom_raw.ewm(span=ema_span, adjust=False).mean()
-    return rs_ratio, rs_momentum
-
-def _ema_val(series: pd.Series, span: int) -> pd.Series:
-    return series.ewm(span=span, adjust=False).mean()
-
-def _tema_val(series: pd.Series, period: int) -> pd.Series:
-    ema1 = _ema_val(series, period)
-    ema2 = _ema_val(ema1, period)
-    ema3 = _ema_val(ema2, period)
-    return 3 * ema1 - 3 * ema2 + ema3
-
 def get_fdts_signal(ticker_df: pd.DataFrame, period: int = 20) -> str:
-    required = {"Open", "High", "Low", "Close"}
-    if ticker_df.empty or not required.issubset(ticker_df.columns) or len(ticker_df) < 60:
-        return "⚪ No Trade"
-
-    data = ticker_df[["Open", "High", "Low", "Close"]].dropna().copy()
-    price = (data["High"] + data["Low"] + data["Close"]) / 3
-    tma1 = _tema_val(price, period)
-    tma2 = _tema_val(tma1, period)
-    typical_tema = tma1 + (tma1 - tma2)
-
-    raw_ha_close = (data["Open"] + data["High"] + data["Low"] + data["Close"]) / 4
-    ha_open = pd.Series(index=data.index, dtype="float64")
-    ha_open.iloc[0] = (data["High"].iloc[0] + data["Low"].iloc[0]) / 2
-    for i in range(1, len(data)):
-        ha_open.iloc[i] = (raw_ha_close.iloc[i - 1] + ha_open.iloc[i - 1]) / 2
-
-    ha_close = (
-        raw_ha_close
-        + ha_open
-        + pd.concat([data["High"], ha_open], axis=1).max(axis=1)
-        + pd.concat([data["Low"], ha_open], axis=1).min(axis=1)
-    ) / 4
-
-    ha_tma1 = _tema_val(ha_close, period)
-    ha_tma2 = _tema_val(ha_tma1, period)
-    ha_tema = ha_tma1 + (ha_tma1 - ha_tma2)
-    fdts_dev = typical_tema - ha_tema
-
-    macd_long = _ema_val(data["Close"], 3) - _ema_val(data["Close"], 10)
-    macd_long_dev = macd_long - _ema_val(macd_long, 16)
-    macd_short = _ema_val(data["Close"], 12) - _ema_val(data["Close"], 26)
-    macd_short_dev = macd_short - _ema_val(macd_short, 9)
-
-    state = pd.Series(0, index=data.index, dtype="int64")
-    state[(fdts_dev > 0) & (macd_long_dev > 0)] = 1
-    state[(fdts_dev < 0) & (macd_short_dev < 0)] = -1
-
-    current_state = int(state.iloc[-1])
-    return "🟢 Buy" if current_state == 1 else "🔴 Sell" if current_state == -1 else "⚪ No Trade"
-
-def evaluate_ticker_price_action(ticker_df: pd.DataFrame, bench_df: pd.DataFrame) -> dict:
-    """Calculate all Price Action story metrics and score the ticker state."""
-    required = {"Open", "High", "Low", "Close", "Volume"}
-    if ticker_df.empty or not required.issubset(ticker_df.columns) or len(ticker_df) < 50:
-        return {}
-
-    # Extract series
-    close = ticker_df["Close"].dropna()
-    volume = ticker_df["Volume"].dropna()
-    high = ticker_df["High"].dropna()
-    low = ticker_df["Low"].dropna()
-    
-    # 1. Trend Structure (20% Weight)
-    sma20 = close.rolling(20).mean()
-    sma50 = close.rolling(50).mean()
-    sma200 = close.rolling(200).mean()
-    
-    last_close = close.iloc[-1]
-    last_sma20 = sma20.iloc[-1]
-    last_sma50 = sma50.iloc[-1]
-    last_sma200 = sma200.iloc[-1]
-    
-    trend_score = 0
-    if last_close > last_sma20: trend_score += 20
-    if last_close > last_sma50: trend_score += 30
-    if last_close > last_sma200: trend_score += 30
-    if last_sma20 > last_sma50: trend_score += 10
-    if last_sma50 > last_sma200: trend_score += 10
-    
-    # Higher Highs / Higher Lows structure
-    high_5d = high.rolling(5).max()
-    low_5d = low.rolling(5).min()
-    hh = high_5d.iloc[-1] > high_5d.iloc[-6]
-    hl = low_5d.iloc[-1] > low_5d.iloc[-6]
-    
-    # 2. Volume Participation (15% Weight)
-    vol20_avg = volume.rolling(20).mean()
-    vol20_max = vol20_avg.rolling(60).max()
-    vpr = vol20_avg.iloc[-1] / vol20_max.iloc[-1] if vol20_max.iloc[-1] > 0 else 0.5
-    volume_score = min(100.0, float(vpr * 100.0))
-    
-    # 3. Relative Strength (15% Weight)
-    aligned_bench = bench_df["Close"].reindex(close.index).ffill()
-    rs_ratio_s, rs_mom_s = calculate_rrg_values(close, aligned_bench)
-    last_rs = rs_ratio_s.iloc[-1]
-    last_mom = rs_mom_s.iloc[-1]
-    
-    # RRG Quadrant score
-    if last_rs >= 100 and last_mom >= 100: rs_score = 100  # Leading
-    elif last_rs < 100 and last_mom >= 100: rs_score = 70   # Improving
-    elif last_rs >= 100 and last_mom < 100: rs_score = 45   # Weakening
-    else: rs_score = 15                                     # Lagging
-    
-    # 4. Momentum (15% Weight)
-    rsi_s = calculate_rsi(close)
-    macd_line, macd_sig, macd_hist = calculate_macd(close)
-    roc10 = ((close.iloc[-1] / close.iloc[-11]) - 1) * 100 if len(close) > 11 else 0
-    roc20 = ((close.iloc[-1] / close.iloc[-21]) - 1) * 100 if len(close) > 21 else 0
-    roc60 = ((close.iloc[-1] / close.iloc[-61]) - 1) * 100 if len(close) > 61 else 0
-    
-    last_rsi = rsi_s.iloc[-1]
-    last_hist = macd_hist.iloc[-1]
-    
-    mom_score = 50
-    if 35 <= last_rsi <= 70: mom_score += 20
-    elif last_rsi > 70: mom_score += 10  # extended but positive
-    if last_hist > 0: mom_score += 20
-    if roc10 > 0: mom_score += 10
-    
-    # Bearish divergence detection: Price higher high, RSI lower high
-    divergence_warning = False
-    if len(close) > 22:
-        price_peak = close.iloc[-22:-2].max()
-        rsi_peak = rsi_s.iloc[-22:-2].max()
-        if last_close > price_peak and last_rsi < rsi_peak:
-            divergence_warning = True
-            mom_score = max(0, mom_score - 30)
-
-    # 5. ADX Trend Strength (10% Weight)
-    adx_s, plus_di_s, minus_di_s = calculate_adx(high, low, close)
-    last_adx = adx_s.iloc[-1]
-    last_plus = plus_di_s.iloc[-1]
-    last_minus = minus_di_s.iloc[-1]
-    
-    adx_score = 50
-    if last_adx >= 25:
-        if last_plus > last_minus: adx_score = 100
-        else: adx_score = 25 # Strong downtrend
-    else:
-        adx_score = 50 # Sideways
-        
-    # 6. ATR Volatility Setup (10% Weight)
-    atr_s = calculate_atr(high, low, close)
-    last_atr = atr_s.iloc[-1]
-    atr_min = atr_s.rolling(252).min().iloc[-1]
-    atr_max = atr_s.rolling(252).max().iloc[-1]
-    atr_diff = atr_max - atr_min
-    atr_pct = ((last_atr - atr_min) / atr_diff) * 100 if atr_diff > 0 else 50.0
-    
-    # Sweet spot for options calendar: compression (low percentile) but slope starting to tilt up
-    atr_slope = atr_s.iloc[-1] - atr_s.iloc[-6] if len(atr_s) > 6 else 0
-    
-    atr_score = 70
-    if atr_pct < 40:
-        if atr_slope > 0: atr_score = 100 # expansion from low compression
-        else: atr_score = 90
-    elif atr_pct > 75:
-        atr_score = 40 # extended volatility
-        
-    # 7. Distribution Risk (10% Weight)
-    # Count sessions in last 20 where Close down and Volume up
-    is_down_day = close.diff() < 0
-    is_higher_vol = volume.diff() > 0
-    dist_days = (is_down_day & is_higher_vol).iloc[-20:].sum()
-    dist_score = max(0.0, 100.0 - (dist_days * 15.0))
-    
-    # 8. CVD Confirmation (5% Weight)
-    delta = close.diff()
-    cvd_s = (np.where(delta >= 0, 1, -1) * volume).cumsum()
-    last_cvd = cvd_s.iloc[-1]
-    cvd_slope = cvd_s.iloc[-1] - cvd_s.iloc[-11] if len(cvd_s) > 11 else 0
-    price_slope = close.iloc[-1] - close.iloc[-11] if len(close) > 11 else 0
-    
-    cvd_score = 50
-    if price_slope > 0:
-        if cvd_slope > 0: cvd_score = 100 # confirmed
-        else: cvd_score = 20 # CVD divergence!
-        
-    # Final Health Score calculation
-    master_score = (
-        (trend_score * 0.20) +
-        (volume_score * 0.15) +
-        (rs_score * 0.15) +
-        (mom_score * 0.15) +
-        (adx_score * 0.10) +
-        (atr_score * 0.10) +
-        (dist_score * 0.10) +
-        (cvd_score * 0.05)
-    )
-    
-    # Stage classification
-    if master_score >= 85: stage = "Early Bull / Expansion"
-    elif master_score >= 70: stage = "Strong Bull"
-    elif master_score >= 55: stage = "Mature Bull"
-    elif master_score >= 40: stage = "Fading Bull"
-    elif master_score >= 25: stage = "Distribution"
-    else: stage = "Breakdown"
-    
-    fdts_val = get_fdts_signal(ticker_df)
-    
-    return {
-        "Close": last_close,
-        "Volume": volume.iloc[-1],
-        "VPR": vpr,
-        "RS Ratio": last_rs,
-        "RS Momentum": last_mom,
-        "RSI": last_rsi,
-        "MACD Line": macd_line.iloc[-1],
-        "MACD Signal": macd_sig.iloc[-1],
-        "ADX": last_adx,
-        "ATR": last_atr,
-        "ATR Percentile": atr_pct,
-        "CVD": last_cvd,
-        "Distribution Days": dist_days,
-        "Health Score": master_score,
-        "Stage": stage,
-        "FDTS": fdts_val,
-        "HH": hh,
-        "HL": hl,
-        "Divergence": divergence_warning,
-        "CVD Slope": cvd_slope,
-        "CVD Score": cvd_score,
-        "Trend Score": trend_score,
-        "Vol Score": volume_score,
-        "RS Score": rs_score,
-        "Mom Score": mom_score,
-        "ADX Score": adx_score,
-        "ATR Score": atr_score,
-        "Dist Score": dist_score,
-        "ROC10": roc10,
-        "ROC20": roc20,
-        "ROC60": roc60
-    }
+    raw_sig = calculate_fdts_ha_signal(ticker_df, period)
+    return format_fdts_signal(raw_sig)
 
 # =====================================================================
 # Options & Earnings Integrations
@@ -1083,13 +801,23 @@ class PriceActionStoryModule(FazDaneModule):
                     sym = r["Ticker"]
                     
                     # Option Metrics Check
-                    opt_data = opt_summary.get(sym, {})
-                    spread_pct = opt_data.get("median_spread_pct", 2.5) if opt_data else 2.0
-                    oi = opt_data.get("total_oi", 0) if opt_data else 0
+                    opt_data = opt_summary.get(sym) or {}
                     
+                    spread_pct = opt_data.get("median_spread_pct")
+                    if spread_pct is None:
+                        spread_pct = 2.5
+                        
+                    oi = opt_data.get("total_oi")
+                    if oi is None:
+                        oi = 0
+                        
+                    total_volume = opt_data.get("total_volume")
+                    if total_volume is None:
+                        total_volume = 0
+                        
                     # Option Liquidity proxy
                     if opt_data:
-                        liq = "High" if opt_data.get("total_volume", 0) > 1000 else "Medium"
+                        liq = "High" if total_volume > 1000 else "Medium"
                     else:
                         # Proxy by stock volume
                         liq = "High" if r["Volume"] > 2000000 else "Medium" if r["Volume"] > 500000 else "Low"
@@ -1170,6 +898,15 @@ class PriceActionStoryModule(FazDaneModule):
                 index=0,
                 format_func=format_ticker_with_fdts
             )
+            
+            # Reset visual canvas on ticker transition to clear stale visualizations immediately
+            if "pa_last_selected_ticker" not in st.session_state:
+                st.session_state["pa_last_selected_ticker"] = selected_ticker
+
+            if selected_ticker != st.session_state["pa_last_selected_ticker"]:
+                st.session_state["pa_last_selected_ticker"] = selected_ticker
+                st.info(f"🔄 Loading detailed narrative and price action charts for {selected_ticker}...")
+                st.rerun()
             
             ticker_df = ticker_cache.get(selected_ticker, pd.DataFrame())
             

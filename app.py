@@ -959,6 +959,23 @@ elif st.session_state.get("active_menu_tier"):
 else:
     active_module = "Home Dashboard"
 
+# Detect module transitions to clear previous visualizations immediately
+if "last_active_module" not in st.session_state:
+    st.session_state["last_active_module"] = active_module
+
+if active_module != st.session_state["last_active_module"]:
+    st.session_state["last_active_module"] = active_module
+    st.markdown(
+        """
+        <div style="text-align:center; padding:100px 20px;">
+            <h2 style='color:#3ab54a; font-family:Inter,sans-serif;'>Loading module...</h2>
+            <div style='color:#64748b; font-size:14px; margin-top:10px;'>Initializing components and clearing resources</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    st.rerun()
+
 #  Route to module
 
 if active_module.startswith("__MENU_TIER_"):

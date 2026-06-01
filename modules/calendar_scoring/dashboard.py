@@ -921,6 +921,15 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             options=ticker_options,
             format_func=lambda t: format_ticker_display(t, ticker_names)
         )
+        
+        # Reset visual canvas on ticker transition to clear stale visualizations immediately
+        if "cal_last_detail_ticker" not in st.session_state:
+            st.session_state["cal_last_detail_ticker"] = sel_ticker
+
+        if sel_ticker != st.session_state["cal_last_detail_ticker"]:
+            st.session_state["cal_last_detail_ticker"] = sel_ticker
+            st.info(f"🔄 Fetching intraday metrics and calculating survival lifespans for {sel_ticker}...")
+            st.rerun()
         c = next(cand for cand in st.session_state.cal_candidates if cand["ticker"] == sel_ticker)
         
         col1, col2 = st.columns(2)
