@@ -918,6 +918,8 @@ class OptionsLiquidityModule(FazDaneModule):
         if put_hedging_symbols:
             st.caption("🛡️ indicates symbols with higher Put option volume than Call option volume (hedging bias on Puts).")
 
+        filter_hedging = st.checkbox("Show only Put Hedging symbols (🛡️)", value=False, key="ol_filter_put_hedging")
+
         with st.spinner("Calculating daily FDTS + MACD regimes..."):
             signals = fetch_trade_signal_buckets(tuple(symbols))
 
@@ -964,18 +966,12 @@ class OptionsLiquidityModule(FazDaneModule):
         cols = st.columns(3)
         for col, (bucket, color) in zip(cols, bucket_defs):
             bucket_df = signals[signals["Signal"].astype(str) == bucket].copy()
+            if filter_hedging:
+                bucket_df = bucket_df[bucket_df["Ticker"].astype(str).str.upper().isin(put_hedging_symbols)]
             with col:
                 st.markdown(
-                    f"""
-                    <div style="
-                        color:{color};
-                        font-size:13px;
-                        font-weight:800;
-                        text-transform:uppercase;
-                        letter-spacing:0.5px;
-                        margin:4px 0 8px;
-                    ">{bucket} ({len(bucket_df)})</div>
-                    """,
+                    f'<div style="color:{color};font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;margin:4px 0 8px;">'
+                    f'{bucket} ({len(bucket_df)})</div>',
                     unsafe_allow_html=True,
                 )
                 if bucket_df.empty:
@@ -1013,7 +1009,10 @@ class OptionsLiquidityModule(FazDaneModule):
                     },
                 )
 
-        self._render_trade_signal_rotation(signals, focus_symbol=focus_symbol, put_hedging_symbols=put_hedging_symbols)
+        rotation_signals = signals.copy()
+        if filter_hedging:
+            rotation_signals = rotation_signals[rotation_signals["Ticker"].astype(str).str.upper().isin(put_hedging_symbols)]
+        self._render_trade_signal_rotation(rotation_signals, focus_symbol=focus_symbol, put_hedging_symbols=put_hedging_symbols)
 
     def _render_trade_signal_rotation(self, signals: pd.DataFrame, focus_symbol: str | None = None, put_hedging_symbols: set[str] = None):
         st.markdown("### Ticker Signal Rotation")
