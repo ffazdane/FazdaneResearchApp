@@ -279,6 +279,91 @@ class PriceActionStoryModule(FazDaneModule):
         if scan_clicked or "pa_scanned_data" not in st.session_state:
             st.session_state["pa_trigger_scan"] = True
 
+    def execute_price_action_scan(self, universe_name, tickers, benchmark, lookback_days, rerun=True, progress_bar=None, status_text=None):
+        """Execute Price Action scan and save results to SQLite database."""
+        if progress_bar is None:
+            progress_bar = st.progress(0.0)
+        else:
+            progress_bar.progress(0.0)
+        if status_text is None:
+            status_text = st.empty()
+            
+        status_text.text("Downloading price data for Price Action scan...")
+        all_tickers = sorted(list(set(tickers + [benchmark, "QQQ", "IWM"])))
+        start_date = datetime.today() - timedelta(days=lookback_days + 150)
+        
+        raw_data = yf.download(
+            all_tickers,
+            start=start_date.strftime("%Y-%m-%d"),
+            end=(datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d"),
+            group_by="column",
+            progress=False
+        )
+        
+        if raw_data.empty:
+            raise ValueError("No historical data returned. Check symbols/benchmark.")
+
+        # Extract benchmark dataframes
+        def extract_single(df, sym):
+            res = pd.DataFrame(index=df.index)
+            if isinstance(df.columns, pd.MultiIndex):
+                for col in ["Open", "High", "Low", "Close", "Volume"]:
+                    if col in df and sym in df[col].columns:
+                        res[col] = df[col][sym]
+            else:
+                res = df.copy()
+            return res.dropna(how="all")
+
+        bench_df = extract_single(raw_data, benchmark)
+        qqq_df = extract_single(raw_data, "QQQ")
+        iwm_df = extract_single(raw_data, "IWM")
+
+        results = []
+        ticker_data_cache = {}
+        total_tickers = len(tickers)
+        
+        for idx, ticker in enumerate(tickers):
+            status_text.text(f"Analyzing Price Action for {ticker} ({idx+1}/{total_tickers})...")
+            progress_bar.progress((idx + 1) / total_tickers)
+            if ticker == benchmark:
+                continue
+            ticker_raw = extract_single(raw_data, ticker)
+            if ticker_raw.empty or len(ticker_raw) < 50:
+                continue
+            
+            ticker_data_cache[ticker] = ticker_raw
+            eval_res = evaluate_ticker_price_action(ticker_raw, bench_df)
+            if eval_res:
+                eval_res["Ticker"] = ticker
+                eval_res["Name"] = ticker
+                results.append(eval_res)
+        
+        # Also evaluate benchmarks for dashboard
+        bench_res = evaluate_ticker_price_action(bench_df, bench_df)
+        if bench_res: bench_res["Ticker"] = benchmark; bench_res["Name"] = "S&P 500 ETF"
+        
+        qqq_res = evaluate_ticker_price_action(qqq_df, bench_df)
+        if qqq_res: qqq_res["Ticker"] = "QQQ"; qqq_res["Name"] = "Nasdaq 100 ETF"
+        
+        iwm_res = evaluate_ticker_price_action(iwm_df, bench_df)
+        if iwm_res: iwm_res["Ticker"] = "IWM"; iwm_res["Name"] = "Russell 2000 ETF"
+        
+        scanned_df = pd.DataFrame(results)
+        st.session_state["pa_scanned_data"] = scanned_df
+        st.session_state["pa_ticker_cache"] = ticker_data_cache
+        st.session_state["pa_benchmarks"] = {"SPY": bench_res, "QQQ": qqq_res, "IWM": iwm_res}
+        st.session_state["pa_bench_df"] = bench_df
+        
+        # Save scan run to sqlite database
+        if not scanned_df.empty:
+            status_text.text("Saving price action scan to SQLite database...")
+            run_id = save_scan_run(universe_name, scanned_df)
+            status_text.text(f"✅ Saved price action scan to price_action_story SQLite database (Run ID: {run_id}).")
+            
+        progress_bar.empty()
+        if rerun:
+            st.rerun()
+
     def render_main(self):
         # 1. Gather variables from session state
         universe_name = st.session_state.get("pa_universe_name", "SPX Sectors")
@@ -290,75 +375,7 @@ class PriceActionStoryModule(FazDaneModule):
         if st.session_state.pop("pa_trigger_scan", False) or "pa_scanned_data" not in st.session_state:
             with st.spinner("Fetching data and evaluating lifecycle stages..."):
                 try:
-                    all_tickers = sorted(list(set(tickers + [benchmark, "QQQ", "IWM"])))
-                    start_date = datetime.today() - timedelta(days=lookback_days + 150)
-                    
-                    raw_data = yf.download(
-                        all_tickers,
-                        start=start_date.strftime("%Y-%m-%d"),
-                        end=(datetime.today() + timedelta(days=1)).strftime("%Y-%m-%d"),
-                        group_by="column",
-                        progress=False
-                    )
-                    
-                    if raw_data.empty:
-                        st.error("No historical data returned. Check symbols/benchmark.")
-                        return
-
-                    # Extract benchmark dataframes
-                    def extract_single(df, sym):
-                        res = pd.DataFrame(index=df.index)
-                        if isinstance(df.columns, pd.MultiIndex):
-                            for col in ["Open", "High", "Low", "Close", "Volume"]:
-                                if col in df and sym in df[col].columns:
-                                    res[col] = df[col][sym]
-                        else:
-                            res = df.copy()
-                        return res.dropna(how="all")
-
-                    bench_df = extract_single(raw_data, benchmark)
-                    qqq_df = extract_single(raw_data, "QQQ")
-                    iwm_df = extract_single(raw_data, "IWM")
-
-                    results = []
-                    # Keep raw ticker dataframes cached locally for detail pages
-                    ticker_data_cache = {}
-                    
-                    for ticker in tickers:
-                        if ticker == benchmark:
-                            continue
-                        ticker_raw = extract_single(raw_data, ticker)
-                        if ticker_raw.empty or len(ticker_raw) < 50:
-                            continue
-                        
-                        ticker_data_cache[ticker] = ticker_raw
-                        eval_res = evaluate_ticker_price_action(ticker_raw, bench_df)
-                        if eval_res:
-                            eval_res["Ticker"] = ticker
-                            # Fetch name if available
-                            eval_res["Name"] = ticker
-                            results.append(eval_res)
-                    
-                    # Also evaluate benchmarks for dashboard
-                    bench_res = evaluate_ticker_price_action(bench_df, bench_df)
-                    if bench_res: bench_res["Ticker"] = benchmark; bench_res["Name"] = "S&P 500 ETF"
-                    
-                    qqq_res = evaluate_ticker_price_action(qqq_df, bench_df)
-                    if qqq_res: qqq_res["Ticker"] = "QQQ"; qqq_res["Name"] = "Nasdaq 100 ETF"
-                    
-                    iwm_res = evaluate_ticker_price_action(iwm_df, bench_df)
-                    if iwm_res: iwm_res["Ticker"] = "IWM"; iwm_res["Name"] = "Russell 2000 ETF"
-                    
-                    scanned_df = pd.DataFrame(results)
-                    st.session_state["pa_scanned_data"] = scanned_df
-                    st.session_state["pa_ticker_cache"] = ticker_data_cache
-                    st.session_state["pa_benchmarks"] = {"SPY": bench_res, "QQQ": qqq_res, "IWM": iwm_res}
-                    st.session_state["pa_bench_df"] = bench_df
-                    
-                    # Save scan run to sqlite database
-                    if not scanned_df.empty:
-                        save_scan_run(universe_name, scanned_df)
-                        
+                    self.execute_price_action_scan(universe_name, tickers, benchmark, lookback_days, rerun=False)
                 except Exception as e:
                     st.error(f"Failed to compile price action scans: {e}")
                     logger.error("Scan compilation error", exc_info=True)

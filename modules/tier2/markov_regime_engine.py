@@ -154,55 +154,176 @@ class MarkovRegimeEngineModule(FazDaneModule):
                 st.rerun()
             return
 
-        if should_reprocess:
+    def execute_regime_scan(self, universe_name=None, symbols=None, lookback_years=None, n_states=None, rerun=True, progress_bar=None, status_text=None):
+        """Execute empirical and hidden Markov regime scan and save results to SQLite."""
+        u_name = universe_name if universe_name is not None else self.universe_name
+        u_symbols = symbols if symbols is not None else self.symbols
+        u_lookback = lookback_years if lookback_years is not None else self.lookback_years
+        u_n_states = n_states if n_states is not None else self.n_states
+
+        if progress_bar is None:
+            progress_bar = st.progress(0.0)
+        else:
+            progress_bar.progress(0.0)
+        if status_text is None:
             status_text = st.empty()
-            status_text.text(f"Starting scan for Universe '{self.universe_name}' with {len(self.symbols)} tickers...")
-            with st.spinner(f"Processing regime engine models across '{self.universe_name}'..."):
-                results = {}
-                progress_bar = st.progress(0.0)
+
+        status_text.text(f"Starting scan for Universe '{u_name}' with {len(u_symbols)} tickers...")
+        results = {}
+        
+        # Fetch all fdts signals once to avoid multiple database queries
+        fdts_data = self._get_latest_fdts_signals()
+        
+        # Run parallel processing
+        max_workers = min(len(u_symbols), 8)
+        completed_count = 0
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self._process_single_ticker, symbol, fdts_data, u_lookback, u_n_states): symbol
+                for symbol in u_symbols
+            }
+            
+            for future in as_completed(futures):
+                symbol, ticker_res = future.result()
+                if ticker_res is not None:
+                    results[symbol] = ticker_res
+                completed_count += 1
+                status_text.text(
+                    f"Regime Scan Universe: '{u_name}' | Tickers: {len(u_symbols)} | "
+                    f"Progress: {completed_count}/{len(u_symbols)} completed (last: {symbol} — saved to SQLite database)"
+                )
+                progress_bar.progress(completed_count / len(u_symbols))
+        
+        progress_bar.empty()
+        status_text.text(f"Saving regime intelligence scan results for {len(results)} tickers to calendar_scoring database...")
+        # Database writes are performed individually inside _process_single_ticker
+        status_text.text(f"✅ Saved regime intelligence scan for {len(results)} tickers to calendar_scoring SQLite database.")
+        
+        st.session_state["mre_results"] = results
+        st.session_state["mre_scan_completed"] = True
+        st.session_state["mre_needs_reprocess"] = False
+        
+        # Fetch created_at timestamp from the database for consistency
+        latest_ts = None
+        if results:
+            first_sym = list(results.keys())[0]
+            with self.db_lock:
+                first_forecast = get_latest_forecast(first_sym)
+            latest_ts = first_forecast.get("created_at")
+        
+        if not latest_ts:
+            latest_ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            
+        st.session_state["mre_last_saved_time"] = latest_ts
+        
+        if rerun:
+            st.session_state["mre_show_success_banner"] = True
+            st.rerun()
+
+    def render_main(self):
+        self.render_section_header(
+            "Markov & HMM Regime Intelligence Dashboard",
+            "State transition forecasting and FDTS confirmation scaling layer"
+        )
+        
+        if not self.symbols:
+            st.warning("⚠️ Please select a ticker universe in the sidebar to begin.")
+            return
+
+        if st.session_state.pop("mre_show_success_banner", False):
+            st.success("✅ **Universe Reprocessed & Saved!** All empirical regime states, HMM matrices, and forecasts have been successfully written to the database.")
+
+        # Setup state to store calculations
+        if "mre_scan_completed" not in st.session_state:
+            st.session_state["mre_scan_completed"] = False
+            st.session_state["mre_results"] = {}
+            st.session_state["mre_last_saved_time"] = None
+            st.session_state["mre_needs_reprocess"] = False
+
+        # Check if the loaded results match the currently selected watchlist
+        loaded_symbols = set(st.session_state["mre_results"].keys())
+        selected_symbols = set(s.strip().upper() for s in self.symbols)
+        
+        if loaded_symbols != selected_symbols:
+            st.session_state["mre_scan_completed"] = False
+            st.session_state["mre_results"] = {}
+            st.session_state["mre_last_saved_time"] = None
+
+        # Determine if we should perform calculations
+        should_reprocess = self.run_engine or st.session_state.get("mre_needs_reprocess", False)
+
+        # Try to load existing data from database if not loaded and we are not reprocessing
+        if not should_reprocess and not st.session_state["mre_scan_completed"]:
+            db_results = {}
+            newest_timestamp = None
+            all_found = True
+            
+            for symbol in self.symbols:
+                sym = symbol.strip().upper()
+                forecast = get_latest_forecast(sym)
+                backtest = get_latest_backtest(sym)
+                hist_states = get_historical_states(sym)
+                trans_matrix, state_list = get_latest_transition_matrix(sym)
                 
-                # Fetch all fdts signals once to avoid multiple database queries
-                fdts_data = self._get_latest_fdts_signals()
-                
-                # Run parallel processing
-                max_workers = min(len(self.symbols), 8)
-                completed_count = 0
-                
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    futures = {
-                        executor.submit(self._process_single_ticker, symbol, fdts_data): symbol
-                        for symbol in self.symbols
-                    }
+                if not forecast or not backtest or not hist_states or trans_matrix is None:
+                    all_found = False
+                    break
                     
-                    for future in as_completed(futures):
-                        symbol, ticker_res = future.result()
-                        if ticker_res is not None:
-                            results[symbol] = ticker_res
-                        completed_count += 1
-                        status_text.text(
-                            f"Scanning Universe: '{self.universe_name}' | Tickers: {len(self.symbols)} | "
-                            f"Progress: {completed_count}/{len(self.symbols)} completed (last: {symbol} — saved to SQLite database)"
-                        )
-                        progress_bar.progress(completed_count / len(self.symbols))
+                df_db = pd.DataFrame(hist_states)
+                df_db = df_db.rename(columns={"close_price": "close"})
                 
-                progress_bar.empty()
-                status_text.empty()
-                st.session_state["mre_results"] = results
+                db_results[sym] = {
+                    "df": df_db,
+                    "hmm_model": None,
+                    "state_labels": ["BULL", "SIDEWAYS", "BEAR"],
+                    "trans_matrix": trans_matrix,
+                    "state_list": state_list,
+                    "forecast": forecast,
+                    "backtest": backtest
+                }
+                
+                ts = forecast.get("created_at")
+                if ts:
+                    if not newest_timestamp or ts > newest_timestamp:
+                        newest_timestamp = ts
+                        
+            if all_found and db_results:
+                st.session_state["mre_results"] = db_results
                 st.session_state["mre_scan_completed"] = True
+                st.session_state["mre_last_saved_time"] = newest_timestamp
                 st.session_state["mre_needs_reprocess"] = False
-                
-                # Fetch created_at timestamp from the database for consistency
-                latest_ts = None
-                if results:
-                    first_sym = list(results.keys())[0]
-                    with self.db_lock:
-                        first_forecast = get_latest_forecast(first_sym)
-                    latest_ts = first_forecast.get("created_at")
-                
-                if not latest_ts:
-                    latest_ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-                    
-                st.session_state["mre_last_saved_time"] = latest_ts
+
+        # Render status banner and reprocess button
+        if st.session_state["mre_scan_completed"] and st.session_state.get("mre_last_saved_time"):
+            c_info, c_action = st.columns([3, 1], vertical_alignment="center")
+            with c_info:
+                st.info(f"💾 **Using Processed Markov Models** | Data Saved: `{st.session_state['mre_last_saved_time']}` (UTC)")
+            with c_action:
+                if st.button("🔄 Reprocess Universe", key="mre_force_reprocess", use_container_width=True, type="primary"):
+                    st.session_state["mre_scan_completed"] = False
+                    st.session_state["mre_results"] = {}
+                    st.session_state["mre_last_saved_time"] = None
+                    st.session_state["mre_needs_reprocess"] = True
+                    st.rerun()
+
+        # Prompt for scan if no data exists and no scan has run
+        if not st.session_state["mre_scan_completed"] and not should_reprocess:
+            st.warning("⚠️ No processed regime model data found in database for this universe. You must run a fresh scan.")
+            if st.button("🚀 Execute Markov Regime Scan Now", key="mre_first_run_btn", use_container_width=True, type="primary"):
+                st.session_state["mre_needs_reprocess"] = True
+                st.rerun()
+            return
+
+        if should_reprocess:
+            with st.spinner(f"Processing regime engine models across '{self.universe_name}'..."):
+                self.execute_regime_scan(
+                    universe_name=self.universe_name,
+                    symbols=self.symbols,
+                    lookback_years=self.lookback_years,
+                    n_states=self.n_states,
+                    rerun=False
+                )
                 st.session_state["mre_show_success_banner"] = True
                 st.rerun()
                 
@@ -560,11 +681,13 @@ class MarkovRegimeEngineModule(FazDaneModule):
               * **Realized Volatility**: Must be $< 45\\%$ (no crash regime).
             """)
 
-    def _process_single_ticker(self, symbol: str, fdts_data: dict = None) -> tuple[str, dict | None]:
+    def _process_single_ticker(self, symbol: str, fdts_data: dict = None, lookback_years: int = None, n_states: int = None) -> tuple[str, dict | None]:
         symbol = symbol.strip().upper()
+        l_years = lookback_years if lookback_years is not None else self.lookback_years
+        n_st = n_states if n_states is not None else self.n_states
         try:
             # 1. Load historical price data
-            df = self._load_price_data(symbol, self.lookback_years)
+            df = self._load_price_data(symbol, l_years)
             if df.empty or len(df) < 50:
                 logger.warning(f"Insufficient historical price data for {symbol}.")
                 return symbol, None
@@ -576,7 +699,7 @@ class MarkovRegimeEngineModule(FazDaneModule):
             df = self._assign_empirical_states(df)
             
             # 4. Train Gaussian HMM and assign HMM states
-            df, hmm_model, state_labels = train_hmm_model(df, n_states=self.n_states)
+            df, hmm_model, state_labels = train_hmm_model(df, n_states=n_st)
             
             # 5. Build Transition Probability Matrix
             trans_matrix, state_list, trans_counts = self._build_transition_matrix(df)

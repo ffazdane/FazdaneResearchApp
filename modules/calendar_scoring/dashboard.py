@@ -1402,10 +1402,13 @@ class CalendarOpportunityScoringModule(FazDaneModule):
     # ══════════════════════════════════════════════════════════════════════
     # ENGINE SCAN FUNCTION
     # ══════════════════════════════════════════════════════════════════════
-    def execute_engine_scan(self):
+    def execute_engine_scan(self, universe_name=None, tickers=None, rerun=True, progress_bar=None, status_text=None):
         """Execute calculations and scoring over the complete ticker universe."""
         st.session_state.cal_candidates = []
-        progress_bar = st.progress(0)
+        if progress_bar is None:
+            progress_bar = st.progress(0.0)
+        else:
+            progress_bar.progress(0.0)
 
         # Get active weights from DB
         weights = get_active_model_weights()
@@ -1421,16 +1424,18 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         # ── Pre-fetch benchmark data ONCE before the ticker loop ──────────────
         # Avoids repeated SPY/QQQ API calls inside calculate_pca_score() and
         # calculate_leading_lagging_score() for every ticker.
-        status_text = st.empty()
+        if status_text is None:
+            status_text = st.empty()
         status_text.text("Fetching benchmark data (SPY, QQQ)...")
         spy_df, benchmark_returns = fetch_benchmark_data()
 
         scanned_count  = 0
-        total_tickers  = len(self.tickers)
+        target_tickers = tickers if tickers is not None else self.tickers
+        total_tickers  = len(target_tickers)
 
         temp_candidates = []
         
-        for idx, ticker in enumerate(self.tickers):
+        for idx, ticker in enumerate(target_tickers):
             status_text.text(f"Scanning {ticker} ({idx+1}/{total_tickers})...")
             progress_bar.progress((idx + 1) / total_tickers)
             
@@ -1504,7 +1509,6 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 # Component 4: Survival Analysis trend lifespan check
                 surv_analysis = analyze_trend_survival_with_df(ticker, tech["df_history"])
                 survival_prob = surv_analysis.get("survival_prob_20d", 75.0)
-                survival_warning = surv_analysis.get("warning", False)
                 
                 # recommendation
                 if final_score >= 85:
@@ -1590,15 +1594,17 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         ranked_candidates = sorted(temp_candidates, key=sort_key)
         
         # 7. Log all to SQLite Database
+        status_text.text(f"Saving {scanned_count} candidates to calendar_scoring database...")
         run_date = date.today().strftime("%Y-%m-%d")
         log_daily_run(run_date, ranked_candidates, model_version)
+        status_text.text(f"✅ Saved {scanned_count} candidates to calendar_scoring SQLite database.")
         
         # Store in session state
         st.session_state.cal_candidates = ranked_candidates
         st.session_state.cal_last_run = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # UI Feedback
-        status_text.empty()
         progress_bar.empty()
-        st.success(f"Scan complete. {scanned_count} candidates scored and logged to database.")
-        st.rerun()
+        st.success(f"Calendar scoring scan complete. {scanned_count} candidates scored and logged to database.")
+        if rerun:
+            st.rerun()

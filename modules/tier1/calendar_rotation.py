@@ -9,10 +9,12 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.subplots as sp
 import yfinance as yf
-from datetime import datetime, timedelta
+import sqlite3
+from datetime import datetime, date, timedelta
 import logging
 from modules.base_module import FazDaneModule
-from utils.universe_manager import render_universe_multiselect
+from utils.universe_manager import render_universe_manager
+from utils.persistence import get_db_path
 
 logger = logging.getLogger("CalendarRotation")
 
@@ -197,89 +199,370 @@ def analyze_universe(univ_name, tickers, benchmark):
         "close": close, "volume": volume
     }
 
+def format_fdts_emoji(sig: str) -> str:
+    """Format FDTS signals to standard visual emoji bullet points."""
+    sig_clean = str(sig).replace("🟢", "").replace("🔴", "").replace("⚪", "").strip()
+    return {"Buy": "🟢 Buy", "Sell": "🔴 Sell", "Neutral": "⚪ Neutral", "No Trade": "⚪ No Trade"}.get(sig_clean, f"⚪ {sig_clean}")
+
+def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
+    """Query SQLite databases to construct the consolidated ticker matrix."""
+    cs_db = get_db_path("calendar_scoring")
+    pa_db = get_db_path("price_action_story")
+    
+    tickers_upper = [t.strip().upper() for t in tickers]
+    merged = pd.DataFrame({"ticker": tickers_upper})
+    
+    df_cs = pd.DataFrame(columns=["ticker", "earnings_date", "fdts_signal", "cs_rec", "cs_score"])
+    df_mre = pd.DataFrame(columns=["ticker", "mre_rec", "mre_sig"])
+    df_pa = pd.DataFrame(columns=["ticker", "pa_rec", "pa_score"])
+    
+    if cs_db.exists():
+        try:
+            with sqlite3.connect(cs_db) as conn:
+                # Latest Calendar Scoring recommendation for each ticker
+                q_cs = """
+                    SELECT ticker, earnings_date, fdts_signal, recommendation as cs_rec, final_score as cs_score
+                    FROM ticker_decision_log t1
+                    WHERE decision_id = (
+                        SELECT MAX(decision_id) FROM ticker_decision_log t2 WHERE t2.ticker = t1.ticker
+                    )
+                """
+                df_cs = pd.read_sql_query(q_cs, conn)
+                
+                # Latest Regime (Markov) Forecast for each ticker
+                q_mre = """
+                    SELECT ticker, final_action as mre_rec, markov_signal as mre_sig
+                    FROM markov_forecast t1
+                    WHERE as_of_date = (
+                        SELECT MAX(as_of_date) FROM markov_forecast t2 WHERE t2.ticker = t1.ticker
+                    )
+                """
+                df_mre = pd.read_sql_query(q_mre, conn)
+        except Exception as e:
+            logger.error(f"Error querying calendar_scoring database: {e}")
+            
+    if pa_db.exists():
+        try:
+            with sqlite3.connect(pa_db) as conn:
+                # Latest Price Action Stage for each ticker
+                q_pa = """
+                    SELECT ticker, stage as pa_rec, health_score as pa_score
+                    FROM ticker_stage_history t1
+                    WHERE scan_ts = (
+                        SELECT MAX(scan_ts) FROM ticker_stage_history t2 WHERE t2.ticker = t1.ticker
+                    )
+                """
+                df_pa = pd.read_sql_query(q_pa, conn)
+        except Exception as e:
+            logger.error(f"Error querying price_action_story database: {e}")
+            
+    for df in [df_cs, df_mre, df_pa]:
+        if not df.empty and "ticker" in df.columns:
+            df["ticker"] = df["ticker"].str.strip().str.upper()
+            
+    merged = merged.merge(df_cs, on="ticker", how="left")
+    merged = merged.merge(df_mre, on="ticker", how="left")
+    merged = merged.merge(df_pa, on="ticker", how="left")
+    
+    # Fill N/As
+    merged["earnings_date"] = merged["earnings_date"].fillna("N/A")
+    merged["fdts_signal"] = merged["fdts_signal"].fillna("Neutral")
+    merged["cs_rec"] = merged["cs_rec"].fillna("N/A")
+    merged["cs_score"] = merged["cs_score"].fillna(0.0)
+    merged["mre_rec"] = merged["mre_rec"].fillna("N/A")
+    merged["mre_sig"] = merged["mre_sig"].fillna(0.0)
+    merged["pa_rec"] = merged["pa_rec"].fillna("N/A")
+    merged["pa_score"] = merged["pa_score"].fillna(0.0)
+    
+    return merged
+
+
 class CalendarRotationModule(FazDaneModule):
     MODULE_NAME = "Calendar Strategy Matrix"
     MODULE_ICON = "📅"
-    MODULE_DESCRIPTION = "Multi-Universe Rotation Dashboard for Calendar Spreads"
+    MODULE_DESCRIPTION = "Consolidated Triple-Engine Scanning Strategy Matrix and Rotation Dashboard"
     TIER = 1
     SOURCE_NOTEBOOK = "05-SPX Sector Rotation / RRG-Style Visualization.ipynb"
     CACHE_TTL = 3600
     REQUIRES_LIVE_DATA = True
-    DATA_SOURCES = ["yfinance"]
+    DATA_SOURCES = ["yfinance", "calendar_scoring_sqlite", "price_action_story_sqlite"]
 
     def render_sidebar(self):
-        st.markdown("**Analysis Configuration**")
-        selected, selected_data = render_universe_multiselect(
-            key_prefix="cal",
+        st.markdown("**Watchlist**")
+        self.universe_name, self.tickers, self.benchmark = render_universe_manager(
+            key_prefix="cal_strategy_matrix",
             show_benchmark=True,
-            label="Select Universes:",
-            default_names=["Calendar Candidates", "SPX Sectors"],
+            label="Select Universe:",
         )
+        st.caption(f"{len(self.tickers)} symbols selected.")
         
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        scan_clicked = st.button("🚀 Run Multi-Universe Analysis", use_container_width=True, type="primary")
+        st.markdown("**Triple-Engine Execution**")
+        run_all_scans = st.button("🚀 Run Triple-Engine Scan", use_container_width=True, type="primary")
         
-        if scan_clicked:
-            if not selected:
-                st.sidebar.error("Please select at least one universe.")
-            else:
-                st.session_state["cal_state"] = {
-                    "universes": selected,
-                    "universe_data": selected_data,
-                }
+        if run_all_scans:
+            st.session_state["run_all_scans_triggered"] = True
 
     def render_main(self):
-        state = st.session_state.get("cal_state", {"universes": ["Calendar Candidates", "SPX Sectors"], "universe_data": {}})
-        selected_universes = state["universes"]
-        universe_data = state.get("universe_data", {})
-        
         self.render_section_header(
-            "📅 Calendar Option Strategy Rotation Matrix",
-            "Multi-Universe Comparative Relative Strength & Momentum Analysis"
+            "📅 Calendar Strategy Matrix & Rotation Dashboard",
+            "Consolidated Ticker Recommendations from Multi-Factor Scanning Engines"
         )
         
-        if not selected_universes:
-            st.info("Select one or more universes from the sidebar to begin.")
+        if not self.tickers:
+            st.warning("⚠️ Please select a ticker universe in the sidebar to begin.")
             return
 
-        MULTI_RESULTS = {}
-        with st.spinner("Analyzing universes and calculating calendar scores..."):
-            for univ in selected_universes:
-                data = universe_data.get(univ)
-                if not data:
-                    data = UNIVERSES.get(univ, {})
-                    data = {
-                        "tickers": list(data.get("tickers", {}).keys()),
-                        "benchmark": data.get("benchmark", "SPY"),
-                    }
-                res = analyze_universe(
-                    univ,
-                    tuple(data.get("tickers", [])),
-                    data.get("benchmark", "SPY"),
-                )
-                if res: MULTI_RESULTS[univ] = res
+        # ── Trigger Triple-Engine Scan On-Demand ─────────────────────────────
+        if st.session_state.pop("run_all_scans_triggered", False):
+            self._execute_triple_engine_scans()
 
-        if not MULTI_RESULTS:
-            st.error("Failed to compute data for the selected universes.")
-            return
-
-        # Combine results
-        all_scores = []
-        for univ_name, res in MULTI_RESULTS.items():
-            scores = res["scores"].copy()
-            scores["universe"] = univ_name
-            all_scores.append(scores)
+        # ── Render Page Navigation Tabs ──────────────────────────────────────
+        tab_matrix, tab_rrg = st.tabs([
+            "🔍 Consolidated Strategy Matrix",
+            "📊 RRG Rotation Matrix"
+        ])
+        
+        # ── TAB 1: Consolidated Strategy Matrix ──────────────────────────────
+        with tab_matrix:
+            df = load_consolidated_recommendations(self.tickers)
             
-        combined_scores = pd.concat(all_scores, ignore_index=True)
-        combined_scores["calendar_score_normalized"] = combined_scores.groupby("universe")["calendar_score"].transform(
-            lambda x: (x - x.mean()) / (x.std() + 1e-8)
-        )
-        combined_scores = combined_scores.sort_values("calendar_score", ascending=False).reset_index(drop=True)
+            # Check if any database records exist
+            has_data = not df.empty and not (df["cs_rec"].eq("N/A") & df["pa_rec"].eq("N/A") & df["mre_rec"].eq("N/A")).all()
+            
+            if not has_data:
+                st.warning("⚠️ No processed engine results found in database for the selected universe. You must run a fresh triple scan.")
+                if st.button("🚀 Execute Triple-Engine Scan Now", key="cal_strategy_first_run_btn", use_container_width=True, type="primary"):
+                    st.session_state["run_all_scans_triggered"] = True
+                    st.rerun()
+                return
 
-        self._render_dashboard(MULTI_RESULTS, combined_scores)
-        self._render_top_candidates(combined_scores)
-        self._render_universe_summary(MULTI_RESULTS, combined_scores)
-        self._render_interpretation_guide()
+            # Display KPI Summary Cards
+            cs_deploy_watch = len(df[df["cs_rec"].isin(["Deploy", "Watch"])])
+            pa_bullish = len(df[df["pa_rec"].isin(["Early Bull / Expansion", "Strong Bull", "Mature Bull"])])
+            mre_deploy_watch = len(df[df["mre_rec"].isin(["Deploy", "Watch"])])
+            
+            metrics = {
+                "Total Universe Tickers": (len(df), None, ""),
+                "Scoring Engine Deploy/Watch": (cs_deploy_watch, None, f" / {len(df)}"),
+                "Price Action Bullish Tickers": (pa_bullish, None, f" / {len(df)}"),
+                "Regime Deploy/Watch Tickers": (mre_deploy_watch, None, f" / {len(df)}")
+            }
+            self.render_metrics_row(metrics)
+            st.write("")
+
+            # Filter Options Block
+            with st.expander("🔍 Interactive Recommendations Filters", expanded=True):
+                col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+                with col_f1:
+                    all_cs_recs = sorted(list(df["cs_rec"].unique()))
+                    sel_cs_recs = st.multiselect(
+                        "Scoring Recommendation",
+                        options=all_cs_recs,
+                        default=all_cs_recs,
+                        key="cal_filter_cs"
+                    )
+                with col_f2:
+                    all_pa_recs = sorted(list(df["pa_rec"].unique()))
+                    sel_pa_recs = st.multiselect(
+                        "Price Action Stage",
+                        options=all_pa_recs,
+                        default=all_pa_recs,
+                        key="cal_filter_pa"
+                    )
+                with col_f3:
+                    all_mre_recs = sorted(list(df["mre_rec"].unique()))
+                    sel_mre_recs = st.multiselect(
+                        "Regime Action",
+                        options=all_mre_recs,
+                        default=all_mre_recs,
+                        key="cal_filter_mre"
+                    )
+                with col_f4:
+                    all_fdts_sigs = sorted(list(df["fdts_signal"].unique()))
+                    sel_fdts_sigs = st.multiselect(
+                        "FDTS Signal",
+                        options=all_fdts_sigs,
+                        default=all_fdts_sigs,
+                        key="cal_filter_fdts"
+                    )
+
+            # Apply filters
+            filtered_df = df[
+                df["cs_rec"].isin(sel_cs_recs) &
+                df["pa_rec"].isin(sel_pa_recs) &
+                df["mre_rec"].isin(sel_mre_recs) &
+                df["fdts_signal"].isin(sel_fdts_sigs)
+            ]
+            
+            if filtered_df.empty:
+                st.info("No tickers match the active recommendation filters.")
+            else:
+                # Format displaying dataframe
+                display_df = filtered_df.copy()
+                display_df["FDTS"] = display_df["fdts_signal"].apply(format_fdts_emoji)
+                
+                display_df = display_df[[
+                    "ticker", "earnings_date", "FDTS", "cs_rec", "pa_rec", "mre_rec"
+                ]]
+                
+                display_df.columns = [
+                    "Ticker", "Earnings Date", "FDTS Signal", 
+                    "Calendar Scoring Engine Recommendation", 
+                    "Price Action Story Engine Recommendation", 
+                    "Regime Intelligence Recommendation"
+                ]
+
+                # Conditional styling function for Styler
+                def style_cells(row):
+                    styles = [""] * len(row)
+                    
+                    # 1. Earnings Date (Index 1)
+                    ed_val = row["Earnings Date"]
+                    if ed_val and ed_val != "N/A":
+                        try:
+                            ed_dt = datetime.strptime(ed_val, "%Y-%m-%d").date()
+                            today_dt = datetime.now().date()
+                            days_diff = (ed_dt - today_dt).days
+                            if days_diff >= 0:
+                                if days_diff <= 20:
+                                    styles[1] = "background-color: rgba(220,38,38,0.20); color: #ef4444; font-weight: bold;"
+                                elif days_diff <= 40:
+                                    styles[1] = "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;"
+                        except Exception:
+                            pass
+                    
+                    # 2. FDTS Signal (Index 2)
+                    fdts_val = row["FDTS Signal"]
+                    if "Buy" in fdts_val:
+                        styles[2] = "color: #22c55e; font-weight: bold;"
+                    elif "Sell" in fdts_val:
+                        styles[2] = "color: #ef4444; font-weight: bold;"
+                    else:
+                        styles[2] = "color: #94a3b8;"
+                        
+                    # 3. Scoring Engine (Index 3)
+                    cs_val = row["Calendar Scoring Engine Recommendation"]
+                    cs_colors = {
+                        "Deploy": "background-color: rgba(58,181,74,0.20); color: #3ab54a; font-weight: bold;",
+                        "Watch": "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;",
+                        "Monitor": "background-color: rgba(2,132,199,0.15); color: #0284c7;",
+                        "Avoid": "background-color: rgba(220,38,38,0.15); color: #ef4444;",
+                        "Filtered": "background-color: rgba(100,116,139,0.15); color: #64748b; text-decoration: line-through;"
+                    }
+                    if cs_val in cs_colors:
+                        styles[3] = cs_colors[cs_val]
+                        
+                    # 4. Price Action Engine (Index 4)
+                    pa_val = row["Price Action Story Engine Recommendation"]
+                    pa_colors = {
+                        "Early Bull / Expansion": "background-color: rgba(34,197,94,0.15); color: #22c55e; font-weight: bold;",
+                        "Strong Bull": "background-color: rgba(16,185,129,0.15); color: #10b981; font-weight: bold;",
+                        "Mature Bull": "background-color: rgba(234,179,8,0.15); color: #eab308; font-weight: bold;",
+                        "Fading Bull": "background-color: rgba(249,115,22,0.15); color: #f97316; font-weight: bold;",
+                        "Distribution": "background-color: rgba(239,68,68,0.15); color: #ef4444; font-weight: bold;",
+                        "Breakdown": "background-color: rgba(153,27,27,0.15); color: #ef4444; font-weight: bold;"
+                    }
+                    if pa_val in pa_colors:
+                        styles[4] = pa_colors[pa_val]
+                        
+                    # 5. Regime Recommendation (Index 5)
+                    mre_val = row["Regime Intelligence Recommendation"]
+                    mre_colors = {
+                        "Deploy": "background-color: rgba(58,181,74,0.20); color: #3ab54a; font-weight: bold;",
+                        "Watch": "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;",
+                        "Hold": "background-color: rgba(2,132,199,0.15); color: #0284c7;",
+                        "Exit or Hedge": "background-color: rgba(220,38,38,0.15); color: #ef4444; font-weight: bold;"
+                    }
+                    if mre_val in mre_colors:
+                        styles[5] = mre_colors[mre_val]
+                        
+                    return styles
+                    
+                styled_df = display_df.style.apply(style_cells, axis=1)
+                st.dataframe(styled_df, use_container_width=True, hide_index=True)
+
+        # ── TAB 2: RRG Rotation Matrix (Backed up visualizations) ────────────
+        with tab_rrg:
+            with st.spinner(f"Analyzing {self.universe_name} and calculating rotation scores..."):
+                res = analyze_universe(
+                    self.universe_name,
+                    tuple(self.tickers),
+                    self.benchmark,
+                )
+                
+            if res:
+                combined_scores = res["scores"].copy()
+                combined_scores["calendar_score_normalized"] = (
+                    combined_scores["calendar_score"] - combined_scores["calendar_score"].mean()
+                ) / (combined_scores["calendar_score"].std() + 1e-8)
+                combined_scores = combined_scores.sort_values("calendar_score", ascending=False).reset_index(drop=True)
+                
+                self._render_dashboard({self.universe_name: res}, combined_scores)
+                self._render_top_candidates(combined_scores)
+                self._render_universe_summary({self.universe_name: res}, combined_scores)
+                self._render_interpretation_guide()
+            else:
+                st.error("Failed to compute RRG rotation data for the selected universe.")
+
+    def _execute_triple_engine_scans(self):
+        """Execute calculations and scoring on demand sequentially across all 3 scanning engines."""
+        progress_bar = st.progress(0.0)
+        status_text = st.empty()
+        
+        try:
+            # 🎬 ENGINE 1: Calendar Opportunity Scoring Engine
+            status_text.write("### 🎬 Starting Engine 1/3: Calendar Opportunity Scoring Engine...")
+            from modules.calendar_scoring.dashboard import CalendarOpportunityScoringModule
+            scoring_module = CalendarOpportunityScoringModule()
+            scoring_module.execute_engine_scan(
+                universe_name=self.universe_name,
+                tickers=self.tickers,
+                rerun=False,
+                progress_bar=progress_bar,
+                status_text=status_text
+            )
+            
+            # 🎬 ENGINE 2: Price Action Story Engine
+            status_text.write("### 🎬 Starting Engine 2/3: Price Action Story Engine...")
+            from modules.tier2.price_action_story import PriceActionStoryModule
+            pa_module = PriceActionStoryModule()
+            pa_module.execute_price_action_scan(
+                universe_name=self.universe_name,
+                tickers=self.tickers,
+                benchmark=self.benchmark,
+                lookback_days=252,
+                rerun=False,
+                progress_bar=progress_bar,
+                status_text=status_text
+            )
+            
+            # 🎬 ENGINE 3: Regime Intelligence Dashboard
+            status_text.write("### 🎬 Starting Engine 3/3: Regime Intelligence Dashboard...")
+            from modules.tier2.markov_regime_engine import MarkovRegimeEngineModule
+            regime_module = MarkovRegimeEngineModule()
+            regime_module.execute_regime_scan(
+                universe_name=self.universe_name,
+                symbols=self.tickers,
+                lookback_years=5,
+                n_states=3,
+                rerun=False,
+                progress_bar=progress_bar,
+                status_text=status_text
+            )
+            
+            # Success notification
+            progress_bar.empty()
+            status_text.empty()
+            st.success("🎉 **Triple-Engine Scan Completed!** All 3 scanning engines successfully ran and saved results to SQLite databases.")
+            
+        except Exception as e:
+            progress_bar.empty()
+            status_text.empty()
+            st.error(f"❌ Error during Triple-Engine scan execution: {e}")
+            logger.error("Triple-Engine scan error", exc_info=True)
+            
+        st.rerun()
 
     def _render_dashboard(self, MULTI_RESULTS, combined_scores):
         universe_colors = {
@@ -452,7 +735,6 @@ class CalendarRotationModule(FazDaneModule):
         ]
         display_df = combined_scores.head(15)[display_cols].copy()
         
-        # We will use Streamlit's dataframe rendering since it natively handles styling well
         st.dataframe(
             display_df,
             use_container_width=True,
