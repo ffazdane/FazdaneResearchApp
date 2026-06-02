@@ -204,6 +204,56 @@ def format_fdts_emoji(sig: str) -> str:
     sig_clean = str(sig).replace("🟢", "").replace("🔴", "").replace("⚪", "").strip()
     return {"Buy": "🟢 Buy", "Sell": "🔴 Sell", "Neutral": "⚪ Neutral", "No Trade": "⚪ No Trade"}.get(sig_clean, f"⚪ {sig_clean}")
 
+def query_options_liquidity_store(tickers: list[str]) -> dict[str, dict]:
+    summary = {}
+    try:
+        from utils.options_liquidity_store import DB_PATH as ol_db_path
+        if not ol_db_path.exists():
+            return {}
+        with sqlite3.connect(ol_db_path) as conn:
+            placeholders = ",".join("?" for _ in tickers)
+            query = f"""
+                SELECT symbol, total_volume, total_open_interest, avg_iv_pct, median_spread_pct, contract_count
+                FROM ol_symbol_snapshot_summary
+                WHERE symbol IN ({placeholders})
+                GROUP BY symbol
+                HAVING scan_ts = MAX(scan_ts)
+            """
+            rows = conn.execute(query, tickers).fetchall()
+            for r in rows:
+                summary[r[0]] = {
+                    "total_volume": r[1],
+                    "total_oi": r[2],
+                    "avg_iv": r[3],
+                    "median_spread_pct": r[4],
+                    "contract_count": r[5]
+                }
+    except Exception as e:
+        logger.warning(f"Could not read options liquidity database: {e}")
+    return summary
+
+def query_earnings_calendar_store(tickers: list[str]) -> dict[str, str]:
+    dates = {}
+    try:
+        from utils.earnings_calendar_store import DB_PATH as ec_db_path
+        if not ec_db_path.exists():
+            return {}
+        with sqlite3.connect(ec_db_path) as conn:
+            placeholders = ",".join("?" for _ in tickers)
+            today_str = datetime.today().strftime("%Y-%m-%d")
+            query = f"""
+                SELECT ticker, MIN(date)
+                FROM ec_earnings_events
+                WHERE ticker IN ({placeholders}) AND date >= ?
+                GROUP BY ticker
+            """
+            rows = conn.execute(query, [*tickers, today_str]).fetchall()
+            for r in rows:
+                dates[r[0]] = r[1]
+    except Exception as e:
+        logger.warning(f"Could not read earnings calendar database: {e}")
+    return dates
+
 def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     """Query SQLite databases to construct the consolidated ticker matrix."""
     cs_db = get_db_path("calendar_scoring")
@@ -213,8 +263,8 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     merged = pd.DataFrame({"ticker": tickers_upper})
     
     df_cs = pd.DataFrame(columns=["ticker", "earnings_date", "fdts_signal", "cs_rec", "cs_score"])
-    df_mre = pd.DataFrame(columns=["ticker", "mre_rec", "mre_sig"])
-    df_pa = pd.DataFrame(columns=["ticker", "pa_rec", "pa_score"])
+    df_mre = pd.DataFrame(columns=["ticker", "mre_rec", "mre_sig", "current_state", "bear_prob_1d", "stickiness_score", "mre_fdts", "realized_vol"])
+    df_pa = pd.DataFrame(columns=["ticker", "pa_rec", "pa_score", "atr", "atr_min", "atr_max", "volume"])
     
     if cs_db.exists():
         try:
@@ -229,12 +279,15 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
                 """
                 df_cs = pd.read_sql_query(q_cs, conn)
                 
-                # Latest Regime (Markov) Forecast for each ticker
+                # Latest Regime (Markov) Forecast for each ticker along with state and realized vol
                 q_mre = """
-                    SELECT ticker, final_action as mre_rec, markov_signal as mre_sig
-                    FROM markov_forecast t1
-                    WHERE as_of_date = (
-                        SELECT MAX(as_of_date) FROM markov_forecast t2 WHERE t2.ticker = t1.ticker
+                    SELECT f.ticker, f.final_action as mre_rec, f.markov_signal as mre_sig,
+                           f.current_state, f.bear_prob_1d, f.stickiness_score, f.fdts_signal as mre_fdts,
+                           (SELECT close_price FROM markov_daily_state s WHERE s.ticker = f.ticker ORDER BY trade_date DESC LIMIT 1) as close_price,
+                           (SELECT realized_vol_20d FROM markov_daily_state s WHERE s.ticker = f.ticker ORDER BY trade_date DESC LIMIT 1) as realized_vol
+                    FROM markov_forecast f
+                    WHERE f.as_of_date = (
+                        SELECT MAX(as_of_date) FROM markov_forecast t2 WHERE t2.ticker = f.ticker
                     )
                 """
                 df_mre = pd.read_sql_query(q_mre, conn)
@@ -244,11 +297,13 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     if pa_db.exists():
         try:
             with sqlite3.connect(pa_db) as conn:
-                # Latest Price Action Stage for each ticker
+                # Latest Price Action Stage for each ticker along with rolling min/max ATR and volume
                 q_pa = """
-                    SELECT ticker, stage as pa_rec, health_score as pa_score
+                    SELECT t1.ticker, t1.stage as pa_rec, t1.health_score as pa_score, t1.atr, t1.volume,
+                           (SELECT MIN(atr) FROM ticker_stage_history s2 WHERE s2.ticker = t1.ticker) as atr_min,
+                           (SELECT MAX(atr) FROM ticker_stage_history s2 WHERE s2.ticker = t1.ticker) as atr_max
                     FROM ticker_stage_history t1
-                    WHERE scan_ts = (
+                    WHERE t1.scan_ts = (
                         SELECT MAX(scan_ts) FROM ticker_stage_history t2 WHERE t2.ticker = t1.ticker
                     )
                 """
@@ -273,6 +328,82 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     merged["mre_sig"] = merged["mre_sig"].fillna(0.0)
     merged["pa_rec"] = merged["pa_rec"].fillna("N/A")
     merged["pa_score"] = merged["pa_score"].fillna(0.0)
+    
+    # Fetch options metrics & earnings
+    opt_summary = query_options_liquidity_store(tickers_upper)
+    earnings_dates = query_earnings_calendar_store(tickers_upper)
+    
+    # Process Price Action & Markov Regime display recommendations
+    pa_display_recs = []
+    mre_display_recs = []
+    
+    for _, row in merged.iterrows():
+        # --- 1. Price Action Story Engine Recommendation (Action Column for Early/Strong Bull) ---
+        pa_stage = row["pa_rec"]
+        if pa_stage in ["Early Bull / Expansion", "Strong Bull"]:
+            # Retrieve ATR pct
+            atr = row.get("atr", 0.0)
+            atr_min = row.get("atr_min", 0.0)
+            atr_max = row.get("atr_max", 0.0)
+            atr_diff = atr_max - atr_min
+            atr_pct = ((atr - atr_min) / atr_diff) * 100 if atr_diff > 0 else 50.0
+            
+            # Retrieve options metrics
+            sym = row["ticker"]
+            opt_data = opt_summary.get(sym) or {}
+            spread_pct = opt_data.get("median_spread_pct")
+            if spread_pct is None:
+                spread_pct = 2.5
+            total_volume = opt_data.get("total_volume", 0)
+            
+            if opt_data:
+                liq = "High" if total_volume > 1000 else "Medium"
+            else:
+                liq = "High" if row.get("volume", 0) > 2000000 else "Medium" if row.get("volume", 0) > 500000 else "Low"
+                
+            # Retrieve earnings
+            earn_date_str = earnings_dates.get(sym, "None")
+            days_to_earnings = 999
+            if earn_date_str != "None":
+                try:
+                    earn_date = datetime.strptime(earn_date_str, "%Y-%m-%d")
+                    days_to_earnings = (earn_date - datetime.today()).days
+                except Exception:
+                    pass
+            
+            # Run rules
+            if atr_pct < 50 and days_to_earnings > 15 and liq != "Low" and spread_pct <= 2.5:
+                pa_display = "🟢 Deploy Calendar"
+            elif days_to_earnings <= 15:
+                pa_display = "🟡 Watch (Earnings Risk)"
+            elif atr_pct > 70:
+                pa_display = "🔴 Avoid (Extended Vol)"
+            else:
+                pa_display = "🟢 Deploy Calendar (Watch Spread)"
+        else:
+            pa_display = pa_stage
+            
+        pa_display_recs.append(pa_display)
+        
+        # --- 2. Markov Regime Setup Confirmation (Calendar Setup Column) ---
+        fdts_signal = row.get("mre_fdts", "Neutral")
+        current_state = row.get("current_state", "SIDEWAYS")
+        bear_prob_1d = row.get("bear_prob_1d", 0.0)
+        stickiness = row.get("stickiness_score", 0.0)
+        realized_vol = row.get("realized_vol", 0.0)
+        
+        is_calendar_candidate = (
+            fdts_signal == "Buy" and
+            current_state in ["BULL", "SIDEWAYS"] and
+            bear_prob_1d < 0.30 and
+            stickiness > 0.60 and
+            realized_vol < 0.45
+        )
+        mre_display = "✅ Yes" if is_calendar_candidate else "❌ No"
+        mre_display_recs.append(mre_display)
+        
+    merged["pa_display_rec"] = pa_display_recs
+    merged["mre_display_rec"] = mre_display_recs
     
     return merged
 
@@ -339,14 +470,14 @@ class CalendarRotationModule(FazDaneModule):
 
             # Display KPI Summary Cards
             cs_deploy_watch = len(df[df["cs_rec"].isin(["Deploy", "Watch"])])
-            pa_bullish = len(df[df["pa_rec"].isin(["Early Bull / Expansion", "Strong Bull", "Mature Bull"])])
-            mre_deploy_watch = len(df[df["mre_rec"].isin(["Deploy", "Watch"])])
+            pa_calendar = len(df[df["pa_display_rec"].str.contains("Deploy Calendar", na=False)])
+            mre_calendar_yes = len(df[df["mre_display_rec"] == "✅ Yes"])
             
             metrics = {
                 "Total Universe Tickers": (len(df), None, ""),
                 "Scoring Engine Deploy/Watch": (cs_deploy_watch, None, f" / {len(df)}"),
-                "Price Action Bullish Tickers": (pa_bullish, None, f" / {len(df)}"),
-                "Regime Deploy/Watch Tickers": (mre_deploy_watch, None, f" / {len(df)}")
+                "PA Calendar Spreads": (pa_calendar, None, f" / {len(df)}"),
+                "Regime Calendar Setup ✅": (mre_calendar_yes, None, f" / {len(df)}")
             }
             self.render_metrics_row(metrics)
             st.write("")
@@ -363,19 +494,19 @@ class CalendarRotationModule(FazDaneModule):
                         key="cal_filter_cs"
                     )
                 with col_f2:
-                    all_pa_recs = sorted(list(df["pa_rec"].unique()))
-                    sel_pa_recs = st.multiselect(
-                        "Price Action Stage",
-                        options=all_pa_recs,
-                        default=all_pa_recs,
+                    all_pa_display_recs = sorted(list(df["pa_display_rec"].unique()))
+                    sel_pa_display_recs = st.multiselect(
+                        "Price Action (Action)",
+                        options=all_pa_display_recs,
+                        default=all_pa_display_recs,
                         key="cal_filter_pa"
                     )
                 with col_f3:
-                    all_mre_recs = sorted(list(df["mre_rec"].unique()))
-                    sel_mre_recs = st.multiselect(
-                        "Regime Action",
-                        options=all_mre_recs,
-                        default=all_mre_recs,
+                    all_mre_display_recs = sorted(list(df["mre_display_rec"].unique()))
+                    sel_mre_display_recs = st.multiselect(
+                        "Regime Calendar Setup",
+                        options=all_mre_display_recs,
+                        default=all_mre_display_recs,
                         key="cal_filter_mre"
                     )
                 with col_f4:
@@ -390,8 +521,8 @@ class CalendarRotationModule(FazDaneModule):
             # Apply filters
             filtered_df = df[
                 df["cs_rec"].isin(sel_cs_recs) &
-                df["pa_rec"].isin(sel_pa_recs) &
-                df["mre_rec"].isin(sel_mre_recs) &
+                df["pa_display_rec"].isin(sel_pa_display_recs) &
+                df["mre_display_rec"].isin(sel_mre_display_recs) &
                 df["fdts_signal"].isin(sel_fdts_sigs)
             ]
             
@@ -403,14 +534,14 @@ class CalendarRotationModule(FazDaneModule):
                 display_df["FDTS"] = display_df["fdts_signal"].apply(format_fdts_emoji)
                 
                 display_df = display_df[[
-                    "ticker", "earnings_date", "FDTS", "cs_rec", "pa_rec", "mre_rec"
+                    "ticker", "earnings_date", "FDTS", "cs_rec", "pa_display_rec", "mre_display_rec"
                 ]]
                 
                 display_df.columns = [
                     "Ticker", "Earnings Date", "FDTS Signal", 
-                    "Calendar Scoring Engine Recommendation", 
-                    "Price Action Story Engine Recommendation", 
-                    "Regime Intelligence Recommendation"
+                    "Calendar Scoring Engine", 
+                    "Price Action (Action)", 
+                    "Regime Calendar Setup"
                 ]
 
                 # Conditional styling function for Styler
@@ -442,7 +573,7 @@ class CalendarRotationModule(FazDaneModule):
                         styles[2] = "color: #94a3b8;"
                         
                     # 3. Scoring Engine (Index 3)
-                    cs_val = row["Calendar Scoring Engine Recommendation"]
+                    cs_val = row["Calendar Scoring Engine"]
                     cs_colors = {
                         "Deploy": "background-color: rgba(58,181,74,0.20); color: #3ab54a; font-weight: bold;",
                         "Watch": "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;",
@@ -453,29 +584,30 @@ class CalendarRotationModule(FazDaneModule):
                     if cs_val in cs_colors:
                         styles[3] = cs_colors[cs_val]
                         
-                    # 4. Price Action Engine (Index 4)
-                    pa_val = row["Price Action Story Engine Recommendation"]
-                    pa_colors = {
-                        "Early Bull / Expansion": "background-color: rgba(34,197,94,0.15); color: #22c55e; font-weight: bold;",
-                        "Strong Bull": "background-color: rgba(16,185,129,0.15); color: #10b981; font-weight: bold;",
-                        "Mature Bull": "background-color: rgba(234,179,8,0.15); color: #eab308; font-weight: bold;",
-                        "Fading Bull": "background-color: rgba(249,115,22,0.15); color: #f97316; font-weight: bold;",
-                        "Distribution": "background-color: rgba(239,68,68,0.15); color: #ef4444; font-weight: bold;",
-                        "Breakdown": "background-color: rgba(153,27,27,0.15); color: #ef4444; font-weight: bold;"
-                    }
-                    if pa_val in pa_colors:
-                        styles[4] = pa_colors[pa_val]
+                    # 4. Price Action Action Column (Index 4) — Deploy Calendar variants
+                    pa_val = row["Price Action (Action)"]
+                    if "Deploy Calendar" in str(pa_val):
+                        if "Watch Spread" in str(pa_val):
+                            styles[4] = "background-color: rgba(34,197,94,0.12); color: #86efac; font-weight: bold;"
+                        else:
+                            styles[4] = "background-color: rgba(34,197,94,0.22); color: #22c55e; font-weight: bold;"
+                    elif "Watch (Earnings" in str(pa_val):
+                        styles[4] = "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;"
+                    elif "Avoid" in str(pa_val):
+                        styles[4] = "background-color: rgba(220,38,38,0.15); color: #ef4444; font-weight: bold;"
+                    elif pa_val in ["Early Bull / Expansion", "Strong Bull"]:
+                        styles[4] = "background-color: rgba(34,197,94,0.10); color: #4ade80;"
+                    elif pa_val in ["Mature Bull"]:
+                        styles[4] = "background-color: rgba(234,179,8,0.12); color: #eab308;"
+                    elif pa_val in ["Fading Bull", "Distribution", "Breakdown"]:
+                        styles[4] = "background-color: rgba(239,68,68,0.12); color: #f87171;"
                         
-                    # 5. Regime Recommendation (Index 5)
-                    mre_val = row["Regime Intelligence Recommendation"]
-                    mre_colors = {
-                        "Deploy": "background-color: rgba(58,181,74,0.20); color: #3ab54a; font-weight: bold;",
-                        "Watch": "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;",
-                        "Hold": "background-color: rgba(2,132,199,0.15); color: #0284c7;",
-                        "Exit or Hedge": "background-color: rgba(220,38,38,0.15); color: #ef4444; font-weight: bold;"
-                    }
-                    if mre_val in mre_colors:
-                        styles[5] = mre_colors[mre_val]
+                    # 5. Regime Calendar Setup (Index 5) — ✅ Yes / ❌ No
+                    mre_val = row["Regime Calendar Setup"]
+                    if mre_val == "✅ Yes":
+                        styles[5] = "background-color: rgba(34,197,94,0.22); color: #22c55e; font-weight: bold;"
+                    elif mre_val == "❌ No":
+                        styles[5] = "background-color: rgba(220,38,38,0.12); color: #f87171;"
                         
                     return styles
                     
