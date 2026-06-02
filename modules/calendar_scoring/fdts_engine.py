@@ -1,37 +1,39 @@
 import logging
+import numpy as np
+import pandas as pd
+from modules.calendar_scoring.technical_indicators import calculate_fdts_ha_signal, calculate_rsi
 
 logger = logging.getLogger("CalendarFDTSEngine")
 
-def calculate_fdts_signal(spot_price: float, ema_20: float, ema_50: float, ema_200: float, rsi_14: float) -> dict:
-    """Calculate the custom FDTS signal and trend score for option calendar selection."""
+def calculate_fdts_signal(ticker_df: pd.DataFrame, period: int = 20) -> dict:
+    """Calculate Heikin-Ashi and Triple EMA (TEMA) deviation FDTS signal and trend score."""
     try:
-        # Determine trend alignment
-        bull_alignment = (spot_price > ema_20) and (ema_20 > ema_50) and (ema_50 > ema_200)
-        early_trend = (spot_price > ema_20) and (spot_price > ema_50) and not (ema_20 > ema_50)
-        bear_alignment = (spot_price < ema_50) and (ema_50 < ema_200)
+        # Get Heikin-Ashi + TEMA deviation signal ("Buy", "Sell", "No Trade")
+        raw_sig = calculate_fdts_ha_signal(ticker_df, period)
         
-        # Base calculations for score
-        if bull_alignment:
-            signal = "Buy"
-            # RSI adds/subtracts score points
-            if rsi_14 > 75:  # overbought, might consolidate
-                base_score = 85.0
-            elif rsi_14 < 45: # oversold but in uptrend? unlikely, but let's score 80
-                base_score = 80.0
-            else:
-                base_score = 92.0
-        elif early_trend:
-            signal = "Buy"
-            base_score = 82.0
-        elif bear_alignment:
-            signal = "Sell"
+        # Map "No Trade" to "Neutral" to maintain compatibility with SQLite database schema and backtesting PnL
+        signal = "Neutral" if raw_sig == "No Trade" else raw_sig
+        
+        # Set base score matching the signal
+        if signal == "Buy":
+            base_score = 90.0
+        elif signal == "Sell":
             base_score = 30.0
         else:
-            signal = "Neutral"
             base_score = 60.0
             
-        # Add technical modifier points
-        rsi_factor = (rsi_14 - 50.0) * 0.1  # slightly adjusts score based on neutral rsi
+        # Get RSI technical modifier if available
+        rsi_val = 50.0
+        if not ticker_df.empty and len(ticker_df) >= 15:
+            try:
+                rsi_series = calculate_rsi(ticker_df["Close"])
+                if not rsi_series.empty and not np.isnan(rsi_series.iloc[-1]):
+                    rsi_val = float(rsi_series.iloc[-1])
+            except Exception as e:
+                logger.debug(f"Could not calculate RSI for FDTS modifier: {e}")
+                
+        # Slight adjustment based on RSI relative to neutral 50
+        rsi_factor = (rsi_val - 50.0) * 0.1
         final_score = min(100.0, max(0.0, base_score + rsi_factor))
         
         return {

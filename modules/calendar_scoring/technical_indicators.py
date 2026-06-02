@@ -149,11 +149,18 @@ def compute_rrg_ratio_sma(close_df: pd.DataFrame, benchmark_ticker: str) -> tupl
 
 def calculate_fdts_ha_signal(ticker_df: pd.DataFrame, period: int = 20) -> str:
     """Calculate Heikin-Ashi and Triple EMA (TEMA) deviation FDTS signal."""
-    required = {"Open", "High", "Low", "Close"}
-    if ticker_df.empty or not required.issubset(ticker_df.columns):
+    if ticker_df.empty:
         return "No Trade"
 
-    data = ticker_df[["Open", "High", "Low", "Close"]].dropna().copy()
+    # Normalize column names to title case (e.g. open -> Open) to handle database vs yfinance differences
+    data_df = ticker_df.copy()
+    data_df.columns = [col.capitalize() for col in data_df.columns]
+
+    required = {"Open", "High", "Low", "Close"}
+    if not required.issubset(data_df.columns):
+        return "No Trade"
+
+    data = data_df[["Open", "High", "Low", "Close"]].dropna().copy()
     if len(data) < 60:
         return "No Trade"
 
@@ -194,7 +201,7 @@ def calculate_fdts_ha_signal(ticker_df: pd.DataFrame, period: int = 20) -> str:
 
 def format_fdts_signal(sig: str) -> str:
     """Format raw FDTS signal string into display format with emojis."""
-    return {"Buy": "🟢 Buy", "Sell": "🔴 Sell", "No Trade": "⚪ No Trade"}.get(sig, "⚪ No Trade")
+    return {"Buy": "🟢 Buy", "Sell": "🔴 Sell", "No Trade": "⚪ No Trade", "Neutral": "⚪ Neutral"}.get(sig, "⚪ No Trade")
 
 # =====================================================================
 # Price Action Lifecycle Analysis

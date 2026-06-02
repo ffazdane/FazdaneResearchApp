@@ -60,7 +60,7 @@ def run_verification_tests():
     
     # 6. Scoring Calculations
     logger.info("Step 6: Executing indicator scoring math...")
-    fdts = calculate_fdts_signal(tech["spot_price"], tech["ema_20"], tech["ema_50"], tech["ema_200"], tech["rsi_14"])
+    fdts = calculate_fdts_signal(tech["df_history"])
     trend_s = calculate_trend_score(tech["spot_price"], tech["ema_20"], tech["ema_50"], tech["ema_200"], tech["adx_14"])
     opt_s = calculate_option_structure_score(setup["front_iv"], setup["back_iv"])
     vol_s = calculate_volatility_score(45.0, 42.0)

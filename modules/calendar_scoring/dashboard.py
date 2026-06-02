@@ -16,6 +16,7 @@ from modules.calendar_scoring.database import get_active_model_weights, save_mod
 # data_loader imports are consolidated below with the scoring engine imports
 from modules.calendar_scoring.market_regime import detect_market_regime, get_transition_matrices
 from modules.calendar_scoring.fdts_engine import calculate_fdts_signal
+from modules.calendar_scoring.technical_indicators import format_fdts_signal
 from modules.calendar_scoring.trade_setup_engine import select_calendar_setup
 from modules.calendar_scoring.scoring_engine import (
     calculate_trend_score, calculate_option_structure_score, calculate_volatility_score,
@@ -652,7 +653,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 "Intraday Signal": c.get("bayesian_signal", "Monitor"),
                 "Recommendation": c["recommendation"],
                 "Earnings Date": c.get("earnings_date", "N/A"),
-                "FDTS Signal": c["fdts_signal"],
+                "FDTS Signal": format_fdts_signal(c["fdts_signal"]),
                 "Cluster Label": c["cluster_label"],
                 "Strike": f"${setup.get('selected_strike', 0.0):.2f}",
                 "Net Debit": f"${setup.get('net_debit', 0.0):.2f}",
@@ -858,7 +859,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 "ML Pred Return": ml_ret_str,
                 "Recommendation": c["recommendation"],
                 "Earnings Date": c.get("earnings_date", "N/A"),
-                "FDTS Signal": c["fdts_signal"],
+                "FDTS Signal": format_fdts_signal(c["fdts_signal"]),
                 "IV Rank": f"{c.get('iv_rank', 0.0):.1f}%",
                 "Spot Price": f"${c.get('spot_price', 0.0):.2f}",
                 "Status": c["reason_summary"]
@@ -1447,7 +1448,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                     continue
                     
                 # 4. FDTS Signal
-                fdts = calculate_fdts_signal(tech["spot_price"], tech["ema_20"], tech["ema_50"], tech["ema_200"], tech["rsi_14"])
+                fdts = calculate_fdts_signal(tech["df_history"])
                 
                 # 5. Volatility Rank calculations (simulate IV Rank for yfinance)
                 # IV rank is usually in the 10-90 range, we can proxy it

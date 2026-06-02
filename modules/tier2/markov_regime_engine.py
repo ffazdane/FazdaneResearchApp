@@ -4,6 +4,8 @@ import numpy as np
 import yfinance as yf
 import logging
 from datetime import datetime, timedelta
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from modules.base_module import FazDaneModule
 from utils.universe_manager import render_universe_manager, get_ticker_names, format_ticker_display
@@ -22,6 +24,7 @@ from modules.tier2.markov_visuals import (
     generate_transition_heatmap, generate_regime_timeline,
     generate_probability_trend, generate_backtest_equity_curve
 )
+from modules.calendar_scoring.technical_indicators import format_fdts_signal
 
 logger = logging.getLogger("MarkovRegimeEngine")
 
@@ -38,6 +41,7 @@ class MarkovRegimeEngineModule(FazDaneModule):
     def __init__(self):
         super().__init__()
         create_markov_tables()
+        self.db_lock = threading.Lock()
 
     def render_sidebar(self):
         st.markdown("**Watchlist**")
@@ -64,6 +68,10 @@ class MarkovRegimeEngineModule(FazDaneModule):
         if not self.symbols:
             st.warning("⚠️ Please select a ticker universe in the sidebar to begin.")
             return
+
+        if st.session_state.pop("mre_show_success_banner", False):
+            st.success("✅ **Universe Reprocessed & Saved!** All empirical regime states, HMM matrices, and forecasts have been successfully written to the database.")
+
 
         # Setup state to store calculations
         if "mre_scan_completed" not in st.session_state:
@@ -147,62 +155,38 @@ class MarkovRegimeEngineModule(FazDaneModule):
             return
 
         if should_reprocess:
-            with st.spinner("Processing regime engine models across ticker universe..."):
+            status_text = st.empty()
+            status_text.text(f"Starting scan for Universe '{self.universe_name}' with {len(self.symbols)} tickers...")
+            with st.spinner(f"Processing regime engine models across '{self.universe_name}'..."):
                 results = {}
                 progress_bar = st.progress(0.0)
                 
                 # Fetch all fdts signals once to avoid multiple database queries
                 fdts_data = self._get_latest_fdts_signals()
                 
-                for idx, symbol in enumerate(self.symbols):
-                    symbol = symbol.strip().upper()
-                    try:
-                        # 1. Load historical price data
-                        df = self._load_price_data(symbol, self.lookback_years)
-                        if df.empty or len(df) < 50:
-                            logger.warning(f"Insufficient historical price data for {symbol}.")
-                            continue
-                            
-                        # 2. Calculate returns and rolling volatility
-                        df = self._calculate_returns_and_vol(df)
-                        
-                        # 3. Assign states (3-state price logic)
-                        df = self._assign_empirical_states(df)
-                        
-                        # 4. Train Gaussian HMM and assign HMM states
-                        df, hmm_model, state_labels = train_hmm_model(df, n_states=self.n_states)
-                        
-                        # 5. Build Transition Probability Matrix
-                        trans_matrix, state_list, trans_counts = self._build_transition_matrix(df)
-                        
-                        # 6. Save daily states & transitions to SQLite
-                        self._save_states_and_transitions(symbol, df, trans_matrix, state_list, trans_counts)
-                        
-                        # 7. Generate Multi-day forecasts & Signal score
-                        forecast = self._generate_forecast(symbol, df, trans_matrix, state_list, fdts_data=fdts_data)
-                        
-                        # 8. Run walk-forward backtest
-                        backtest = run_walk_forward_backtest(df)
-                        backtest["ticker"] = symbol
-                        backtest["run_date"] = datetime.now().strftime("%Y-%m-%d")
-                        backtest["strategy_name"] = "Regime Strategy"
-                        save_backtest_results(backtest)
-                        
-                        results[symbol] = {
-                            "df": df,
-                            "hmm_model": hmm_model,
-                            "state_labels": state_labels,
-                            "trans_matrix": trans_matrix,
-                            "state_list": state_list,
-                            "forecast": forecast,
-                            "backtest": backtest
-                        }
-                    except Exception as e:
-                        logger.error(f"Error processing MRE engine for {symbol}: {e}", exc_info=True)
-                        
-                    progress_bar.progress((idx + 1) / len(self.symbols))
+                # Run parallel processing
+                max_workers = min(len(self.symbols), 8)
+                completed_count = 0
+                
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {
+                        executor.submit(self._process_single_ticker, symbol, fdts_data): symbol
+                        for symbol in self.symbols
+                    }
+                    
+                    for future in as_completed(futures):
+                        symbol, ticker_res = future.result()
+                        if ticker_res is not None:
+                            results[symbol] = ticker_res
+                        completed_count += 1
+                        status_text.text(
+                            f"Scanning Universe: '{self.universe_name}' | Tickers: {len(self.symbols)} | "
+                            f"Progress: {completed_count}/{len(self.symbols)} completed (last: {symbol} — saved to SQLite database)"
+                        )
+                        progress_bar.progress(completed_count / len(self.symbols))
                 
                 progress_bar.empty()
+                status_text.empty()
                 st.session_state["mre_results"] = results
                 st.session_state["mre_scan_completed"] = True
                 st.session_state["mre_needs_reprocess"] = False
@@ -211,13 +195,15 @@ class MarkovRegimeEngineModule(FazDaneModule):
                 latest_ts = None
                 if results:
                     first_sym = list(results.keys())[0]
-                    first_forecast = get_latest_forecast(first_sym)
+                    with self.db_lock:
+                        first_forecast = get_latest_forecast(first_sym)
                     latest_ts = first_forecast.get("created_at")
                 
                 if not latest_ts:
                     latest_ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
                     
                 st.session_state["mre_last_saved_time"] = latest_ts
+                st.session_state["mre_show_success_banner"] = True
                 st.rerun()
                 
         results = st.session_state["mre_results"]
@@ -352,9 +338,11 @@ class MarkovRegimeEngineModule(FazDaneModule):
         with tab4:
             st.markdown("### FDTS + HMM Confirmation Layer")
             
-            # Pull latest FDTS decision
-            fdts_data = self._get_latest_fdts_signals()
-            fdts_info = fdts_data.get(selected_ticker, {"signal": "No Trade", "score": 50.0})
+            # Retrieve latest FDTS decision from current forecast (calculated live during scan or loaded from DB)
+            fdts_info = {
+                "signal": forecast.get("fdts_signal", "Neutral"),
+                "score": forecast.get("fdts_score", 50.0)
+            }
             
             # Combined Regime Confirmation Score calculation
             fdts_score = fdts_info["score"]
@@ -385,7 +373,7 @@ class MarkovRegimeEngineModule(FazDaneModule):
                 deploy_color = "#94a3b8"
                 
             fc1, fc2, fc3 = st.columns(3)
-            fc1.metric("FDTS Signal Status", f"{fdts_info['signal']} (Score: {fdts_score:.1f})")
+            fc1.metric("FDTS Signal Status", f"{format_fdts_signal(fdts_info['signal'])} (Score: {fdts_score:.1f})")
             fc2.metric("Regime Confirmation Score", f"{regime_confirmation_score:.1f}")
             
             with fc3:
@@ -411,7 +399,10 @@ class MarkovRegimeEngineModule(FazDaneModule):
             for symbol in results.keys():
                 sym_forecast = results[symbol]["forecast"]
                 sym_latest = results[symbol]["df"].iloc[-1]
-                sym_fdts = fdts_data.get(symbol, {"signal": "No Trade", "score": 50.0})
+                sym_fdts = {
+                    "signal": sym_forecast.get("fdts_signal", "Neutral"),
+                    "score": sym_forecast.get("fdts_score", 50.0)
+                }
                 
                 sym_markov_sig = float((sym_forecast["markov_signal"] + 1.0) * 50.0)
                 sym_stickiness = float(sym_forecast["stickiness_score"] * 100.0)
@@ -423,7 +414,7 @@ class MarkovRegimeEngineModule(FazDaneModule):
                 
                 universe_matrix.append({
                     "Ticker": symbol,
-                    "FDTS Signal": sym_fdts["signal"],
+                    "FDTS Signal": format_fdts_signal(sym_fdts["signal"]),
                     "FDTS Score": round(sym_fdts["score"], 1),
                     "Markov State": sym_latest["price_state"],
                     "Markov Signal": round(sym_forecast["markov_signal"], 2),
@@ -441,7 +432,10 @@ class MarkovRegimeEngineModule(FazDaneModule):
             for symbol in results.keys():
                 sym_forecast = results[symbol]["forecast"]
                 sym_latest = results[symbol]["df"].iloc[-1]
-                sym_fdts = fdts_data.get(symbol, {"signal": "No Trade", "score": 50.0})
+                sym_fdts = {
+                    "signal": sym_forecast.get("fdts_signal", "Neutral"),
+                    "score": sym_forecast.get("fdts_score", 50.0)
+                }
                 
                 # Rule: Deploy if:
                 # - FDTS == Buy
@@ -467,7 +461,7 @@ class MarkovRegimeEngineModule(FazDaneModule):
                 candidates.append({
                     "Ticker": symbol,
                     "Calendar Setup": "✅ Yes" if is_calendar_candidate else "❌ No",
-                    "FDTS Signal": sym_fdts["signal"],
+                    "FDTS Signal": format_fdts_signal(sym_fdts["signal"]),
                     "Markov State": sym_latest["price_state"],
                     "Bear Probability (1D)": f"{bear_prob_1d:.1%}",
                     "Stickiness": f"{stickiness:.1%}",
@@ -566,6 +560,59 @@ class MarkovRegimeEngineModule(FazDaneModule):
               * **Realized Volatility**: Must be $< 45\\%$ (no crash regime).
             """)
 
+    def _process_single_ticker(self, symbol: str, fdts_data: dict = None) -> tuple[str, dict | None]:
+        symbol = symbol.strip().upper()
+        try:
+            # 1. Load historical price data
+            df = self._load_price_data(symbol, self.lookback_years)
+            if df.empty or len(df) < 50:
+                logger.warning(f"Insufficient historical price data for {symbol}.")
+                return symbol, None
+                
+            # 2. Calculate returns and rolling volatility
+            df = self._calculate_returns_and_vol(df)
+            
+            # 3. Assign states (3-state price logic)
+            df = self._assign_empirical_states(df)
+            
+            # 4. Train Gaussian HMM and assign HMM states
+            df, hmm_model, state_labels = train_hmm_model(df, n_states=self.n_states)
+            
+            # 5. Build Transition Probability Matrix
+            trans_matrix, state_list, trans_counts = self._build_transition_matrix(df)
+            
+            # 6. Save daily states & transitions to SQLite
+            with self.db_lock:
+                self._save_states_and_transitions(symbol, df, trans_matrix, state_list, trans_counts)
+            
+            # 7. Generate Multi-day forecasts & Signal score
+            from modules.calendar_scoring.fdts_engine import calculate_fdts_signal
+            live_fdts = calculate_fdts_signal(df)
+            with self.db_lock:
+                forecast = self._generate_forecast(symbol, df, trans_matrix, state_list, live_fdts=live_fdts)
+            
+            # 8. Run walk-forward backtest
+            backtest = run_walk_forward_backtest(df)
+            backtest["ticker"] = symbol
+            backtest["run_date"] = datetime.now().strftime("%Y-%m-%d")
+            backtest["strategy_name"] = "Regime Strategy"
+            with self.db_lock:
+                save_backtest_results(backtest)
+            
+            ticker_res = {
+                "df": df,
+                "hmm_model": hmm_model,
+                "state_labels": state_labels,
+                "trans_matrix": trans_matrix,
+                "state_list": state_list,
+                "forecast": forecast,
+                "backtest": backtest
+            }
+            return symbol, ticker_res
+        except Exception as e:
+            logger.error(f"Error processing MRE engine for {symbol}: {e}", exc_info=True)
+            return symbol, None
+
     def _calculate_historical_rolling_probabilities(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Dynamically calculate historical 1-day transition probabilities and Markov signal
@@ -601,33 +648,39 @@ class MarkovRegimeEngineModule(FazDaneModule):
         # Add Laplace smoothing (0.1 to each count)
         counts = rolling_sums + 0.1 # shape (n-1, 9)
         
-        # Reconstruct transition probabilities for each day t from window to n-1
-        dates = []
-        bull_probs = []
-        sideways_probs = []
-        bear_probs = []
-        signals = []
+        # Reshape to (n-1, 3, 3)
+        counts_3d = counts.reshape(-1, 3, 3)
         
-        for t in range(window, n):
-            # The transition counts ending at t-1 correspond to rolling sum at index t-2
-            cnt = counts[t - 2].reshape((3, 3))
-            row_sums = cnt.sum(axis=1, keepdims=True)
-            P = cnt / row_sums
+        # We need counts ending at t-1 (rolling sum at t-2) and state at t-1
+        # t goes from window to n-1 (inclusive)
+        # So t-2 goes from window-2 to n-3
+        # t-1 goes from window-1 to n-2
+        t_2_indices = np.arange(window - 2, n - 2)
+        t_1_indices = np.arange(window - 1, n - 1)
+        
+        curr_state_idxs = state_idxs[t_1_indices]
+        
+        # Filter for valid states (should be all of them)
+        valid_mask = (curr_state_idxs >= 0) & (curr_state_idxs < 3)
+        
+        if not np.any(valid_mask):
+            return pd.DataFrame()
             
-            # Current state at t-1 (from state)
-            curr_idx = state_idxs[t - 1]
-            if curr_idx != -1:
-                bull_prob = P[curr_idx, 0]
-                sideways_prob = P[curr_idx, 1]
-                bear_prob = P[curr_idx, 2]
-                markov_sig = bull_prob - bear_prob
-                
-                dates.append(df.loc[t, "trade_date"])
-                bull_probs.append(bull_prob)
-                sideways_probs.append(sideways_prob)
-                bear_probs.append(bear_prob)
-                signals.append(markov_sig)
-                
+        t_2_indices = t_2_indices[valid_mask]
+        t_1_indices = t_1_indices[valid_mask]
+        curr_state_idxs = curr_state_idxs[valid_mask]
+        
+        selected_counts = counts_3d[t_2_indices, curr_state_idxs, :] # shape (num_valid, 3)
+        row_sums = selected_counts.sum(axis=1, keepdims=True)
+        probs = selected_counts / row_sums
+        
+        bull_probs = probs[:, 0]
+        sideways_probs = probs[:, 1]
+        bear_probs = probs[:, 2]
+        signals = bull_probs - bear_probs
+        
+        dates = df.loc[t_1_indices + 1, "trade_date"].values
+        
         return pd.DataFrame({
             "as_of_date": dates,
             "bull_prob_1d": bull_probs,
@@ -685,25 +738,26 @@ class MarkovRegimeEngineModule(FazDaneModule):
 
     def _cache_price_data(self, symbol: str, df: pd.DataFrame):
         """Asynchronously cache downloaded pricing data into daily_prices SQLite."""
-        try:
-            conn = get_mre_conn()
-            cursor = conn.cursor()
-            records = [
-                (
-                    row["trade_date"], symbol, row["open"], row["high"],
-                    row["low"], row["close"], row["volume"], 0.0
-                )
-                for _, row in df.iterrows()
-            ]
-            cursor.executemany("""
-                INSERT OR REPLACE INTO daily_prices (date, symbol, open, high, low, close, volume, open_interest)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, records)
-            conn.commit()
-            conn.close()
-            logger.info(f"Cached {len(df)} price rows for {symbol} to daily_prices.")
-        except Exception as e:
-            logger.warning(f"Error caching pricing data: {e}")
+        with self.db_lock:
+            try:
+                conn = get_mre_conn()
+                cursor = conn.cursor()
+                records = [
+                    (
+                        row["trade_date"], symbol, row["open"], row["high"],
+                        row["low"], row["close"], row["volume"], 0.0
+                    )
+                    for _, row in df.iterrows()
+                ]
+                cursor.executemany("""
+                    INSERT OR REPLACE INTO daily_prices (date, symbol, open, high, low, close, volume, open_interest)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, records)
+                conn.commit()
+                conn.close()
+                logger.info(f"Cached {len(df)} price rows for {symbol} to daily_prices.")
+            except Exception as e:
+                logger.warning(f"Error caching pricing data: {e}")
 
     def _calculate_returns_and_vol(self, df: pd.DataFrame) -> pd.DataFrame:
         df["daily_return"] = df["close"].pct_change()
@@ -781,7 +835,7 @@ class MarkovRegimeEngineModule(FazDaneModule):
                 })
         save_transition_matrix(trans_records)
 
-    def _generate_forecast(self, symbol: str, df: pd.DataFrame, P: np.ndarray, state_list: list, fdts_data: dict = None) -> dict:
+    def _generate_forecast(self, symbol: str, df: pd.DataFrame, P: np.ndarray, state_list: list, live_fdts: dict = None) -> dict:
         latest = df.iloc[-1]
         curr_state = latest["price_state"]
         curr_idx = state_list.index(curr_state)
@@ -800,10 +854,11 @@ class MarkovRegimeEngineModule(FazDaneModule):
         
         # Action classification
         # Pull latest FDTS signal status
-        if fdts_data is None:
-            fdts_data = self._get_latest_fdts_signals()
-        fdts_info = fdts_data.get(symbol, {"signal": "No Trade", "score": 50.0})
-        fdts_val = fdts_info["signal"]
+        if live_fdts is None:
+            from modules.calendar_scoring.fdts_engine import calculate_fdts_signal
+            live_fdts = calculate_fdts_signal(df)
+        fdts_val = live_fdts.get("signal", "Neutral")
+        fdts_score = live_fdts.get("score", 50.0)
         
         bear_prob_1d = float(P1[curr_idx, state_list.index("BEAR")])
         
@@ -833,7 +888,9 @@ class MarkovRegimeEngineModule(FazDaneModule):
             "stickiness_score": stickiness,
             "expected_duration": expected_duration,
             "final_regime_label": curr_state,
-            "final_action": action
+            "final_action": action,
+            "fdts_signal": fdts_val,
+            "fdts_score": fdts_score
         }
         save_forecast(forecast)
         return forecast

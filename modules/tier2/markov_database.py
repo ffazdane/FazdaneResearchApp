@@ -66,6 +66,8 @@ def create_markov_tables():
         expected_duration REAL,
         final_regime_label TEXT,
         final_action TEXT,
+        fdts_signal TEXT,
+        fdts_score REAL,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (as_of_date, ticker)
     );
@@ -98,12 +100,22 @@ def create_markov_tables():
     except sqlite3.OperationalError:
         pass  # Column already exists
         
+    try:
+        cursor.execute("ALTER TABLE markov_forecast ADD COLUMN fdts_signal TEXT;")
+    except sqlite3.OperationalError:
+        pass
+        
+    try:
+        cursor.execute("ALTER TABLE markov_forecast ADD COLUMN fdts_score REAL;")
+    except sqlite3.OperationalError:
+        pass
+        
     conn.commit()
     conn.close()
     logger.info("Markov database tables initialized successfully.")
 
 def save_daily_states(records: list):
-    """Save daily states list of dicts to db."""
+    """Save daily HMM state calculations in batch."""
     if not records:
         return
     conn = get_connection()
@@ -126,7 +138,7 @@ def save_daily_states(records: list):
     conn.close()
 
 def save_transition_matrix(records: list):
-    """Save transition matrix counts and probabilities."""
+    """Save transitions in batch."""
     if not records:
         return
     conn = get_connection()
@@ -155,15 +167,16 @@ def save_forecast(f: dict):
     INSERT OR REPLACE INTO markov_forecast
     (as_of_date, ticker, current_state, bull_prob_1d, sideways_prob_1d, bear_prob_1d,
      bull_prob_5d, sideways_prob_5d, bear_prob_5d, bull_prob_20d, sideways_prob_20d, bear_prob_20d,
-     markov_signal, stickiness_score, expected_duration, final_regime_label, final_action)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     markov_signal, stickiness_score, expected_duration, final_regime_label, final_action, fdts_signal, fdts_score)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
     cursor.execute(sql, (
         f.get("as_of_date"), f.get("ticker"), f.get("current_state"),
         f.get("bull_prob_1d"), f.get("sideways_prob_1d"), f.get("bear_prob_1d"),
         f.get("bull_prob_5d"), f.get("sideways_prob_5d"), f.get("bear_prob_5d"),
         f.get("bull_prob_20d"), f.get("sideways_prob_20d"), f.get("bear_prob_20d"),
-        f.get("markov_signal"), f.get("stickiness_score"), f.get("expected_duration"), f.get("final_regime_label"), f.get("final_action")
+        f.get("markov_signal"), f.get("stickiness_score"), f.get("expected_duration"),
+        f.get("final_regime_label"), f.get("final_action"), f.get("fdts_signal"), f.get("fdts_score")
     ))
     conn.commit()
     conn.close()
@@ -194,7 +207,8 @@ def get_latest_forecast(ticker: str) -> dict:
     cursor.execute("""
         SELECT as_of_date, current_state, bull_prob_1d, sideways_prob_1d, bear_prob_1d,
                bull_prob_5d, sideways_prob_5d, bear_prob_5d, bull_prob_20d, sideways_prob_20d, bear_prob_20d,
-               markov_signal, stickiness_score, expected_duration, final_regime_label, final_action, created_at
+               markov_signal, stickiness_score, expected_duration, final_regime_label, final_action, created_at,
+               fdts_signal, fdts_score
         FROM markov_forecast
         WHERE ticker = ?
         ORDER BY as_of_date DESC LIMIT 1
@@ -219,7 +233,9 @@ def get_latest_forecast(ticker: str) -> dict:
             "expected_duration": row[13],
             "final_regime_label": row[14],
             "final_action": row[15] if row[15] is not None else "Hold",
-            "created_at": row[16]
+            "created_at": row[16],
+            "fdts_signal": row[17] if len(row) > 17 and row[17] is not None else "Neutral",
+            "fdts_score": row[18] if len(row) > 18 and row[18] is not None else 50.0
         }
     return {}
 

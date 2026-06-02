@@ -9,7 +9,7 @@ logger = logging.getLogger("HmmRegimeModel")
 class GaussianHMM:
     """
     A robust, self-contained Gaussian Hidden Markov Model with diagonal covariance 
-    for stable parameter estimation on financial time-series.
+    for stable parameter estimation on financial time-series. Fully vectorized.
     """
     def __init__(self, n_states=3, max_iter=20, tol=1e-4):
         self.n_states = n_states
@@ -24,6 +24,28 @@ class GaussianHMM:
         
         self.n_features = None
         self.is_fitted = False
+        
+    def _compute_emissions(self, X):
+        """Calculate Gaussian pdf (diagonal covariance) for all data points in X across all states."""
+        # X: (T, D), means: (N, D), vars: (N, D) -> diff: (T, N, D)
+        diff = X[:, np.newaxis, :] - self.means[np.newaxis, :, :]
+        exponent = -0.5 * (diff ** 2) / self.vars[np.newaxis, :, :]
+        denom = np.sqrt(2.0 * np.pi * self.vars[np.newaxis, :, :])
+        probs = np.exp(exponent) / denom
+        
+        # Product along features axis (axis 2)
+        emissions = np.prod(probs, axis=2)
+        return np.maximum(emissions, 1e-100)
+        
+    def _emission_density(self, x):
+        """Calculate Gaussian pdf (diagonal covariance) for data point x across all states."""
+        # x: (D,) -> diff: (N, D)
+        diff = x - self.means
+        exponent = -0.5 * (diff ** 2) / self.vars
+        denom = np.sqrt(2.0 * np.pi * self.vars)
+        probs = np.exp(exponent) / denom
+        pdf = np.prod(probs, axis=1)
+        return np.maximum(pdf, 1e-100)
         
     def fit(self, X):
         """
@@ -71,29 +93,24 @@ class GaussianHMM:
         
         for iteration in range(self.max_iter):
             # E-step: forward-backward
-            alpha, log_prob_alpha = self._forward(X)
-            beta = self._backward(X)
+            emissions = self._compute_emissions(X)
+            alpha, log_prob_alpha = self._forward(X, emissions=emissions)
+            beta = self._backward(X, emissions=emissions)
             
             # Compute gammas (posterior probabilities of states)
-            # gamma[t, i] = P(S_t = i | X)
             gamma = alpha * beta
             gamma_sum = np.sum(gamma, axis=1, keepdims=True)
-            # handle divisions by zero
             gamma_sum[gamma_sum == 0] = 1e-20
             gamma /= gamma_sum
             
-            # Compute xis (transitions)
-            # xi[t, i, j] = P(S_t = i, S_{t+1} = j | X)
-            xi = np.zeros((n_samples - 1, self.n_states, self.n_states))
-            for t in range(n_samples - 1):
-                # Emission probability at t+1 for all states
-                emit_t_plus_1 = self._emission_density(X[t+1])
-                for i in range(self.n_states):
-                    for j in range(self.n_states):
-                        xi[t, i, j] = alpha[t, i] * self.A[i, j] * emit_t_plus_1[j] * beta[t+1, j]
-                xi_sum = np.sum(xi[t])
-                if xi_sum > 0:
-                    xi[t] /= xi_sum
+            # Vectorized xi calculation (transitions)
+            # Shape: (T-1, N, N)
+            emit_beta = emissions[1:] * beta[1:]
+            xi = (alpha[:-1, :, np.newaxis] * 
+                  self.A[np.newaxis, :, :] * 
+                  emit_beta[:, np.newaxis, :])
+            xi_sum = np.sum(xi, axis=(1, 2), keepdims=True)
+            xi = np.where(xi_sum > 0, xi / xi_sum, 0.0)
                     
             # M-step: update parameters
             self.pi = gamma[0] / np.sum(gamma[0])
@@ -125,25 +142,16 @@ class GaussianHMM:
             
         self.is_fitted = True
         
-    def _emission_density(self, x):
-        """Calculate Gaussian pdf (diagonal covariance) for data point x across all states."""
-        pdf = np.zeros(self.n_states)
-        for i in range(self.n_states):
-            # Multiply probabilities of independent features
-            p = 1.0
-            for j in range(self.n_features):
-                p *= norm.pdf(x[j], loc=self.means[i, j], scale=np.sqrt(self.vars[i, j]))
-            pdf[i] = max(p, 1e-100) # prevent zero
-        return pdf
-        
-    def _forward(self, X):
+    def _forward(self, X, emissions=None):
         """Execute forward pass scaling alpha to prevent underflow."""
         n_samples = X.shape[0]
         alpha = np.zeros((n_samples, self.n_states))
         
+        if emissions is None:
+            emissions = self._compute_emissions(X)
+            
         # t = 0
-        emit = self._emission_density(X[0])
-        alpha[0] = self.pi * emit
+        alpha[0] = self.pi * emissions[0]
         sum_alpha = np.sum(alpha[0])
         if sum_alpha > 0:
             alpha[0] /= sum_alpha
@@ -152,9 +160,7 @@ class GaussianHMM:
         
         # t > 0
         for t in range(1, n_samples):
-            emit = self._emission_density(X[t])
-            for j in range(self.n_states):
-                alpha[t, j] = np.sum(alpha[t-1] * self.A[:, j]) * emit[j]
+            alpha[t] = np.dot(alpha[t-1], self.A) * emissions[t]
             sum_alpha = np.sum(alpha[t])
             if sum_alpha > 0:
                 alpha[t] /= sum_alpha
@@ -162,19 +168,20 @@ class GaussianHMM:
             
         return alpha, log_prob
         
-    def _backward(self, X):
+    def _backward(self, X, emissions=None):
         """Execute backward pass scaling beta."""
         n_samples = X.shape[0]
         beta = np.zeros((n_samples, self.n_states))
         
+        if emissions is None:
+            emissions = self._compute_emissions(X)
+            
         # t = T
         beta[-1] = 1.0
         
         # t < T
         for t in range(n_samples - 2, -1, -1):
-            emit = self._emission_density(X[t+1])
-            for i in range(self.n_states):
-                beta[t, i] = np.sum(self.A[i] * emit * beta[t+1])
+            beta[t] = np.dot(self.A, emissions[t+1] * beta[t+1])
             sum_beta = np.sum(beta[t])
             if sum_beta > 0:
                 beta[t] /= sum_beta
@@ -187,8 +194,9 @@ class GaussianHMM:
         if len(X.shape) == 1:
             X = X.reshape(-1, 1)
             
-        alpha, _ = self._forward(X)
-        beta = self._backward(X)
+        emissions = self._compute_emissions(X)
+        alpha, _ = self._forward(X, emissions=emissions)
+        beta = self._backward(X, emissions=emissions)
         gamma = alpha * beta
         gamma_sum = np.sum(gamma, axis=1, keepdims=True)
         gamma_sum[gamma_sum == 0] = 1e-20
@@ -205,18 +213,17 @@ class GaussianHMM:
         viterbi = np.zeros((n_samples, self.n_states))
         backpointer = np.zeros((n_samples, self.n_states), dtype=int)
         
+        emissions = self._compute_emissions(X)
+        
         # t = 0
-        emit = self._emission_density(X[0])
-        viterbi[0] = np.log(self.pi + 1e-20) + np.log(emit + 1e-20)
+        viterbi[0] = np.log(self.pi + 1e-20) + np.log(emissions[0] + 1e-20)
         
         # t > 0
         for t in range(1, n_samples):
-            emit = self._emission_density(X[t])
-            for j in range(self.n_states):
-                log_trans = viterbi[t-1] + np.log(self.A[:, j] + 1e-20)
-                backpointer[t, j] = np.argmax(log_trans)
-                viterbi[t, j] = log_trans[backpointer[t, j]] + np.log(emit[j] + 1e-20)
-                
+            log_trans = viterbi[t-1][:, np.newaxis] + np.log(self.A + 1e-20)
+            backpointer[t] = np.argmax(log_trans, axis=0)
+            viterbi[t] = log_trans[backpointer[t], np.arange(self.n_states)] + np.log(emissions[t] + 1e-20)
+            
         # Find best final state
         best_path = np.zeros(n_samples, dtype=int)
         best_path[-1] = np.argmax(viterbi[-1])
