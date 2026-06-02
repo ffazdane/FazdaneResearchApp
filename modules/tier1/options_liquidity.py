@@ -879,6 +879,63 @@ class OptionsLiquidityModule(FazDaneModule):
         with tab6:
             self._tab_snapshots()
 
+    #  External Engine Interface
+
+    def execute_options_liquidity_scan(
+        self,
+        tickers: list[str],
+        min_volume: int = 100,
+        min_oi: int = 500,
+        option_types: tuple = ("Call", "Put"),
+        exp_pref: str = "Monthly (9-45 days)",
+        progress_bar=None,
+        status_text=None,
+    ) -> dict:
+        """
+        Callable from Calendar Strategy Matrix Quad-Engine scan.
+        Runs Options Liquidity scan across tickers, saves results to SQLite.
+        Returns summary dict with run metadata.
+        """
+        total = len(tickers)
+        if status_text:
+            status_text.write(f"### 🎬 Engine 4/4: Options Liquidity Discovery — scanning {total} tickers...")
+        if progress_bar:
+            progress_bar.progress(0.76)
+
+        params = {
+            "symbols": tuple(t.strip().upper() for t in tickers if t.strip()),
+            "min_volume": min_volume,
+            "min_oi": min_oi,
+            "option_types": option_types,
+            "exp_pref": exp_pref,
+        }
+
+        try:
+            df = fetch_options_data(**params)
+            sources = df.attrs.get("active_data_source", "Unknown")
+
+            if progress_bar:
+                progress_bar.progress(0.90)
+            if status_text:
+                status_text.write(f"💾 Saving Options Liquidity snapshot to database... (source: {sources})")
+
+            result = save_options_snapshot(df, params, sources)
+
+            if progress_bar:
+                progress_bar.progress(1.0)
+            if status_text:
+                status_text.write(
+                    f"✅ Engine 4/4 complete — saved {result['row_count']:,} contract rows "
+                    f"({result['run_id']}) to `{result['db_path']}`"
+                )
+            return result
+
+        except Exception as e:
+            logger.error(f"execute_options_liquidity_scan failed: {e}", exc_info=True)
+            if status_text:
+                status_text.write(f"⚠️ Engine 4/4 warning — Options Liquidity scan encountered an error: {e}")
+            return {}
+
     #  IV Rank Banner
 
     def _render_iv_rank_bar(self, iv_ranks: dict):

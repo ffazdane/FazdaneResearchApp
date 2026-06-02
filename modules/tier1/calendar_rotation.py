@@ -213,7 +213,8 @@ def query_options_liquidity_store(tickers: list[str]) -> dict[str, dict]:
         with sqlite3.connect(ol_db_path) as conn:
             placeholders = ",".join("?" for _ in tickers)
             query = f"""
-                SELECT symbol, total_volume, total_open_interest, avg_iv_pct, median_spread_pct, contract_count
+                SELECT symbol, total_volume, total_open_interest, avg_iv_pct, median_spread_pct,
+                       contract_count, call_volume, put_volume
                 FROM ol_symbol_snapshot_summary
                 WHERE symbol IN ({placeholders})
                 GROUP BY symbol
@@ -226,7 +227,9 @@ def query_options_liquidity_store(tickers: list[str]) -> dict[str, dict]:
                     "total_oi": r[2],
                     "avg_iv": r[3],
                     "median_spread_pct": r[4],
-                    "contract_count": r[5]
+                    "contract_count": r[5],
+                    "call_volume": r[6] or 0.0,
+                    "put_volume": r[7] or 0.0,
                 }
     except Exception as e:
         logger.warning(f"Could not read options liquidity database: {e}")
@@ -405,6 +408,28 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     merged["pa_display_rec"] = pa_display_recs
     merged["mre_display_rec"] = mre_display_recs
     
+    # --- 3. Options Liquidity Put/Call Bias ---
+    ol_bias_list = []
+    for _, row in merged.iterrows():
+        sym = row["ticker"]
+        opt_data = opt_summary.get(sym) or {}
+        call_vol = opt_data.get("call_volume", 0.0) or 0.0
+        put_vol  = opt_data.get("put_volume",  0.0) or 0.0
+        total    = call_vol + put_vol
+        if total == 0:
+            ol_bias_list.append("⚪ No Data")
+        else:
+            put_ratio = put_vol / total
+            if put_ratio > 0.60:
+                ol_bias_list.append("🔴 Put Heavy")
+            elif put_ratio > 0.50:
+                ol_bias_list.append("🟡 Slight Put")
+            elif put_ratio < 0.40:
+                ol_bias_list.append("🟢 Call Heavy")
+            else:
+                ol_bias_list.append("⚪ Balanced")
+    merged["ol_bias"] = ol_bias_list
+    
     return merged
 
 
@@ -429,7 +454,7 @@ class CalendarRotationModule(FazDaneModule):
         
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         st.markdown("**Triple-Engine Execution**")
-        run_all_scans = st.button("🚀 Run Triple-Engine Scan", use_container_width=True, type="primary")
+        run_all_scans = st.button("🚀 Run Quad-Engine Scan", use_container_width=True, type="primary")
         
         if run_all_scans:
             st.session_state["run_all_scans_triggered"] = True
@@ -472,12 +497,14 @@ class CalendarRotationModule(FazDaneModule):
             cs_deploy_watch = len(df[df["cs_rec"].isin(["Deploy", "Watch"])])
             pa_calendar = len(df[df["pa_display_rec"].str.contains("Deploy Calendar", na=False)])
             mre_calendar_yes = len(df[df["mre_display_rec"] == "✅ Yes"])
+            ol_put_heavy = len(df[df["ol_bias"].str.contains("Put", na=False)])
             
             metrics = {
                 "Total Universe Tickers": (len(df), None, ""),
                 "Scoring Engine Deploy/Watch": (cs_deploy_watch, None, f" / {len(df)}"),
                 "PA Calendar Spreads": (pa_calendar, None, f" / {len(df)}"),
-                "Regime Calendar Setup ✅": (mre_calendar_yes, None, f" / {len(df)}")
+                "Regime Calendar Setup ✅": (mre_calendar_yes, None, f" / {len(df)}"),
+                "⚠️ Put-Heavy Tickers": (ol_put_heavy, None, f" / {len(df)}")
             }
             self.render_metrics_row(metrics)
             st.write("")
@@ -517,13 +544,23 @@ class CalendarRotationModule(FazDaneModule):
                         default=all_fdts_sigs,
                         key="cal_filter_fdts"
                     )
+                col_f5, _ = st.columns([1, 3])
+                with col_f5:
+                    all_ol_bias = sorted(list(df["ol_bias"].unique()))
+                    sel_ol_bias = st.multiselect(
+                        "Options Flow Bias",
+                        options=all_ol_bias,
+                        default=all_ol_bias,
+                        key="cal_filter_ol_bias"
+                    )
 
             # Apply filters
             filtered_df = df[
                 df["cs_rec"].isin(sel_cs_recs) &
                 df["pa_display_rec"].isin(sel_pa_display_recs) &
                 df["mre_display_rec"].isin(sel_mre_display_recs) &
-                df["fdts_signal"].isin(sel_fdts_sigs)
+                df["fdts_signal"].isin(sel_fdts_sigs) &
+                df["ol_bias"].isin(sel_ol_bias)
             ]
             
             if filtered_df.empty:
@@ -534,14 +571,15 @@ class CalendarRotationModule(FazDaneModule):
                 display_df["FDTS"] = display_df["fdts_signal"].apply(format_fdts_emoji)
                 
                 display_df = display_df[[
-                    "ticker", "earnings_date", "FDTS", "cs_rec", "pa_display_rec", "mre_display_rec"
+                    "ticker", "earnings_date", "FDTS", "cs_rec", "pa_display_rec", "mre_display_rec", "ol_bias"
                 ]]
                 
                 display_df.columns = [
                     "Ticker", "Earnings Date", "FDTS Signal", 
                     "Calendar Scoring Engine", 
                     "Price Action (Action)", 
-                    "Regime Calendar Setup"
+                    "Regime Calendar Setup",
+                    "Options Flow Bias"
                 ]
 
                 # Conditional styling function for Styler
@@ -609,10 +647,23 @@ class CalendarRotationModule(FazDaneModule):
                     elif mre_val == "❌ No":
                         styles[5] = "background-color: rgba(220,38,38,0.12); color: #f87171;"
                         
+                    # 6. Options Flow Bias (Index 6) — red flag when put-heavy
+                    ol_val = row["Options Flow Bias"]
+                    if "Put Heavy" in str(ol_val):
+                        styles[6] = "background-color: rgba(220,38,38,0.20); color: #ef4444; font-weight: bold;"
+                    elif "Slight Put" in str(ol_val):
+                        styles[6] = "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;"
+                    elif "Call Heavy" in str(ol_val):
+                        styles[6] = "background-color: rgba(34,197,94,0.18); color: #22c55e; font-weight: bold;"
+                    elif "Balanced" in str(ol_val):
+                        styles[6] = "color: #94a3b8;"
+                    else:
+                        styles[6] = "color: #64748b; font-style: italic;"
+                        
                     return styles
                     
                 styled_df = display_df.style.apply(style_cells, axis=1)
-                st.dataframe(styled_df, use_container_width=True, hide_index=True)
+                st.dataframe(styled_df, use_container_width=True, hide_index=True, height=800)
 
         # ── TAB 2: RRG Rotation Matrix (Backed up visualizations) ────────────
         with tab_rrg:
@@ -638,13 +689,13 @@ class CalendarRotationModule(FazDaneModule):
                 st.error("Failed to compute RRG rotation data for the selected universe.")
 
     def _execute_triple_engine_scans(self):
-        """Execute calculations and scoring on demand sequentially across all 3 scanning engines."""
+        """Execute calculations and scoring on demand sequentially across all 4 scanning engines."""
         progress_bar = st.progress(0.0)
         status_text = st.empty()
         
         try:
             # 🎬 ENGINE 1: Calendar Opportunity Scoring Engine
-            status_text.write("### 🎬 Starting Engine 1/3: Calendar Opportunity Scoring Engine...")
+            status_text.write("### 🎬 Starting Engine 1/4: Calendar Opportunity Scoring Engine...")
             from modules.calendar_scoring.dashboard import CalendarOpportunityScoringModule
             scoring_module = CalendarOpportunityScoringModule()
             scoring_module.execute_engine_scan(
@@ -656,7 +707,7 @@ class CalendarRotationModule(FazDaneModule):
             )
             
             # 🎬 ENGINE 2: Price Action Story Engine
-            status_text.write("### 🎬 Starting Engine 2/3: Price Action Story Engine...")
+            status_text.write("### 🎬 Starting Engine 2/4: Price Action Story Engine...")
             from modules.tier2.price_action_story import PriceActionStoryModule
             pa_module = PriceActionStoryModule()
             pa_module.execute_price_action_scan(
@@ -670,7 +721,7 @@ class CalendarRotationModule(FazDaneModule):
             )
             
             # 🎬 ENGINE 3: Regime Intelligence Dashboard
-            status_text.write("### 🎬 Starting Engine 3/3: Regime Intelligence Dashboard...")
+            status_text.write("### 🎬 Starting Engine 3/4: Regime Intelligence Dashboard...")
             from modules.tier2.markov_regime_engine import MarkovRegimeEngineModule
             regime_module = MarkovRegimeEngineModule()
             regime_module.execute_regime_scan(
@@ -683,16 +734,26 @@ class CalendarRotationModule(FazDaneModule):
                 status_text=status_text
             )
             
+            # 🎬 ENGINE 4: Options Liquidity Discovery (Put/Call Flow)
+            status_text.write("### 🎬 Starting Engine 4/4: Options Liquidity Discovery...")
+            from modules.tier1.options_liquidity import OptionsLiquidityModule
+            ol_module = OptionsLiquidityModule()
+            ol_module.execute_options_liquidity_scan(
+                tickers=self.tickers,
+                progress_bar=progress_bar,
+                status_text=status_text
+            )
+            
             # Success notification
             progress_bar.empty()
             status_text.empty()
-            st.success("🎉 **Triple-Engine Scan Completed!** All 3 scanning engines successfully ran and saved results to SQLite databases.")
+            st.success("🎉 **Quad-Engine Scan Completed!** All 4 scanning engines successfully ran and saved results to SQLite databases.")
             
         except Exception as e:
             progress_bar.empty()
             status_text.empty()
-            st.error(f"❌ Error during Triple-Engine scan execution: {e}")
-            logger.error("Triple-Engine scan error", exc_info=True)
+            st.error(f"❌ Error during Quad-Engine scan execution: {e}")
+            logger.error("Quad-Engine scan error", exc_info=True)
             
         st.rerun()
 
