@@ -887,6 +887,7 @@ with st.sidebar:
             "Social Stock Stories",
             "Calendar Opportunity Scoring Engine",
             "Price Action Story Engine",
+            "Regime Intelligence Dashboard",
         ]
         tier2_sel = st.radio(
             "tier2",
@@ -1171,6 +1172,17 @@ elif active_module == "Price Action Story Engine":
         st.error(f"Failed to load Price Action Story Engine: {e}")
         st.code(traceback.format_exc())
 
+elif active_module == "Regime Intelligence Dashboard":
+    try:
+        from modules.tier2.markov_regime_engine import MarkovRegimeEngineModule
+        module = MarkovRegimeEngineModule()
+        module.run()
+        logger.info("Regime Intelligence Dashboard")
+    except Exception as e:
+        import traceback
+        st.error(f"Failed to load Regime Intelligence Dashboard: {e}")
+        st.code(traceback.format_exc())
+
 elif "Bradley Siderograph" in active_module:
     from modules.tier3.bradley_siderograph import BradleySiderographModule
     module = BradleySiderographModule()
@@ -1271,6 +1283,7 @@ else:
                 {"label": "Social Stock Stories", "module": "Social Stock Stories", "tier": 2, "key": "macro_social_stories"},
                 {"label": "Calendar Opportunity Scoring Engine", "module": "Calendar Opportunity Scoring Engine", "tier": 2, "key": "macro_calendar_scoring"},
                 {"label": "Price Action Story Engine", "module": "Price Action Story Engine", "tier": 2, "key": "macro_price_action_story"},
+                {"label": "Regime Intelligence Dashboard", "module": "Regime Intelligence Dashboard", "tier": 2, "key": "macro_regime_intelligence"},
             ],
         },
         {
