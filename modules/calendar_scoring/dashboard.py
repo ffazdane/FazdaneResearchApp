@@ -1160,6 +1160,11 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         # Trigger process
         if st.button("Run Outcomes Engine (Updates Review Metrics)", key="btn_run_outcomes_track"):
             count = update_decision_outcomes()
+            try:
+                from utils.persistence import backup_database
+                backup_database("calendar_scoring", reason="Outcomes updated")
+            except Exception as e:
+                logger.error(f"Failed to backup outcomes: {e}")
             st.success(f"Outcome updates complete. {count} decisions processed.")
             
         conn = get_connection()
@@ -1268,7 +1273,12 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                     "event_risk_weight": evt_w,
                     "institutional_flow_weight": inst_w
                 })
-                st.success("New active weights saved successfully.")
+                try:
+                    from utils.persistence import backup_database
+                    backup_database("calendar_scoring", reason="Manual weights update")
+                except Exception as e:
+                    logger.error(f"Failed to backup weights: {e}")
+                st.success("New active weights saved successfully and backed up to cloud.")
                 st.rerun()
                 
         st.divider()
@@ -1287,7 +1297,12 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 
                 if st.button("Apply Recommended Weights", key="btn_apply_best_weights"):
                     save_model_weights(best)
-                    st.success("Applied recommended weights configuration.")
+                    try:
+                        from utils.persistence import backup_database
+                        backup_database("calendar_scoring", reason="Grid search weights optimized")
+                    except Exception as e:
+                        logger.error(f"Failed to backup optimized weights: {e}")
+                    st.success("Applied recommended weights configuration and backed up to cloud.")
                     st.rerun()
                     
         st.divider()
@@ -1598,6 +1613,18 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         run_date = date.today().strftime("%Y-%m-%d")
         log_daily_run(run_date, ranked_candidates, model_version)
         status_text.text(f"✅ Saved {scanned_count} candidates to calendar_scoring SQLite database.")
+        
+        # Trigger backup to cloud
+        try:
+            from utils.persistence import backup_database
+            status_text.text("Cloud Database Backup: Uploading calendar_scoring to repository releases...")
+            ok, msg = backup_database("calendar_scoring", reason=f"Daily scan run: {run_date}")
+            if ok:
+                status_text.text(f"✅ Saved scan and backed up database: {msg}")
+            else:
+                logger.warning(f"Backup warning: {msg}")
+        except Exception as e:
+            logger.error(f"Failed to backup calendar_scoring database: {e}")
         
         # Store in session state
         st.session_state.cal_candidates = ranked_candidates

@@ -59,101 +59,6 @@ class MarkovRegimeEngineModule(FazDaneModule):
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         self.run_engine = st.button("Execute Regime Scan", use_container_width=True, type="primary", key="mre_run_btn")
 
-    def render_main(self):
-        self.render_section_header(
-            "Markov & HMM Regime Intelligence Dashboard",
-            "State transition forecasting and FDTS confirmation scaling layer"
-        )
-        
-        if not self.symbols:
-            st.warning("⚠️ Please select a ticker universe in the sidebar to begin.")
-            return
-
-        if st.session_state.pop("mre_show_success_banner", False):
-            st.success("✅ **Universe Reprocessed & Saved!** All empirical regime states, HMM matrices, and forecasts have been successfully written to the database.")
-
-
-        # Setup state to store calculations
-        if "mre_scan_completed" not in st.session_state:
-            st.session_state["mre_scan_completed"] = False
-            st.session_state["mre_results"] = {}
-            st.session_state["mre_last_saved_time"] = None
-            st.session_state["mre_needs_reprocess"] = False
-
-        # Check if the loaded results match the currently selected watchlist
-        loaded_symbols = set(st.session_state["mre_results"].keys())
-        selected_symbols = set(s.strip().upper() for s in self.symbols)
-        
-        if loaded_symbols != selected_symbols:
-            st.session_state["mre_scan_completed"] = False
-            st.session_state["mre_results"] = {}
-            st.session_state["mre_last_saved_time"] = None
-
-        # Determine if we should perform calculations
-        should_reprocess = self.run_engine or st.session_state.get("mre_needs_reprocess", False)
-
-        # Try to load existing data from database if not loaded and we are not reprocessing
-        if not should_reprocess and not st.session_state["mre_scan_completed"]:
-            db_results = {}
-            newest_timestamp = None
-            all_found = True
-            
-            for symbol in self.symbols:
-                sym = symbol.strip().upper()
-                forecast = get_latest_forecast(sym)
-                backtest = get_latest_backtest(sym)
-                hist_states = get_historical_states(sym)
-                trans_matrix, state_list = get_latest_transition_matrix(sym)
-                
-                if not forecast or not backtest or not hist_states or trans_matrix is None:
-                    all_found = False
-                    break
-                    
-                df_db = pd.DataFrame(hist_states)
-                df_db = df_db.rename(columns={"close_price": "close"})
-                
-                db_results[sym] = {
-                    "df": df_db,
-                    "hmm_model": None,
-                    "state_labels": ["BULL", "SIDEWAYS", "BEAR"],
-                    "trans_matrix": trans_matrix,
-                    "state_list": state_list,
-                    "forecast": forecast,
-                    "backtest": backtest
-                }
-                
-                ts = forecast.get("created_at")
-                if ts:
-                    if not newest_timestamp or ts > newest_timestamp:
-                        newest_timestamp = ts
-                        
-            if all_found and db_results:
-                st.session_state["mre_results"] = db_results
-                st.session_state["mre_scan_completed"] = True
-                st.session_state["mre_last_saved_time"] = newest_timestamp
-                st.session_state["mre_needs_reprocess"] = False
-
-        # Render status banner and reprocess button
-        if st.session_state["mre_scan_completed"] and st.session_state.get("mre_last_saved_time"):
-            c_info, c_action = st.columns([3, 1], vertical_alignment="center")
-            with c_info:
-                st.info(f"💾 **Using Processed Markov Models** | Data Saved: `{st.session_state['mre_last_saved_time']}` (UTC)")
-            with c_action:
-                if st.button("🔄 Reprocess Universe", key="mre_force_reprocess", use_container_width=True, type="primary"):
-                    st.session_state["mre_scan_completed"] = False
-                    st.session_state["mre_results"] = {}
-                    st.session_state["mre_last_saved_time"] = None
-                    st.session_state["mre_needs_reprocess"] = True
-                    st.rerun()
-
-        # Prompt for scan if no data exists and no scan has run
-        if not st.session_state["mre_scan_completed"] and not should_reprocess:
-            st.warning("⚠️ No processed regime model data found in database for this universe. You must run a fresh scan.")
-            if st.button("🚀 Execute Markov Regime Scan Now", key="mre_first_run_btn", use_container_width=True, type="primary"):
-                st.session_state["mre_needs_reprocess"] = True
-                st.rerun()
-            return
-
     def execute_regime_scan(self, universe_name=None, symbols=None, lookback_years=None, n_states=None, rerun=True, progress_bar=None, status_text=None):
         """Execute empirical and hidden Markov regime scan and save results to SQLite."""
         u_name = universe_name if universe_name is not None else self.universe_name
@@ -199,6 +104,19 @@ class MarkovRegimeEngineModule(FazDaneModule):
         status_text.text(f"Saving regime intelligence scan results for {len(results)} tickers to calendar_scoring database...")
         # Database writes are performed individually inside _process_single_ticker
         status_text.text(f"✅ Saved regime intelligence scan for {len(results)} tickers to calendar_scoring SQLite database.")
+        
+        # Trigger backup to cloud
+        try:
+            from utils.persistence import backup_database
+            status_text.text("Cloud Database Backup: Uploading databases to repository releases...")
+            ok_cs, msg_cs = backup_database("calendar_scoring", reason=f"Markov regime scan: {u_name}")
+            ok_ol, msg_ol = backup_database("options_liquidity", reason=f"Markov regime pricing cache: {u_name}")
+            if ok_cs and ok_ol:
+                status_text.text(f"✅ Saved scan and backed up databases: {msg_cs}")
+            else:
+                logger.warning(f"Backup warning: calendar_scoring ({msg_cs}), options_liquidity ({msg_ol})")
+        except Exception as e:
+            logger.error(f"Failed to backup databases: {e}")
         
         st.session_state["mre_results"] = results
         st.session_state["mre_scan_completed"] = True
@@ -820,7 +738,8 @@ class MarkovRegimeEngineModule(FazDaneModule):
         end_str = end_date.strftime("%Y-%m-%d")
         
         # Check SQLite cache
-        conn = get_mre_conn()
+        import sqlite3
+        conn = sqlite3.connect(get_db_path("options_liquidity"), timeout=15)
         try:
             sql = """
             SELECT date, open, high, low, close, volume 
@@ -863,7 +782,8 @@ class MarkovRegimeEngineModule(FazDaneModule):
         """Asynchronously cache downloaded pricing data into daily_prices SQLite."""
         with self.db_lock:
             try:
-                conn = get_mre_conn()
+                import sqlite3
+                conn = sqlite3.connect(get_db_path("options_liquidity"), timeout=15)
                 cursor = conn.cursor()
                 records = [
                     (
