@@ -204,6 +204,37 @@ def format_fdts_emoji(sig: str) -> str:
     sig_clean = str(sig).replace("🟢", "").replace("🔴", "").replace("⚪", "").strip()
     return {"Buy": "🟢 Buy", "Sell": "🔴 Sell", "Neutral": "⚪ Neutral", "No Trade": "⚪ No Trade"}.get(sig_clean, f"⚪ {sig_clean}")
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def compute_live_fdts_signals(tickers: tuple) -> dict[str, str]:
+    """
+    Download OHLC data for all tickers in one batch and compute fresh FDTS signals.
+    Cached for 30 minutes. Always reflects the current market state.
+    Returns dict: ticker -> 'Buy' | 'Sell' | 'No Trade'
+    """
+    signals = {}
+    if not tickers:
+        return signals
+    try:
+        raw = yf.download(
+            list(tickers), period="6mo", auto_adjust=True,
+            progress=False, threads=True
+        )
+        if raw.empty:
+            return signals
+        for ticker in tickers:
+            try:
+                ticker_df = extract_ticker_df(raw, ticker)
+                if ticker_df.empty or len(ticker_df) < 60:
+                    signals[ticker] = "No Trade"
+                    continue
+                sig = calculate_fdts_ha_signal(ticker_df)
+                signals[ticker] = sig if sig in ("Buy", "Sell", "No Trade") else "No Trade"
+            except Exception:
+                signals[ticker] = "No Trade"
+    except Exception as e:
+        logger.warning(f"compute_live_fdts_signals batch download failed: {e}")
+    return signals
+
 def query_options_liquidity_store(tickers: list[str]) -> dict[str, dict]:
     summary = {}
     try:
@@ -324,15 +355,21 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     
     # Fill N/As
     merged["earnings_date"] = merged["earnings_date"].fillna("N/A")
-    merged["fdts_signal"] = merged["fdts_signal"].fillna("Neutral")
+    merged["fdts_signal"] = merged["fdts_signal"].fillna("Neutral")  # will be overridden below
     merged["cs_rec"] = merged["cs_rec"].fillna("N/A")
     merged["cs_score"] = merged["cs_score"].fillna(0.0)
     merged["mre_rec"] = merged["mre_rec"].fillna("N/A")
     merged["mre_sig"] = merged["mre_sig"].fillna(0.0)
     merged["pa_rec"] = merged["pa_rec"].fillna("N/A")
     merged["pa_score"] = merged["pa_score"].fillna(0.0)
-    
-    # Fetch options metrics & earnings
+
+    # --- LIVE FDTS override: always recalculate from fresh price data ---
+    # The DB value can be stale (from a previous engine run). Live calculation
+    # guarantees the signal shown matches the actual current market state.
+    live_fdts = compute_live_fdts_signals(tuple(tickers_upper))
+    merged["fdts_signal"] = merged["ticker"].map(
+        lambda t: live_fdts.get(t, "No Trade")
+    )
     opt_summary = query_options_liquidity_store(tickers_upper)
     earnings_dates = query_earnings_calendar_store(tickers_upper)
     
