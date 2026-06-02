@@ -246,10 +246,13 @@ def query_options_liquidity_store(tickers: list[str]) -> dict[str, dict]:
             query = f"""
                 SELECT symbol, total_volume, total_open_interest, avg_iv_pct, median_spread_pct,
                        contract_count, call_volume, put_volume
-                FROM ol_symbol_snapshot_summary
+                FROM ol_symbol_snapshot_summary t1
                 WHERE symbol IN ({placeholders})
-                GROUP BY symbol
-                HAVING scan_ts = MAX(scan_ts)
+                  AND scan_ts = (
+                      SELECT MAX(scan_ts)
+                      FROM ol_symbol_snapshot_summary t2
+                      WHERE t2.symbol = t1.symbol
+                  )
             """
             rows = conn.execute(query, tickers).fetchall()
             for r in rows:
