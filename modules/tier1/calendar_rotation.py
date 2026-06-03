@@ -15,6 +15,7 @@ import logging
 from modules.base_module import FazDaneModule
 from utils.universe_manager import render_universe_manager
 from utils.persistence import get_db_path
+from utils.formatting import calculate_strength_pct, format_strength_meter, format_strength_meter_html
 
 logger = logging.getLogger("CalendarRotation")
 
@@ -146,12 +147,14 @@ def compute_price_features(close, volume, benchmark):
         trend_score += 15 if s.iloc[-1] >= 0.97 * s.rolling(20).max().iloc[-1] else 0
         v_last = float(v.iloc[-1]) if not v.empty else 0
         trend_score += 15 if vol_ratio >= 1.2 else 0
+        strength_pct = calculate_strength_pct(s)
         features.append({
             "ticker": ticker, "spot": float(s.iloc[-1]), "atr20": float(atr20),
             "option_oi": int(max(v_last * 0.005, 500)),
             "option_volume": int(max(v_last * 0.001, 100)),
             "trend_score": min(float(trend_score), 100.0),
-            "rel_strength_20": float(s.pct_change(20).iloc[-1] - bench_ret_20)
+            "rel_strength_20": float(s.pct_change(20).iloc[-1] - bench_ret_20),
+            "strength_pct": strength_pct
         })
     return pd.DataFrame(features)
 
@@ -205,35 +208,43 @@ def format_fdts_emoji(sig: str) -> str:
     return {"Buy": "🟢 Buy", "Sell": "🔴 Sell", "Neutral": "⚪ Neutral", "No Trade": "⚪ No Trade"}.get(sig_clean, f"⚪ {sig_clean}")
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def compute_live_fdts_signals(tickers: tuple) -> dict[str, str]:
+def compute_live_market_metrics(tickers: tuple) -> dict[str, dict]:
     """
-    Download OHLC data for all tickers in one batch and compute fresh FDTS signals.
+    Download OHLC data for all tickers in one batch and compute fresh FDTS signals
+    and 15-day price strength percentages.
     Cached for 30 minutes. Always reflects the current market state.
-    Returns dict: ticker -> 'Buy' | 'Sell' | 'No Trade'
+    Returns dict: ticker -> {"fdts_signal": str, "strength_pct": float | None}
     """
-    signals = {}
+    metrics = {}
     if not tickers:
-        return signals
+        return metrics
     try:
         raw = yf.download(
             list(tickers), period="6mo", auto_adjust=True,
             progress=False, threads=True
         )
         if raw.empty:
-            return signals
+            return metrics
         for ticker in tickers:
             try:
                 ticker_df = extract_ticker_df(raw, ticker)
-                if ticker_df.empty or len(ticker_df) < 60:
-                    signals[ticker] = "No Trade"
+                if ticker_df.empty:
+                    metrics[ticker] = {"fdts_signal": "No Trade", "strength_pct": None}
                     continue
-                sig = calculate_fdts_ha_signal(ticker_df)
-                signals[ticker] = sig if sig in ("Buy", "Sell", "No Trade") else "No Trade"
+                
+                sig = "No Trade"
+                if len(ticker_df) >= 60:
+                    sig = calculate_fdts_ha_signal(ticker_df)
+                    if sig not in ("Buy", "Sell", "No Trade"):
+                        sig = "No Trade"
+                
+                strength_pct = calculate_strength_pct(ticker_df)
+                metrics[ticker] = {"fdts_signal": sig, "strength_pct": strength_pct}
             except Exception:
-                signals[ticker] = "No Trade"
+                metrics[ticker] = {"fdts_signal": "No Trade", "strength_pct": None}
     except Exception as e:
-        logger.warning(f"compute_live_fdts_signals batch download failed: {e}")
-    return signals
+        logger.warning(f"compute_live_market_metrics batch download failed: {e}")
+    return metrics
 
 def query_options_liquidity_store(tickers: list[str]) -> dict[str, dict]:
     summary = {}
@@ -366,12 +377,15 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     merged["pa_rec"] = merged["pa_rec"].fillna("N/A")
     merged["pa_score"] = merged["pa_score"].fillna(0.0)
 
-    # --- LIVE FDTS override: always recalculate from fresh price data ---
+    # --- LIVE Market Metrics override: always recalculate from fresh price data ---
     # The DB value can be stale (from a previous engine run). Live calculation
-    # guarantees the signal shown matches the actual current market state.
-    live_fdts = compute_live_fdts_signals(tuple(tickers_upper))
+    # guarantees the signals shown match the actual current market state.
+    live_metrics = compute_live_market_metrics(tuple(tickers_upper))
     merged["fdts_signal"] = merged["ticker"].map(
-        lambda t: live_fdts.get(t, "No Trade")
+        lambda t: live_metrics.get(t, {}).get("fdts_signal", "No Trade")
+    )
+    merged["strength_pct"] = merged["ticker"].map(
+        lambda t: live_metrics.get(t, {}).get("strength_pct")
     )
     opt_summary = query_options_liquidity_store(tickers_upper)
     earnings_dates = query_earnings_calendar_store(tickers_upper)
@@ -609,13 +623,14 @@ class CalendarRotationModule(FazDaneModule):
                 # Format displaying dataframe
                 display_df = filtered_df.copy()
                 display_df["FDTS"] = display_df["fdts_signal"].apply(format_fdts_emoji)
+                display_df["Strength"] = display_df["strength_pct"].apply(lambda p: format_strength_meter(p)[0])
                 
                 display_df = display_df[[
-                    "ticker", "earnings_date", "FDTS", "cs_rec", "pa_display_rec", "mre_display_rec", "ol_bias"
+                    "ticker", "Strength", "earnings_date", "FDTS", "cs_rec", "pa_display_rec", "mre_display_rec", "ol_bias"
                 ]]
                 
                 display_df.columns = [
-                    "Ticker", "Earnings Date", "FDTS Signal", 
+                    "Ticker", "Strength", "Earnings Date", "FDTS Signal", 
                     "Calendar Scoring Engine", 
                     "Price Action (Action)", 
                     "Regime Calendar Setup",
@@ -624,9 +639,9 @@ class CalendarRotationModule(FazDaneModule):
 
                 # Conditional styling function for Styler
                 def style_cells(row):
-                    styles = [""] * len(row)
+                    styles = {col: "" for col in row.index}
                     
-                    # 1. Earnings Date (Index 1)
+                    # 1. Earnings Date
                     ed_val = row["Earnings Date"]
                     if ed_val and ed_val != "N/A":
                         try:
@@ -635,22 +650,33 @@ class CalendarRotationModule(FazDaneModule):
                             days_diff = (ed_dt - today_dt).days
                             if days_diff >= 0:
                                 if days_diff <= 20:
-                                    styles[1] = "background-color: rgba(220,38,38,0.20); color: #ef4444; font-weight: bold;"
+                                    styles["Earnings Date"] = "background-color: rgba(220,38,38,0.20); color: #ef4444; font-weight: bold;"
                                 elif days_diff <= 40:
-                                    styles[1] = "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;"
+                                    styles["Earnings Date"] = "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;"
                         except Exception:
                             pass
                     
-                    # 2. FDTS Signal (Index 2)
+                    # 2. Strength
+                    st_val = row["Strength"]
+                    if st_val == "▲":
+                        styles["Strength"] = "color: #00D4AA; font-weight: bold; text-align: center; font-size: 14px;"
+                    elif st_val == "▼":
+                        styles["Strength"] = "color: #FF4B4B; font-weight: bold; text-align: center; font-size: 14px;"
+                    elif st_val == "▶":
+                        styles["Strength"] = "color: #FFA421; font-weight: bold; text-align: center; font-size: 14px;"
+                    else:
+                        styles["Strength"] = "color: #94a3b8; text-align: center;"
+
+                    # 3. FDTS Signal
                     fdts_val = row["FDTS Signal"]
                     if "Buy" in fdts_val:
-                        styles[2] = "color: #22c55e; font-weight: bold;"
+                        styles["FDTS Signal"] = "color: #22c55e; font-weight: bold;"
                     elif "Sell" in fdts_val:
-                        styles[2] = "color: #ef4444; font-weight: bold;"
+                        styles["FDTS Signal"] = "color: #ef4444; font-weight: bold;"
                     else:
-                        styles[2] = "color: #94a3b8;"
+                        styles["FDTS Signal"] = "color: #94a3b8;"
                         
-                    # 3. Scoring Engine (Index 3)
+                    # 4. Scoring Engine
                     cs_val = row["Calendar Scoring Engine"]
                     cs_colors = {
                         "Deploy": "background-color: rgba(58,181,74,0.20); color: #3ab54a; font-weight: bold;",
@@ -660,47 +686,47 @@ class CalendarRotationModule(FazDaneModule):
                         "Filtered": "background-color: rgba(100,116,139,0.15); color: #64748b; text-decoration: line-through;"
                     }
                     if cs_val in cs_colors:
-                        styles[3] = cs_colors[cs_val]
+                        styles["Calendar Scoring Engine"] = cs_colors[cs_val]
                         
-                    # 4. Price Action Action Column (Index 4) — Deploy Calendar variants
+                    # 5. Price Action Action Column
                     pa_val = row["Price Action (Action)"]
                     if "Deploy Calendar" in str(pa_val):
                         if "Watch Spread" in str(pa_val):
-                            styles[4] = "background-color: rgba(34,197,94,0.12); color: #86efac; font-weight: bold;"
+                            styles["Price Action (Action)"] = "background-color: rgba(34,197,94,0.12); color: #86efac; font-weight: bold;"
                         else:
-                            styles[4] = "background-color: rgba(34,197,94,0.22); color: #22c55e; font-weight: bold;"
+                            styles["Price Action (Action)"] = "background-color: rgba(34,197,94,0.22); color: #22c55e; font-weight: bold;"
                     elif "Watch (Earnings" in str(pa_val):
-                        styles[4] = "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;"
+                        styles["Price Action (Action)"] = "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;"
                     elif "Avoid" in str(pa_val):
-                        styles[4] = "background-color: rgba(220,38,38,0.15); color: #ef4444; font-weight: bold;"
+                        styles["Price Action (Action)"] = "background-color: rgba(220,38,38,0.15); color: #ef4444; font-weight: bold;"
                     elif pa_val in ["Early Bull / Expansion", "Strong Bull"]:
-                        styles[4] = "background-color: rgba(34,197,94,0.10); color: #4ade80;"
+                        styles["Price Action (Action)"] = "background-color: rgba(34,197,94,0.10); color: #4ade80;"
                     elif pa_val in ["Mature Bull"]:
-                        styles[4] = "background-color: rgba(234,179,8,0.12); color: #eab308;"
+                        styles["Price Action (Action)"] = "background-color: rgba(234,179,8,0.12); color: #eab308;"
                     elif pa_val in ["Fading Bull", "Distribution", "Breakdown"]:
-                        styles[4] = "background-color: rgba(239,68,68,0.12); color: #f87171;"
+                        styles["Price Action (Action)"] = "background-color: rgba(239,68,68,0.12); color: #f87171;"
                         
-                    # 5. Regime Calendar Setup (Index 5) — ✅ Yes / ❌ No
+                    # 6. Regime Calendar Setup
                     mre_val = row["Regime Calendar Setup"]
                     if mre_val == "✅ Yes":
-                        styles[5] = "background-color: rgba(34,197,94,0.22); color: #22c55e; font-weight: bold;"
+                        styles["Regime Calendar Setup"] = "background-color: rgba(34,197,94,0.22); color: #22c55e; font-weight: bold;"
                     elif mre_val == "❌ No":
-                        styles[5] = "background-color: rgba(220,38,38,0.12); color: #f87171;"
+                        styles["Regime Calendar Setup"] = "background-color: rgba(220,38,38,0.12); color: #f87171;"
                         
-                    # 6. Options Flow Bias (Index 6) — red flag when put-heavy
+                    # 7. Options Flow Bias
                     ol_val = row["Options Flow Bias"]
                     if "Put Heavy" in str(ol_val):
-                        styles[6] = "background-color: rgba(220,38,38,0.20); color: #ef4444; font-weight: bold;"
+                        styles["Options Flow Bias"] = "background-color: rgba(220,38,38,0.20); color: #ef4444; font-weight: bold;"
                     elif "Slight Put" in str(ol_val):
-                        styles[6] = "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;"
+                        styles["Options Flow Bias"] = "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;"
                     elif "Call Heavy" in str(ol_val):
-                        styles[6] = "background-color: rgba(34,197,94,0.18); color: #22c55e; font-weight: bold;"
+                        styles["Options Flow Bias"] = "background-color: rgba(34,197,94,0.18); color: #22c55e; font-weight: bold;"
                     elif "Balanced" in str(ol_val):
-                        styles[6] = "color: #94a3b8;"
+                        styles["Options Flow Bias"] = "color: #94a3b8;"
                     else:
-                        styles[6] = "color: #64748b; font-style: italic;"
+                        styles["Options Flow Bias"] = "color: #64748b; font-style: italic;"
                         
-                    return styles
+                    return [styles[col] for col in row.index]
                     
                 styled_df = display_df.style.apply(style_cells, axis=1)
                 st.dataframe(styled_df, use_container_width=True, hide_index=True, height=800)
@@ -962,17 +988,30 @@ class CalendarRotationModule(FazDaneModule):
 
     def _render_top_candidates(self, combined_scores):
         st.markdown("### 🏆 Top Rotation Candidates")
+        
+        display_df = combined_scores.head(15).copy()
+        display_df["Strength"] = display_df["strength_pct"].apply(lambda p: format_strength_meter(p)[0])
+        
         display_cols = [
-            "ticker", "universe", "quality", "fdts_signal", "calendar_score", "trend_score",
+            "ticker", "universe", "quality", "fdts_signal", "Strength", "calendar_score", "trend_score",
             "rs_ratio", "rs_momentum", "spot", "target_strike", "option_liquidity_score"
         ]
-        display_df = combined_scores.head(15)[display_cols].copy()
         
+        def highlight_strength(val):
+            if val == '▲':
+                return 'color: #00D4AA; font-weight: bold; text-align: center;'
+            elif val == '▼':
+                return 'color: #FF4B4B; font-weight: bold; text-align: center;'
+            elif val == '▶':
+                return 'color: #FFA421; font-weight: bold; text-align: center;'
+            return ''
+            
         st.dataframe(
-            display_df,
+            display_df[display_cols].style.map(highlight_strength, subset=["Strength"]),
             use_container_width=True,
             column_config={
                 "fdts_signal": st.column_config.TextColumn("FDTS Signal", width="small"),
+                "Strength": st.column_config.TextColumn("Strength", width="small"),
                 "calendar_score": st.column_config.NumberColumn("Cal Score", format="%.1f"),
                 "trend_score": st.column_config.NumberColumn("Trend Score", format="%.1f"),
                 "rs_ratio": st.column_config.NumberColumn("RS Ratio", format="%.1f"),
