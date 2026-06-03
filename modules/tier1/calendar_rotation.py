@@ -87,7 +87,8 @@ def configure_universe(selected_universe):
 
 from modules.calendar_scoring.technical_indicators import (
     calculate_fdts_ha_signal,
-    compute_rrg_zscore
+    compute_rrg_zscore,
+    calculate_atr
 )
 
 def calculate_fdts_signal(symbol: str, ticker_df: pd.DataFrame, period: int = 20) -> str:
@@ -210,10 +211,14 @@ def format_fdts_emoji(sig: str) -> str:
 @st.cache_data(ttl=1800, show_spinner=False)
 def compute_live_market_metrics(tickers: tuple) -> dict[str, dict]:
     """
-    Download OHLC data for all tickers in one batch and compute fresh FDTS signals
-    and 15-day price strength percentages.
+    Download OHLC data for all tickers in one batch and compute fresh FDTS signals,
+    15-day price strength percentages, current price, net change, and ATR.
     Cached for 30 minutes. Always reflects the current market state.
-    Returns dict: ticker -> {"fdts_signal": str, "strength_pct": float | None}
+    Returns dict: ticker -> {
+        "fdts_signal": str, "strength_pct": float | None,
+        "spot": float | None, "net_change_val": float | None,
+        "net_change_pct": float | None, "atr": float | None
+    }
     """
     metrics = {}
     if not tickers:
@@ -229,7 +234,10 @@ def compute_live_market_metrics(tickers: tuple) -> dict[str, dict]:
             try:
                 ticker_df = extract_ticker_df(raw, ticker)
                 if ticker_df.empty:
-                    metrics[ticker] = {"fdts_signal": "No Trade", "strength_pct": None}
+                    metrics[ticker] = {
+                        "fdts_signal": "No Trade", "strength_pct": None,
+                        "spot": None, "net_change_val": None, "net_change_pct": None, "atr": None
+                    }
                     continue
                 
                 sig = "No Trade"
@@ -239,9 +247,28 @@ def compute_live_market_metrics(tickers: tuple) -> dict[str, dict]:
                         sig = "No Trade"
                 
                 strength_pct = calculate_strength_pct(ticker_df)
-                metrics[ticker] = {"fdts_signal": sig, "strength_pct": strength_pct}
+                
+                spot = float(ticker_df["Close"].iloc[-1])
+                prev_close = float(ticker_df["Close"].iloc[-2]) if len(ticker_df) >= 2 else spot
+                net_change_val = spot - prev_close
+                net_change_pct = (net_change_val / prev_close) * 100 if prev_close != 0 else 0.0
+                
+                atr_series = calculate_atr(ticker_df["High"], ticker_df["Low"], ticker_df["Close"], period=14)
+                atr = float(atr_series.iloc[-1]) if not atr_series.dropna().empty else None
+                
+                metrics[ticker] = {
+                    "fdts_signal": sig,
+                    "strength_pct": strength_pct,
+                    "spot": spot,
+                    "net_change_val": net_change_val,
+                    "net_change_pct": net_change_pct,
+                    "atr": atr
+                }
             except Exception:
-                metrics[ticker] = {"fdts_signal": "No Trade", "strength_pct": None}
+                metrics[ticker] = {
+                    "fdts_signal": "No Trade", "strength_pct": None,
+                    "spot": None, "net_change_val": None, "net_change_pct": None, "atr": None
+                }
     except Exception as e:
         logger.warning(f"compute_live_market_metrics batch download failed: {e}")
     return metrics
@@ -310,7 +337,7 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     tickers_upper = [t.strip().upper() for t in tickers]
     merged = pd.DataFrame({"ticker": tickers_upper})
     
-    df_cs = pd.DataFrame(columns=["ticker", "earnings_date", "fdts_signal", "cs_rec", "cs_score"])
+    df_cs = pd.DataFrame(columns=["ticker", "earnings_date", "fdts_signal", "cs_rec", "cs_score", "cs_reason"])
     df_mre = pd.DataFrame(columns=["ticker", "mre_rec", "mre_sig", "current_state", "bear_prob_1d", "stickiness_score", "mre_fdts", "realized_vol"])
     df_pa = pd.DataFrame(columns=["ticker", "pa_rec", "pa_score", "atr", "atr_min", "atr_max", "volume"])
     
@@ -319,7 +346,7 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
             with sqlite3.connect(cs_db) as conn:
                 # Latest Calendar Scoring recommendation for each ticker
                 q_cs = """
-                    SELECT ticker, earnings_date, fdts_signal, recommendation as cs_rec, final_score as cs_score
+                    SELECT ticker, earnings_date, fdts_signal, recommendation as cs_rec, final_score as cs_score, reason_summary as cs_reason
                     FROM ticker_decision_log t1
                     WHERE decision_id = (
                         SELECT MAX(decision_id) FROM ticker_decision_log t2 WHERE t2.ticker = t1.ticker
@@ -372,6 +399,7 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     merged["fdts_signal"] = merged["fdts_signal"].fillna("Neutral")  # will be overridden below
     merged["cs_rec"] = merged["cs_rec"].fillna("N/A")
     merged["cs_score"] = merged["cs_score"].fillna(0.0)
+    merged["cs_reason"] = merged["cs_reason"].fillna("No detailed reason logged")
     merged["mre_rec"] = merged["mre_rec"].fillna("N/A")
     merged["mre_sig"] = merged["mre_sig"].fillna(0.0)
     merged["pa_rec"] = merged["pa_rec"].fillna("N/A")
@@ -387,6 +415,36 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     merged["strength_pct"] = merged["ticker"].map(
         lambda t: live_metrics.get(t, {}).get("strength_pct")
     )
+    
+    def get_spot(row):
+        t = row["ticker"]
+        val = live_metrics.get(t, {}).get("spot")
+        if pd.notnull(val):
+            return val
+        val_db = row.get("close_price")
+        if pd.notnull(val_db):
+            return val_db
+        return None
+
+    def get_atr(row):
+        t = row["ticker"]
+        val = live_metrics.get(t, {}).get("atr")
+        if pd.notnull(val):
+            return val
+        val_db = row.get("atr")
+        if pd.notnull(val_db):
+            return val_db
+        return None
+
+    merged["spot"] = merged.apply(get_spot, axis=1)
+    merged["net_change_val"] = merged["ticker"].map(
+        lambda t: live_metrics.get(t, {}).get("net_change_val") if pd.notnull(live_metrics.get(t, {}).get("net_change_val")) else None
+    )
+    merged["net_change_pct"] = merged["ticker"].map(
+        lambda t: live_metrics.get(t, {}).get("net_change_pct") if pd.notnull(live_metrics.get(t, {}).get("net_change_pct")) else None
+    )
+    merged["atr"] = merged.apply(get_atr, axis=1)
+
     opt_summary = query_options_liquidity_store(tickers_upper)
     earnings_dates = query_earnings_calendar_store(tickers_upper)
     
@@ -394,41 +452,64 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     pa_display_recs = []
     mre_display_recs = []
     
+    atr_pct_list = []
+    days_to_earnings_list = []
+    liq_list = []
+    spread_pct_list = []
+    opt_volume_list = []
+    opt_oi_list = []
+    opt_call_vol_list = []
+    opt_put_vol_list = []
+    opt_pcr_list = []
+    
     for _, row in merged.iterrows():
-        # --- 1. Price Action Story Engine Recommendation (Action Column for Early/Strong Bull) ---
+        # Calculate ATR pct
+        atr = row.get("atr") or 0.0
+        atr_min = row.get("atr_min") or 0.0
+        atr_max = row.get("atr_max") or 0.0
+        atr_diff = atr_max - atr_min
+        atr_pct = ((atr - atr_min) / atr_diff) * 100 if atr_diff > 0 else 50.0
+        atr_pct_list.append(atr_pct)
+        
+        # Retrieve options metrics
+        sym = row["ticker"]
+        opt_data = opt_summary.get(sym) or {}
+        spread_pct = opt_data.get("median_spread_pct")
+        if spread_pct is None:
+            spread_pct = 2.5
+        total_volume = opt_data.get("total_volume", 0)
+        total_oi = opt_data.get("total_oi", 0)
+        call_vol = opt_data.get("call_volume", 0.0) or 0.0
+        put_vol = opt_data.get("put_volume", 0.0) or 0.0
+        pcr = put_vol / total_volume if total_volume > 0 else 0.0
+        
+        if opt_data:
+            liq = "High" if total_volume > 1000 else "Medium"
+        else:
+            liq = "High" if row.get("volume", 0) > 2000000 else "Medium" if row.get("volume", 0) > 500000 else "Low"
+            
+        liq_list.append(liq)
+        spread_pct_list.append(spread_pct)
+        opt_volume_list.append(total_volume)
+        opt_oi_list.append(total_oi)
+        opt_call_vol_list.append(call_vol)
+        opt_put_vol_list.append(put_vol)
+        opt_pcr_list.append(pcr)
+            
+        # Retrieve earnings
+        earn_date_str = earnings_dates.get(sym, "None")
+        days_to_earnings = 999
+        if earn_date_str != "None":
+            try:
+                earn_date = datetime.strptime(earn_date_str, "%Y-%m-%d")
+                days_to_earnings = (earn_date - datetime.today()).days
+            except Exception:
+                pass
+        days_to_earnings_list.append(days_to_earnings)
+        
+        # Run rules
         pa_stage = row["pa_rec"]
         if pa_stage in ["Early Bull / Expansion", "Strong Bull"]:
-            # Retrieve ATR pct
-            atr = row.get("atr", 0.0)
-            atr_min = row.get("atr_min", 0.0)
-            atr_max = row.get("atr_max", 0.0)
-            atr_diff = atr_max - atr_min
-            atr_pct = ((atr - atr_min) / atr_diff) * 100 if atr_diff > 0 else 50.0
-            
-            # Retrieve options metrics
-            sym = row["ticker"]
-            opt_data = opt_summary.get(sym) or {}
-            spread_pct = opt_data.get("median_spread_pct")
-            if spread_pct is None:
-                spread_pct = 2.5
-            total_volume = opt_data.get("total_volume", 0)
-            
-            if opt_data:
-                liq = "High" if total_volume > 1000 else "Medium"
-            else:
-                liq = "High" if row.get("volume", 0) > 2000000 else "Medium" if row.get("volume", 0) > 500000 else "Low"
-                
-            # Retrieve earnings
-            earn_date_str = earnings_dates.get(sym, "None")
-            days_to_earnings = 999
-            if earn_date_str != "None":
-                try:
-                    earn_date = datetime.strptime(earn_date_str, "%Y-%m-%d")
-                    days_to_earnings = (earn_date - datetime.today()).days
-                except Exception:
-                    pass
-            
-            # Run rules
             if atr_pct < 50 and days_to_earnings > 15 and liq != "Low" and spread_pct <= 2.5:
                 pa_display = "🟢 Deploy Calendar"
             elif days_to_earnings <= 15:
@@ -461,6 +542,15 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
         
     merged["pa_display_rec"] = pa_display_recs
     merged["mre_display_rec"] = mre_display_recs
+    merged["atr_pct"] = atr_pct_list
+    merged["days_to_earnings"] = days_to_earnings_list
+    merged["options_liq"] = liq_list
+    merged["options_spread"] = spread_pct_list
+    merged["options_volume"] = opt_volume_list
+    merged["options_oi"] = opt_oi_list
+    merged["options_call_volume"] = opt_call_vol_list
+    merged["options_put_volume"] = opt_put_vol_list
+    merged["options_pcr"] = opt_pcr_list
     
     # --- 3. Options Liquidity Put/Call Bias ---
     ol_bias_list = []
@@ -487,6 +577,374 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     return merged
 
 
+def build_display_df(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build a clean, pre-formatted display DataFrame for st.dataframe.
+    All values are plain text with emoji indicators for color/status cues.
+    """
+    rows = []
+    for _, row in df.iterrows():
+        ticker = row["ticker"]
+
+        # ── Price & Net Change ──
+        spot = row.get("spot")
+        spot_str = f"${spot:,.2f}" if pd.notnull(spot) else "N/A"
+
+        nc_val = row.get("net_change_val")
+        nc_pct = row.get("net_change_pct")
+        try:
+            nc_v = float(nc_val)
+            nc_p = float(nc_pct)
+            if nc_v > 0:
+                nc_str = f"+${abs(nc_v):,.2f} (+{abs(nc_p):.2f}%)"
+            elif nc_v < 0:
+                nc_str = f"-${abs(nc_v):,.2f} (-{abs(nc_p):.2f}%)"
+            else:
+                nc_str = "$0.00 (0.00%)"
+        except (TypeError, ValueError):
+            nc_str = "N/A"
+            nc_v = 0
+
+        # ── ATR ──
+        atr = row.get("atr")
+        atr_str = f"${atr:,.2f}" if pd.notnull(atr) else "N/A"
+
+        # ── Strength ──
+        st_val, _ = format_strength_meter(row.get("strength_pct"))
+
+        # ── Earnings Date ──
+        ed_val = row.get("earnings_date") or "N/A"
+        if ed_val != "N/A":
+            try:
+                days_diff = (datetime.strptime(ed_val, "%Y-%m-%d").date() - datetime.now().date()).days
+                if 0 <= days_diff <= 20:
+                    ed_val = f"🔴 {ed_val}"
+                elif days_diff <= 40:
+                    ed_val = f"🟡 {ed_val}"
+            except Exception:
+                pass
+
+        # ── FDTS Signal (already has emoji from format_fdts_emoji) ──
+        fdts_str = format_fdts_emoji(row.get("fdts_signal", "No Trade"))
+
+        # ── Calendar Scoring Engine ──
+        cs_rec = row.get("cs_rec", "N/A")
+        cs_score = row.get("cs_score", 0.0)
+        _cs_icon = {"Deploy": "🟢", "Watch": "🟡", "Monitor": "🔵", "Avoid": "🔴", "Filtered": "⚫"}
+        cs_str = f"{_cs_icon.get(cs_rec, '⚪')} {cs_rec}"
+
+        # ── Price Action — plain label only; Styler background provides the colour cue ──
+        pa_val = str(row.get("pa_display_rec", "N/A"))
+
+        # ── Regime Calendar Setup ──
+        mre_val = row.get("mre_display_rec", "❌ No")
+
+        # ── Options Flow Bias ──
+        ol_str = str(row.get("ol_bias", "⚪ No Data"))
+
+        rows.append({
+            "Ticker":         ticker,
+            "Price":          spot_str,
+            "Net Change":     nc_str,
+            "ATR":            atr_str,
+            "Strength":       st_val,
+            "Earnings Date":  ed_val,
+            "FDTS Signal":    fdts_str,
+            "Cal. Score":     cs_str,
+            "Price Action":   pa_val,
+            "Regime Setup":   str(mre_val),
+            "Options Bias":   ol_str,
+            # raw for sorting
+            "_nc_val":        nc_v,
+        })
+
+    return pd.DataFrame(rows)
+
+
+def _apply_matrix_styles(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return a same-shape DataFrame of CSS style strings for each cell.
+    Used by Styler.apply(axis=None) to colour the st.dataframe.
+    """
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
+
+    for i in df.index:
+        row = df.loc[i]
+
+        # ── Ticker ──
+        styles.at[i, "Ticker"] = "font-weight: 700; color: #60a5fa"
+
+        # ── Net Change ── green / red text
+        nc = str(row.get("Net Change", ""))
+        if nc.startswith("+"):
+            styles.at[i, "Net Change"] = "color: #22c55e; font-weight: 700"
+        elif nc.startswith("-"):
+            styles.at[i, "Net Change"] = "color: #ef4444; font-weight: 700"
+
+        # ── Strength ── teal / red / orange, enlarged
+        st_v = str(row.get("Strength", ""))
+        if "▲" in st_v:
+            styles.at[i, "Strength"] = "color: #00D4AA; font-weight: 700; font-size: 22px; text-align: center"
+        elif "▼" in st_v:
+            styles.at[i, "Strength"] = "color: #FF4B4B; font-weight: 700; font-size: 22px; text-align: center"
+        elif "▶" in st_v:
+            styles.at[i, "Strength"] = "color: #FFA421; font-weight: 700; font-size: 22px; text-align: center"
+
+        # ── Earnings Date ── red / amber background
+        ed = str(row.get("Earnings Date", ""))
+        if "🔴" in ed:
+            styles.at[i, "Earnings Date"] = (
+                "background-color: rgba(220,38,38,0.28); color: #ef4444; font-weight: 700"
+            )
+        elif "🟡" in ed:
+            styles.at[i, "Earnings Date"] = (
+                "background-color: rgba(255,184,0,0.22); color: #ffb800; font-weight: 700"
+            )
+
+        # ── FDTS Signal ──
+        fdts = str(row.get("FDTS Signal", ""))
+        if "Buy" in fdts:
+            styles.at[i, "FDTS Signal"] = "color: #22c55e; font-weight: 700"
+        elif "Sell" in fdts:
+            styles.at[i, "FDTS Signal"] = "color: #ef4444; font-weight: 700"
+        else:
+            styles.at[i, "FDTS Signal"] = "color: #94a3b8"
+
+        # ── Calendar Scoring Engine ── coloured badge fill
+        cs = str(row.get("Cal. Score", ""))
+        if "🟢" in cs:
+            styles.at[i, "Cal. Score"] = (
+                "background-color: rgba(58,181,74,0.28); color: #3ab54a; font-weight: 700"
+            )
+        elif "🟡" in cs:
+            styles.at[i, "Cal. Score"] = (
+                "background-color: rgba(255,184,0,0.22); color: #ffb800; font-weight: 700"
+            )
+        elif "🔵" in cs:
+            styles.at[i, "Cal. Score"] = (
+                "background-color: rgba(2,132,199,0.22); color: #38bdf8"
+            )
+        elif "🔴" in cs:
+            styles.at[i, "Cal. Score"] = (
+                "background-color: rgba(220,38,38,0.22); color: #ef4444"
+            )
+        elif "⚫" in cs:
+            styles.at[i, "Cal. Score"] = (
+                "background-color: rgba(100,116,139,0.18); color: #64748b; text-decoration: line-through"
+            )
+
+        # ── Price Action — match on text since we stripped emojis from the cell ──
+        pa = str(row.get("Price Action", "")).lower()
+        if "deploy" in pa:
+            styles.at[i, "Price Action"] = (
+                "background-color: rgba(34,197,94,0.25); color: #22c55e; font-weight: 700"
+            )
+        elif "watch" in pa or "mature" in pa:
+            styles.at[i, "Price Action"] = (
+                "background-color: rgba(255,184,0,0.20); color: #ffb800; font-weight: 700"
+            )
+        elif "avoid" in pa or "fading" in pa or "distribution" in pa or "breakdown" in pa:
+            styles.at[i, "Price Action"] = (
+                "background-color: rgba(220,38,38,0.22); color: #ef4444; font-weight: 700"
+            )
+        elif "early" in pa or "strong" in pa:
+            styles.at[i, "Price Action"] = (
+                "background-color: rgba(34,197,94,0.18); color: #4ade80; font-weight: 700"
+            )
+
+        # ── Regime Setup ──
+        mre = str(row.get("Regime Setup", ""))
+        if "✅" in mre:
+            styles.at[i, "Regime Setup"] = (
+                "background-color: rgba(34,197,94,0.28); color: #22c55e; font-weight: 700"
+            )
+        else:
+            styles.at[i, "Regime Setup"] = (
+                "background-color: rgba(220,38,38,0.20); color: #f87171"
+            )
+
+        # ── Options Bias ──
+        ol = str(row.get("Options Bias", ""))
+        if "Put Heavy" in ol:
+            styles.at[i, "Options Bias"] = (
+                "background-color: rgba(220,38,38,0.28); color: #ef4444; font-weight: 700"
+            )
+        elif "Slight Put" in ol:
+            styles.at[i, "Options Bias"] = (
+                "background-color: rgba(255,184,0,0.20); color: #ffb800; font-weight: 700"
+            )
+        elif "Call Heavy" in ol:
+            styles.at[i, "Options Bias"] = (
+                "background-color: rgba(34,197,94,0.25); color: #22c55e; font-weight: 700"
+            )
+        elif "Balanced" in ol:
+            styles.at[i, "Options Bias"] = "color: #94a3b8"
+
+    return styles
+
+
+def _render_detail_panel(row: pd.Series) -> None:
+    """Renders a 4-engine diagnostic card for the selected ticker."""
+    ticker = row.get("ticker", "N/A")
+    spot   = row.get("spot", None)
+    spot_str = f"${spot:,.2f}" if pd.notnull(spot) else "N/A"
+
+    st.markdown(f"### 📊 {ticker} — Diagnostic Breakdown  ·  {spot_str}")
+    st.divider()
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    # ── Engine 1: Calendar Scoring ──
+    with c1:
+        cs_rec   = row.get("cs_rec", "N/A")
+        cs_score = row.get("cs_score", 0.0)
+        cs_reason = row.get("cs_reason") or "No reason logged"
+        _icon = {"Deploy": "🟢", "Watch": "🟡", "Monitor": "🔵", "Avoid": "🔴", "Filtered": "⚫"}
+        st.markdown(f"**📅 Calendar Scoring Engine**")
+        st.markdown(f"{_icon.get(cs_rec,'⚪')} **{cs_rec}** — Score: `{cs_score:.0f}/100`")
+        st.caption(f"Reason: {cs_reason}")
+
+    # ── Engine 2: Price Action ──
+    with c2:
+        pa_rec   = row.get("pa_rec", "N/A")
+        pa_disp  = row.get("pa_display_rec", "N/A")
+        pa_score = row.get("pa_score", 0.0)
+        atr_pct  = row.get("atr_pct", 0.0)
+        dte      = row.get("days_to_earnings", 999)
+        opt_liq  = row.get("options_liq", "N/A")
+        opt_sprd = row.get("options_spread", 0.0)
+        st.markdown("**📈 Price Action Story Engine**")
+        st.markdown(f"**{pa_disp}** — Score: `{pa_score:.0f}/100`")
+        st.caption(
+            f"ATR %ile: {atr_pct:.1f}%  |  "
+            f"Days to Earnings: {'N/A' if dte >= 999 else f'{dte}d'}  |  "
+            f"Liquidity: {opt_liq}  |  "
+            f"Bid-Ask: {opt_sprd:.2f}%"
+        )
+
+    # ── Engine 3: Regime Intelligence ──
+    with c3:
+        mre_val  = row.get("mre_display_rec", "❌ No")
+        state    = row.get("current_state", "N/A")
+        bear1d   = row.get("bear_prob_1d", 0.0)
+        sticky   = row.get("stickiness_score", 0.0)
+        rv       = row.get("realized_vol", 0.0)
+        mre_fdts = row.get("mre_fdts", "Neutral")
+        st.markdown("**🧠 Regime Intelligence Dashboard**")
+        st.markdown(f"**{mre_val}** — State: `{state}`")
+        st.caption(
+            f"Bear Prob (1d): {bear1d:.2f}  |  "
+            f"Stickiness: {sticky:.2f}  |  "
+            f"Realized Vol: {rv:.2f}  |  "
+            f"FDTS: {mre_fdts}"
+        )
+
+    # ── Engine 4: Options Flow ──
+    with c4:
+        ol_bias  = row.get("ol_bias", "N/A")
+        opt_vol  = row.get("options_volume", 0)
+        opt_oi   = row.get("options_oi", 0)
+        call_vol = row.get("options_call_volume", 0.0)
+        put_vol  = row.get("options_put_volume", 0.0)
+        pcr      = row.get("options_pcr", 0.0)
+        st.markdown("**📊 Options Flow Bias**")
+        st.markdown(f"**{ol_bias}** — PCR: `{pcr:.2f}`")
+        st.caption(
+            f"Total Vol: {opt_vol:,}  |  OI: {opt_oi:,}  |  "
+            f"Calls: {call_vol:,.0f}  |  Puts: {put_vol:,.0f}"
+        )
+
+    st.divider()
+
+
+def render_matrix_native(filtered_df: pd.DataFrame) -> None:
+    """
+    Render the consolidated strategy matrix using Streamlit's native st.dataframe
+    with a pandas Styler for cell-level coloring and row-click detail panel.
+    """
+    display_df = build_display_df(filtered_df)
+
+    show_cols = [
+        "Ticker", "Price", "Net Change", "ATR", "Strength",
+        "Earnings Date", "FDTS Signal", "Cal. Score", "Price Action",
+        "Regime Setup", "Options Bias",
+    ]
+    df_show = display_df[show_cols].reset_index(drop=True)
+
+    styled = df_show.style.apply(_apply_matrix_styles, axis=None)
+
+    # Fixed height: 15 rows visible (15 × 35px + 48px header)
+    table_height = 573
+
+    st.caption("💡 Click any row to see the full 4-engine diagnostic breakdown below the table.")
+
+    event = st.dataframe(
+        styled,
+        use_container_width=True,
+        hide_index=True,
+        height=table_height,
+        on_select="rerun",
+        selection_mode="single-row",
+        column_config={
+            "Ticker": st.column_config.TextColumn(
+                "Ticker", width="small", help="Ticker symbol",
+            ),
+            "Price": st.column_config.TextColumn(
+                "Price", width="small", help="Current spot price",
+            ),
+            "Net Change": st.column_config.TextColumn(
+                "Net Change", width="medium",
+                help="Daily price change — green = up, red = down",
+            ),
+            "ATR": st.column_config.TextColumn(
+                "ATR (14d)", width="small",
+                help="14-day Average True Range",
+            ),
+            "Strength": st.column_config.TextColumn(
+                "Strength", width="small",
+                help="15-day price strength  ▲ Uptrend | ▶ Sideways | ▼ Downtrend",
+            ),
+            "Earnings Date": st.column_config.TextColumn(
+                "Earnings Date", width="medium",
+                help="🔴 = within 20 days (risk)  🟡 = 21–40 days (caution)",
+            ),
+            "FDTS Signal": st.column_config.TextColumn(
+                "FDTS Signal", width="small",
+                help="FazDane Trend Signal — Buy | Sell | No Trade",
+            ),
+            "Cal. Score": st.column_config.TextColumn(
+                "Calendar Scoring Engine", width="medium",
+                help="🟢 Deploy  🟡 Watch  🔵 Monitor  🔴 Avoid  ⚫ Filtered",
+            ),
+            "Price Action": st.column_config.TextColumn(
+                "Price Action (Action)", width="large",
+                help="Price Action Story Engine stage — click row for full breakdown",
+            ),
+            "Regime Setup": st.column_config.TextColumn(
+                "Regime Setup", width="small",
+                help="✅ Yes = regime approves calendar  ❌ No = unfavorable regime",
+            ),
+            "Options Bias": st.column_config.TextColumn(
+                "Options Flow Bias", width="medium",
+                help="Options flow bias — Call Heavy | Put Heavy | Balanced",
+            ),
+        },
+    )
+
+    # ── Row-click detail panel ──
+    selected_rows = []
+    try:
+        selected_rows = event.selection.rows
+    except Exception:
+        pass
+
+    if selected_rows:
+        idx = selected_rows[0]
+        if idx < len(filtered_df):
+            selected_raw = filtered_df.reset_index(drop=True).iloc[idx]
+            _render_detail_panel(selected_raw)
+
+
 class CalendarRotationModule(FazDaneModule):
     MODULE_NAME = "Calendar Strategy Matrix"
     MODULE_ICON = "📅"
@@ -496,6 +954,7 @@ class CalendarRotationModule(FazDaneModule):
     CACHE_TTL = 3600
     REQUIRES_LIVE_DATA = True
     DATA_SOURCES = ["yfinance", "calendar_scoring_sqlite", "price_action_story_sqlite"]
+
 
     def render_sidebar(self):
         st.markdown("**Watchlist**")
@@ -620,116 +1079,7 @@ class CalendarRotationModule(FazDaneModule):
             if filtered_df.empty:
                 st.info("No tickers match the active recommendation filters.")
             else:
-                # Format displaying dataframe
-                display_df = filtered_df.copy()
-                display_df["FDTS"] = display_df["fdts_signal"].apply(format_fdts_emoji)
-                display_df["Strength"] = display_df["strength_pct"].apply(lambda p: format_strength_meter(p)[0])
-                
-                display_df = display_df[[
-                    "ticker", "Strength", "earnings_date", "FDTS", "cs_rec", "pa_display_rec", "mre_display_rec", "ol_bias"
-                ]]
-                
-                display_df.columns = [
-                    "Ticker", "Strength", "Earnings Date", "FDTS Signal", 
-                    "Calendar Scoring Engine", 
-                    "Price Action (Action)", 
-                    "Regime Calendar Setup",
-                    "Options Flow Bias"
-                ]
-
-                # Conditional styling function for Styler
-                def style_cells(row):
-                    styles = {col: "" for col in row.index}
-                    
-                    # 1. Earnings Date
-                    ed_val = row["Earnings Date"]
-                    if ed_val and ed_val != "N/A":
-                        try:
-                            ed_dt = datetime.strptime(ed_val, "%Y-%m-%d").date()
-                            today_dt = datetime.now().date()
-                            days_diff = (ed_dt - today_dt).days
-                            if days_diff >= 0:
-                                if days_diff <= 20:
-                                    styles["Earnings Date"] = "background-color: rgba(220,38,38,0.20); color: #ef4444; font-weight: bold;"
-                                elif days_diff <= 40:
-                                    styles["Earnings Date"] = "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;"
-                        except Exception:
-                            pass
-                    
-                    # 2. Strength
-                    st_val = row["Strength"]
-                    if st_val == "▲":
-                        styles["Strength"] = "color: #00D4AA; font-weight: bold; text-align: center; font-size: 14px;"
-                    elif st_val == "▼":
-                        styles["Strength"] = "color: #FF4B4B; font-weight: bold; text-align: center; font-size: 14px;"
-                    elif st_val == "▶":
-                        styles["Strength"] = "color: #FFA421; font-weight: bold; text-align: center; font-size: 14px;"
-                    else:
-                        styles["Strength"] = "color: #94a3b8; text-align: center;"
-
-                    # 3. FDTS Signal
-                    fdts_val = row["FDTS Signal"]
-                    if "Buy" in fdts_val:
-                        styles["FDTS Signal"] = "color: #22c55e; font-weight: bold;"
-                    elif "Sell" in fdts_val:
-                        styles["FDTS Signal"] = "color: #ef4444; font-weight: bold;"
-                    else:
-                        styles["FDTS Signal"] = "color: #94a3b8;"
-                        
-                    # 4. Scoring Engine
-                    cs_val = row["Calendar Scoring Engine"]
-                    cs_colors = {
-                        "Deploy": "background-color: rgba(58,181,74,0.20); color: #3ab54a; font-weight: bold;",
-                        "Watch": "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;",
-                        "Monitor": "background-color: rgba(2,132,199,0.15); color: #0284c7;",
-                        "Avoid": "background-color: rgba(220,38,38,0.15); color: #ef4444;",
-                        "Filtered": "background-color: rgba(100,116,139,0.15); color: #64748b; text-decoration: line-through;"
-                    }
-                    if cs_val in cs_colors:
-                        styles["Calendar Scoring Engine"] = cs_colors[cs_val]
-                        
-                    # 5. Price Action Action Column
-                    pa_val = row["Price Action (Action)"]
-                    if "Deploy Calendar" in str(pa_val):
-                        if "Watch Spread" in str(pa_val):
-                            styles["Price Action (Action)"] = "background-color: rgba(34,197,94,0.12); color: #86efac; font-weight: bold;"
-                        else:
-                            styles["Price Action (Action)"] = "background-color: rgba(34,197,94,0.22); color: #22c55e; font-weight: bold;"
-                    elif "Watch (Earnings" in str(pa_val):
-                        styles["Price Action (Action)"] = "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;"
-                    elif "Avoid" in str(pa_val):
-                        styles["Price Action (Action)"] = "background-color: rgba(220,38,38,0.15); color: #ef4444; font-weight: bold;"
-                    elif pa_val in ["Early Bull / Expansion", "Strong Bull"]:
-                        styles["Price Action (Action)"] = "background-color: rgba(34,197,94,0.10); color: #4ade80;"
-                    elif pa_val in ["Mature Bull"]:
-                        styles["Price Action (Action)"] = "background-color: rgba(234,179,8,0.12); color: #eab308;"
-                    elif pa_val in ["Fading Bull", "Distribution", "Breakdown"]:
-                        styles["Price Action (Action)"] = "background-color: rgba(239,68,68,0.12); color: #f87171;"
-                        
-                    # 6. Regime Calendar Setup
-                    mre_val = row["Regime Calendar Setup"]
-                    if mre_val == "✅ Yes":
-                        styles["Regime Calendar Setup"] = "background-color: rgba(34,197,94,0.22); color: #22c55e; font-weight: bold;"
-                    elif mre_val == "❌ No":
-                        styles["Regime Calendar Setup"] = "background-color: rgba(220,38,38,0.12); color: #f87171;"
-                        
-                    # 7. Options Flow Bias
-                    ol_val = row["Options Flow Bias"]
-                    if "Put Heavy" in str(ol_val):
-                        styles["Options Flow Bias"] = "background-color: rgba(220,38,38,0.20); color: #ef4444; font-weight: bold;"
-                    elif "Slight Put" in str(ol_val):
-                        styles["Options Flow Bias"] = "background-color: rgba(255,184,0,0.15); color: #ffb800; font-weight: bold;"
-                    elif "Call Heavy" in str(ol_val):
-                        styles["Options Flow Bias"] = "background-color: rgba(34,197,94,0.18); color: #22c55e; font-weight: bold;"
-                    elif "Balanced" in str(ol_val):
-                        styles["Options Flow Bias"] = "color: #94a3b8;"
-                    else:
-                        styles["Options Flow Bias"] = "color: #64748b; font-style: italic;"
-                        
-                    return [styles[col] for col in row.index]
-                    
-                styled_df = display_df.style.apply(style_cells, axis=1)
-                st.dataframe(styled_df, use_container_width=True, hide_index=True, height=800)
+                render_matrix_native(filtered_df)
 
         # ── TAB 2: RRG Rotation Matrix (Backed up visualizations) ────────────
         with tab_rrg:
