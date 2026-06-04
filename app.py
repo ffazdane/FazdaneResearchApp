@@ -848,16 +848,14 @@ with st.sidebar:
         )
 
         tier1_options = [
-        TIER1_DEFAULT,
-        "Options Liquidity Discovery",
-        "Market Breadth Dashboard",
-        "Calendar Strategy Matrix",
-        "Iron Condor Analyzer",
-        "ES Pivot Analysis",
-        "Sector Rotation Monitor",
+            TIER1_DEFAULT,
+            "Search Module",
+            "Market Breadth Dashboard",
+            "Calendar Strategy Matrix",
+            "Iron Condor Analyzer",
+            "ES Pivot Analysis",
+            "Sector Rotation Monitor",
         ]
-        if "Option Search Universe Engine" not in tier1_options:
-            tier1_options.insert(1, "Option Search Universe Engine")
 
         tier1_sel = st.radio(
             "tier1",
@@ -875,8 +873,7 @@ with st.sidebar:
         tier2_options = [
             TIER2_DEFAULT,
             "Universe Intelligence System",
-            "Portfolio Performance",
-            "Portfolio Performance & Risk Management",
+            "Portfolio Module",
             "Multi-Timeframe Money Flow",
             "Market Structure Heatmap",
             "Correlation Matrix",
@@ -1027,17 +1024,11 @@ if active_module.startswith("__MENU_TIER_"):
             if st.button(option, key=f"back_menu_{menu_tier}_{index}", use_container_width=True):
                 launch_module(option, menu_tier)
 
-elif active_module == "Option Search Universe Engine":
-    from modules.tier1.option_search import OptionSearchModule
-    module = OptionSearchModule()
+elif active_module == "Search Module":
+    from modules.tier1.search_module import SearchModule
+    module = SearchModule()
     module.run()
-    logger.info(f"User {user['username']} -> Option Search Universe Engine")
-
-elif active_module == "Options Liquidity Discovery":
-    from modules.tier1.options_liquidity import OptionsLiquidityModule
-    module = OptionsLiquidityModule()
-    module.run()
-    logger.info(f"Options Liquidity Discovery")
+    logger.info(f"User {user['username']} -> Search Module")
 
 elif active_module == "Market Breadth Dashboard":
     from modules.tier1.market_breadth import MarketBreadthModule
@@ -1075,27 +1066,11 @@ elif active_module == "Multi-Timeframe Money Flow":
     module.run()
     logger.info(f"User {user['username']}  Money Flow")
 
-elif active_module == "Portfolio Performance":
-    try:
-        from modules.tier2.portfolio_performance import PortfolioPerformanceModule
-        module = PortfolioPerformanceModule()
-        module.run()
-        logger.info("Portfolio Performance")
-    except Exception as e:
-        import traceback
-        st.error(f"Failed to load Portfolio Performance: {e}")
-        st.code(traceback.format_exc())
-
-elif active_module == "Portfolio Performance & Risk Management":
-    try:
-        from modules.tier2.portfolio_risk_management import PortfolioRiskManagementModule
-        module = PortfolioRiskManagementModule()
-        module.run()
-        logger.info("Portfolio Performance & Risk Management")
-    except Exception as e:
-        import traceback
-        st.error(f"Failed to load Portfolio Performance & Risk Management: {e}")
-        st.code(traceback.format_exc())
+elif active_module == "Portfolio Module":
+    from modules.tier2.portfolio_module import PortfolioModule
+    module = PortfolioModule()
+    module.run()
+    logger.info(f"User {user['username']} -> Portfolio Module")
 
 elif active_module == "Market Structure Heatmap":
     from modules.tier2.market_structure import MarketStructureModule
@@ -1258,8 +1233,7 @@ else:
         {
             "label": "Live Trading",
             "items": [
-                {"label": "Option Search Universe Engine", "module": "Option Search Universe Engine", "tier": 1, "key": "macro_option_search"},
-                {"label": "Options Liquidity Discovery", "module": "Options Liquidity Discovery", "tier": 1, "key": "macro_options_liquidity"},
+                {"label": "Search Module", "module": "Search Module", "tier": 1, "key": "macro_search_module"},
                 {"label": "Market Breadth Dashboard", "module": "Market Breadth Dashboard", "tier": 1, "key": "macro_market_breadth"},
                 {"label": "Sector Rotation Monitor", "module": "Sector Rotation Monitor", "tier": 1, "key": "macro_sector_rotation"},
                 {"label": "Calendar Strategy Matrix", "module": "Calendar Strategy Matrix", "tier": 1, "key": "macro_calendar_strategy"},
@@ -1271,8 +1245,7 @@ else:
             "label": "Analysis & Intelligence",
             "items": [
                 {"label": "Universe Intelligence System", "module": "Universe Intelligence System", "tier": 2, "key": "macro_universe_intelligence"},
-                {"label": "Portfolio Performance", "module": "Portfolio Performance", "tier": 2, "key": "macro_portfolio_performance"},
-                {"label": "Portfolio Risk Management", "module": "Portfolio Performance & Risk Management", "tier": 2, "key": "macro_portfolio_risk"},
+                {"label": "Portfolio Module", "module": "Portfolio Module", "tier": 2, "key": "macro_portfolio_module"},
                 {"label": "Multi-Timeframe Money Flow", "module": "Multi-Timeframe Money Flow", "tier": 2, "key": "macro_money_flow"},
                 {"label": "Market Structure Heatmap", "module": "Market Structure Heatmap", "tier": 2, "key": "macro_market_structure"},
                 {"label": "Correlation Matrix", "module": "Correlation Matrix", "tier": 2, "key": "macro_correlation"},

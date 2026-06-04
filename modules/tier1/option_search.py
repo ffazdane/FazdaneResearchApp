@@ -340,7 +340,7 @@ class OptionSearchModule(FazDaneModule):
             # ETFs
             "SPY", "QQQ", "IWM", "DIA", "GLD", "SLV", "TLT", "SMH", "EEM", "FXI", "GDX", "GDXJ",
             "XLE", "XLF", "XLK", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE", "XOP", "KRE",
-            "ARKK", "USO", "UNG", "TQQQ", "SQQQ", "SOXL", "SOXS",
+            "ARKK", "USO", "UNG",
             # Megacap / Growth / Liquid Stocks
             "AAPL", "MSFT", "NVDA", "AMZN", "TSLA", "GOOGL", "GOOG", "META", "NFLX", "AMD", "AVGO",
             "COIN", "MSTR", "HOOD", "PLTR", "CRM", "ADBE", "ORCL", "CRWD", "PANW", "JPM", "GS",

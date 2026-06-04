@@ -12,6 +12,22 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 DB_PATH = os.getenv("OPTION_SEARCH_DB_PATH", os.path.join(REPO_ROOT, "data", "option_search.db"))
 
 
+LEVERAGED_BLOCKLIST = {
+    # 3x / 2x / Inverse Index ETFs
+    "TQQQ", "SQQQ", "UPRO", "SPXL", "SPXS", "TNA", "TZA", "FAS", "FAZ", "SDOW", "UDOW", "SRTY", "URTY",
+    # Sector Leveraged
+    "SOXL", "SOXS", "LABU", "LABD", "TECL", "TECS", "DRN", "DRV", "CURE", "SICK", "WANT", "PASS",
+    # Commodities/Energy Leveraged
+    "BOIL", "KOLD", "UCO", "SCO", "GUSH", "DRIP", "NUGT", "DUST", "JNUG", "JDST", "USLV", "DSLV",
+    # Volatility / VIX
+    "UVIX", "UVXY", "SVXY", "VIXY", "VXX",
+    # Country Leveraged
+    "YINN", "YANG", "INDL", "EURL", "EDC", "EDZ", "CHAU", "CHAD",
+    # Single-stock Leveraged & Crypto
+    "BITO", "BITX", "CONL", "MSTY", "NVDL", "TSLL", "AAPU", "AMZU", "GGLL", "MSFU", "NVDU"
+}
+
+
 def init_option_search_db():
     """Create database folder and all tables if missing."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -123,6 +139,41 @@ def init_option_search_db():
     );
     """)
 
+    # Migration: Add columns to option_ticker_universe if they don't exist
+    new_cols = [
+        ("source_module", "TEXT"),
+        ("source_strategy", "TEXT"),
+        ("pullback_score", "REAL"),
+        ("momentum_score", "REAL"),
+        ("base_score", "REAL"),
+        ("support_confluence_score", "REAL"),
+        ("ema_reclaim_score", "REAL"),
+        ("compression_score", "REAL"),
+        ("risk_efficiency_score", "REAL"),
+        ("risk_pct", "REAL"),
+        ("support_zone_low", "REAL"),
+        ("support_zone_high", "REAL"),
+        ("nearest_support_type", "TEXT"),
+        ("avwap_distance_pct", "REAL"),
+        ("ema_9_distance_pct", "REAL"),
+        ("ema_21_distance_pct", "REAL"),
+        ("setup_status", "TEXT"),
+        ("last_detected_date", "TEXT"),
+        ("final_universe_score", "REAL")
+    ]
+    for col_name, col_type in new_cols:
+        try:
+            cursor.execute(f"ALTER TABLE option_ticker_universe ADD COLUMN {col_name} {col_type};")
+        except sqlite3.OperationalError:
+            pass
+
+    # Clean up existing leveraged/inverse tickers from DB tables
+    leveraged_list = list(LEVERAGED_BLOCKLIST)
+    placeholders = ",".join("?" for _ in leveraged_list)
+    cursor.execute(f"DELETE FROM option_ticker_universe WHERE ticker IN ({placeholders});", leveraged_list)
+    cursor.execute(f"DELETE FROM option_ticker_score_history WHERE ticker IN ({placeholders});", leveraged_list)
+    cursor.execute(f"DELETE FROM option_contract_history WHERE ticker IN ({placeholders});", leveraged_list)
+
     conn.commit()
     conn.close()
     logger.info("Database initialized successfully.")
@@ -166,6 +217,8 @@ def save_ticker_summary(run_id, summary_df):
 
     for _, row_data in summary_df.iterrows():
         ticker = str(row_data["Ticker"]).upper()
+        if ticker in LEVERAGED_BLOCKLIST:
+            continue
         underlying_price = float(row_data["Underlying Price"])
         qualified_contracts = int(row_data["Qualified Contracts"])
         total_option_volume = float(row_data["Total Option Volume"]) if pd.notna(row_data["Total Option Volume"]) else 0.0
@@ -265,6 +318,8 @@ def save_contract_history(run_id, contracts_df):
 
     for _, row_data in contracts_df.iterrows():
         ticker = str(row_data["ticker"]).upper()
+        if ticker in LEVERAGED_BLOCKLIST:
+            continue
         underlying_price = float(row_data["underlying_price"])
         expiration = str(row_data["expiration"])
         dte = int(row_data["DTE"])
@@ -512,4 +567,117 @@ def get_contracts_from_db(ticker=None):
         if "dte" in df.columns:
             df["DTE"] = df["dte"]
     return df
+
+
+def upsert_pullback_ticker(ticker, trade_date, result_dict):
+    """Upsert ticker pullback metrics into option_ticker_universe table."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    ticker = str(ticker).upper()
+    if ticker in LEVERAGED_BLOCKLIST:
+        conn.close()
+        return
+    price = float(result_dict.get("last_price", 0.0))
+    pullback_score = float(result_dict.get("pullback_score", 0.0))
+    momentum_score = float(result_dict.get("momentum_score", 0.0))
+    base_score = float(result_dict.get("base_score", 0.0))
+    support_confluence_score = float(result_dict.get("support_confluence_score", 0.0))
+    ema_reclaim_score = float(result_dict.get("ema_reclaim_score", 0.0))
+    compression_score = float(result_dict.get("compression_score", 0.0))
+    risk_efficiency_score = float(result_dict.get("risk_efficiency_score", 0.0))
+    risk_pct = float(result_dict.get("risk_pct", 0.0))
+    support_zone_low = float(result_dict.get("support_zone_low", 0.0))
+    support_zone_high = float(result_dict.get("support_zone_high", 0.0))
+    nearest_support_type = str(result_dict.get("nearest_support_type", ""))
+    avwap_distance_pct = float(result_dict.get("avwap_distance_pct", 0.0))
+    ema_9_distance_pct = float(result_dict.get("ema_9_distance_pct", 0.0))
+    ema_21_distance_pct = float(result_dict.get("ema_21_distance_pct", 0.0))
+    setup_status = str(result_dict.get("setup_status", "WATCH"))
+    
+    # Check if ticker already exists to set first_seen_date
+    cursor.execute("SELECT first_seen_date FROM option_ticker_universe WHERE ticker = ?;", (ticker,))
+    row = cursor.fetchone()
+    first_seen = row[0] if row else trade_date
+
+    cursor.execute("""
+    INSERT INTO option_ticker_universe (
+        ticker, first_seen_date, last_seen_date, last_price,
+        source_module, source_strategy, pullback_score, momentum_score,
+        base_score, support_confluence_score, ema_reclaim_score,
+        compression_score, risk_efficiency_score, risk_pct,
+        support_zone_low, support_zone_high, nearest_support_type,
+        avwap_distance_pct, ema_9_distance_pct, ema_21_distance_pct,
+        setup_status, last_detected_date, active_flag
+    ) VALUES (?, ?, ?, ?, 'Ticker Pullback Strategy', 'Ticker Pullback Strategy', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    ON CONFLICT(ticker) DO UPDATE SET
+        last_seen_date = excluded.last_seen_date,
+        last_price = excluded.last_price,
+        source_module = excluded.source_module,
+        source_strategy = excluded.source_strategy,
+        pullback_score = excluded.pullback_score,
+        momentum_score = excluded.momentum_score,
+        base_score = excluded.base_score,
+        support_confluence_score = excluded.support_confluence_score,
+        ema_reclaim_score = excluded.ema_reclaim_score,
+        compression_score = excluded.compression_score,
+        risk_efficiency_score = excluded.risk_efficiency_score,
+        risk_pct = excluded.risk_pct,
+        support_zone_low = excluded.support_zone_low,
+        support_zone_high = excluded.support_zone_high,
+        nearest_support_type = excluded.nearest_support_type,
+        avwap_distance_pct = excluded.avwap_distance_pct,
+        ema_9_distance_pct = excluded.ema_9_distance_pct,
+        ema_21_distance_pct = excluded.ema_21_distance_pct,
+        setup_status = excluded.setup_status,
+        last_detected_date = excluded.last_detected_date,
+        active_flag = 1;
+    """, (
+        ticker, first_seen, trade_date, price,
+        pullback_score, momentum_score, base_score, support_confluence_score,
+        ema_reclaim_score, compression_score, risk_efficiency_score, risk_pct,
+        support_zone_low, support_zone_high, nearest_support_type,
+        avwap_distance_pct, ema_9_distance_pct, ema_21_distance_pct,
+        setup_status, trade_date
+    ))
+    conn.commit()
+    conn.close()
+
+
+def get_pullback_candidates(status=None):
+    """Retrieve pullback candidates from database, optionally filtered by setup_status."""
+    if not os.path.exists(DB_PATH):
+        return pd.DataFrame()
+    conn = sqlite3.connect(DB_PATH)
+    if status:
+        df = pd.read_sql_query(
+            "SELECT * FROM option_ticker_universe WHERE pullback_score IS NOT NULL AND setup_status = ? ORDER BY pullback_score DESC;",
+            conn,
+            params=(status,)
+        )
+    else:
+        df = pd.read_sql_query(
+            "SELECT * FROM option_ticker_universe WHERE pullback_score IS NOT NULL ORDER BY pullback_score DESC;",
+            conn
+        )
+    conn.close()
+    return df
+
+
+def refresh_final_universe_scores():
+    """Recompute final_universe_score for all rows."""
+    if not os.path.exists(DB_PATH):
+        return
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+    UPDATE option_ticker_universe
+    SET final_universe_score = 
+        0.35 * COALESCE(last_option_score, 0.0) + 
+        0.30 * COALESCE(pullback_score, 0.0) + 
+        0.20 * COALESCE(last_liquidity_score, 0.0) + 
+        0.15 * (1.0 - COALESCE(risk_pct, 0.0));
+    """)
+    conn.commit()
+    conn.close()
 
