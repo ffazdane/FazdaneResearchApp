@@ -45,6 +45,10 @@ DATABASES = {
         "env_var": "PRICE_ACTION_STORY_DB_PATH",
         "default_path": REPO_ROOT / "data" / "price_action_story" / "price_action_story.sqlite",
     },
+    "trade_recommendation": {
+        "env_var": "TRADE_RECOMMENDATION_DB_PATH",
+        "default_path": REPO_ROOT / "data" / "trade_recommendation" / "trade_recommendation.sqlite",
+    },
 }
 
 BACKUP_DIR = REPO_ROOT / "data" / "backups"

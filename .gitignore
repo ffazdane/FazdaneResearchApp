@@ -63,5 +63,9 @@ data/calendar_scoring_test.sqlite
 data/calendar_scoring_test.sqlite-*
 data/price_action_story/*.sqlite
 data/price_action_story/*.sqlite-*
+data/trade_recommendation/*.sqlite
+data/trade_recommendation/*.sqlite-*
+data/trade_recommendation_test.sqlite
+data/trade_recommendation_test.sqlite-*
 
 

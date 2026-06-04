@@ -133,51 +133,58 @@ st.session_state["theme_colors"] = theme_colors
 
 #
 # PLOTLY THEME MONKEY-PATCHING
+# Originals are stored as class attributes so they survive Streamlit reruns
+# and never accidentally point to the already-patched version (causing recursion).
 #
 try:
     import plotly.graph_objects as go
-    
-    _original_init = go.Figure.__init__
-    _original_update_layout = go.Figure.update_layout
 
-    def custom_init(self, *args, **kwargs):
-        _original_init(self, *args, **kwargs)
-        theme = st.session_state.get("theme_colors")
-        if theme and hasattr(self, "layout") and self.layout is not None:
-            bg_color = theme.get("bg_color")
-            template = theme.get("plotly_template", "plotly_dark")
-            self.layout.template = template
-            if self.layout.paper_bgcolor == "#0d1b2e":
-                self.layout.paper_bgcolor = bg_color
-            if self.layout.plot_bgcolor == "#0d1b2e":
-                self.layout.plot_bgcolor = bg_color
+    if not hasattr(go.Figure, "_true_original_init"):
+        # First time only: stash the real originals on the class itself
+        go.Figure._true_original_init = go.Figure.__init__
+        go.Figure._true_original_update_layout = go.Figure.update_layout
 
-    def custom_update_layout(self, *args, **kwargs):
-        theme = st.session_state.get("theme_colors")
-        if theme:
-            bg_color = theme.get("bg_color")
-            template = theme.get("plotly_template", "plotly_dark")
-            
-            if "template" in kwargs:
-                kwargs["template"] = template
-                
-            for key in ["paper_bgcolor", "plot_bgcolor"]:
-                if key in kwargs and kwargs[key] == "#0d1b2e":
-                    kwargs[key] = bg_color
-                    
-            for arg in args:
-                if isinstance(arg, dict):
-                    if arg.get("template") is not None:
-                        arg["template"] = template
+        def custom_init(self, *args, **kwargs):
+            # Always call via the class attribute, never via a closure variable
+            go.Figure._true_original_init(self, *args, **kwargs)
+            try:
+                theme = st.session_state.get("theme_colors")
+                if theme and hasattr(self, "layout") and self.layout is not None:
+                    bg_color = theme.get("bg_color")
+                    template = theme.get("plotly_template", "plotly_dark")
+                    self.layout.template = template
+                    if self.layout.paper_bgcolor == "#0d1b2e":
+                        self.layout.paper_bgcolor = bg_color
+                    if self.layout.plot_bgcolor == "#0d1b2e":
+                        self.layout.plot_bgcolor = bg_color
+            except Exception:
+                pass
+
+        def custom_update_layout(self, *args, **kwargs):
+            try:
+                theme = st.session_state.get("theme_colors")
+                if theme:
+                    bg_color = theme.get("bg_color")
+                    template = theme.get("plotly_template", "plotly_dark")
+                    if "template" in kwargs:
+                        kwargs["template"] = template
                     for key in ["paper_bgcolor", "plot_bgcolor"]:
-                        if arg.get(key) == "#0d1b2e":
-                            arg[key] = bg_color
-                            
-        return _original_update_layout(self, *args, **kwargs)
+                        if key in kwargs and kwargs[key] == "#0d1b2e":
+                            kwargs[key] = bg_color
+                    for arg in args:
+                        if isinstance(arg, dict):
+                            if arg.get("template") is not None:
+                                arg["template"] = template
+                            for key in ["paper_bgcolor", "plot_bgcolor"]:
+                                if arg.get(key) == "#0d1b2e":
+                                    arg[key] = bg_color
+            except Exception:
+                pass
+            return go.Figure._true_original_update_layout(self, *args, **kwargs)
 
-    go.Figure.__init__ = custom_init
-    go.Figure.update_layout = custom_update_layout
-except Exception as e:
+        go.Figure.__init__ = custom_init
+        go.Figure.update_layout = custom_update_layout
+except Exception:
     pass
 
 
@@ -681,6 +688,13 @@ if "db_initialized" not in st.session_state:
                 st.session_state["db_restore_err"] = f"Failed: {', '.join(failed)}"
         # Ensure volatility cache tables exist after databases are restored
         initialize_volatility_cache_tables()
+        
+        # Ensure trade recommendation database and tables exist on startup
+        try:
+            from modules.trade_recommendation.database import create_tables as create_trade_tables
+            create_trade_tables()
+        except Exception as e:
+            logger.warning(f"Failed to initialize trade recommendation database: {e}")
     except ImportError as exc:
         logger.exception("Database persistence import failed")
         st.session_state["db_restore_err"] = f"Database persistence unavailable: {exc}"
@@ -851,6 +865,7 @@ with st.sidebar:
             TIER1_DEFAULT,
             "Search Module",
             "Market Breadth Dashboard",
+            "Trade Intelligence Engine",
             "Calendar Strategy Matrix",
             "Iron Condor Analyzer",
             "ES Pivot Analysis",
@@ -1136,6 +1151,17 @@ elif active_module == "Calendar Opportunity Scoring Engine":
         st.error(f"Failed to load Calendar Opportunity Scoring Engine: {e}")
         st.code(traceback.format_exc())
 
+elif active_module == "Trade Intelligence Engine":
+    try:
+        from modules.trade_recommendation.engine import TradeRecommendationEngineModule
+        module = TradeRecommendationEngineModule()
+        module.run()
+        logger.info("Trade Intelligence Engine")
+    except Exception as e:
+        import traceback
+        st.error(f"Failed to load Trade Intelligence Engine: {e}")
+        st.code(traceback.format_exc())
+
 elif active_module == "Price Action Story Engine":
     try:
         from modules.tier2.price_action_story import PriceActionStoryModule
@@ -1236,6 +1262,7 @@ else:
                 {"label": "Search Module", "module": "Search Module", "tier": 1, "key": "macro_search_module"},
                 {"label": "Market Breadth Dashboard", "module": "Market Breadth Dashboard", "tier": 1, "key": "macro_market_breadth"},
                 {"label": "Sector Rotation Monitor", "module": "Sector Rotation Monitor", "tier": 1, "key": "macro_sector_rotation"},
+                {"label": "Trade Intelligence Engine", "module": "Trade Intelligence Engine", "tier": 1, "key": "macro_trade_recommendation"},
                 {"label": "Calendar Strategy Matrix", "module": "Calendar Strategy Matrix", "tier": 1, "key": "macro_calendar_strategy"},
                 {"label": "Iron Condor Analyzer", "module": "Iron Condor Analyzer", "tier": 1, "key": "macro_iron_condor"},
                 {"label": "ES Pivot Analysis", "module": "ES Pivot Analysis", "tier": 1, "key": "macro_es_pivot"},
