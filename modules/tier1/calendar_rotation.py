@@ -491,6 +491,7 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     
     atr_pct_list = []
     days_to_earnings_list = []
+    resolved_earnings_dates = []
     liq_list = []
     spread_pct_list = []
     opt_volume_list = []
@@ -533,13 +534,21 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
         opt_put_vol_list.append(put_vol)
         opt_pcr_list.append(pcr)
             
-        # Retrieve earnings
-        earn_date_str = earnings_dates.get(sym, "None")
+        # Retrieve earnings: check fresh store first, then fallback to existing DB row
+        earn_date_str = earnings_dates.get(sym)
+        if not earn_date_str or earn_date_str == "None":
+            earn_date_str = row.get("earnings_date")
+        
+        if pd.isnull(earn_date_str) or earn_date_str == "None" or str(earn_date_str).strip() == "":
+            earn_date_str = "N/A"
+            
+        resolved_earnings_dates.append(earn_date_str)
+        
         days_to_earnings = 999
-        if earn_date_str != "None":
+        if earn_date_str != "N/A":
             try:
                 earn_date = datetime.strptime(earn_date_str, "%Y-%m-%d")
-                days_to_earnings = (earn_date - datetime.today()).days
+                days_to_earnings = (earn_date.date() - datetime.now().date()).days
                 if days_to_earnings < 0:
                     days_to_earnings = 999  # past event, no upcoming risk
             except Exception:
@@ -582,6 +591,7 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     merged["pa_display_rec"] = pa_display_recs
     merged["mre_display_rec"] = mre_display_recs
     merged["atr_pct"] = atr_pct_list
+    merged["earnings_date"] = resolved_earnings_dates
     merged["days_to_earnings"] = days_to_earnings_list
     merged["options_liq"] = liq_list
     merged["options_spread"] = spread_pct_list
@@ -669,9 +679,9 @@ def build_display_df(df: pd.DataFrame) -> pd.DataFrame:
 
         # ── Earnings Date ──
         ed_val = row.get("earnings_date") or "N/A"
-        if ed_val != "N/A":
+        days_diff = row.get("days_to_earnings", 999)
+        if ed_val != "N/A" and pd.notnull(ed_val):
             try:
-                days_diff = (datetime.strptime(ed_val, "%Y-%m-%d").date() - datetime.now().date()).days
                 if 0 <= days_diff <= 20:
                     ed_val = f"🔴 {ed_val}"
                 elif 0 <= days_diff <= 40:
