@@ -420,13 +420,16 @@ def run_forecast_engine(spot_price: float, iv: float, daily_indicators: dict, tr
     
     # Blended Range calculations
     # Weights: Cone (40%), Regression (30%), Darvas (20%), ATR (10%)
-    expected_low = float(0.40 * cone_low + 0.30 * reg_low + 0.20 * darvas_low + 0.10 * atr_low)
+    expected_low  = float(0.40 * cone_low  + 0.30 * reg_low  + 0.20 * darvas_low  + 0.10 * atr_low)
     expected_high = float(0.40 * cone_high + 0.30 * reg_high + 0.20 * darvas_high + 0.10 * atr_high)
+    # Clamp: ensure blended targets never cross spot (no inverted range)
+    expected_high = max(expected_high, spot_price)
+    expected_low  = min(expected_low,  spot_price)
     
     # Expected 40-day path classification
     if "Strong Bull" in trend_state and regime_state == "Trending":
         path = "directional_bullish"
-    elif "Bullish Pullback" in trend_state or regime_state == "Mean Reverting" and "Bull" in trend_state:
+    elif ("Bullish Pullback" in trend_state) or (regime_state == "Mean Reverting" and "Bull" in trend_state):
         path = "mean_reversion_up"
     elif "Bull" in trend_state and regime_state == "Compressed":
         path = "sideways_bullish"

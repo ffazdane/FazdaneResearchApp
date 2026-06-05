@@ -1070,23 +1070,20 @@ class TradeRecommendationEngineModule(FazDaneModule):
 
     def _render_forecast_map(self, data: dict):
         st.markdown("### 40-Day Blended Expected Range & Probability Cone")
-        
+
         df_daily  = data.get("df_daily")
         spot      = data.get("spot_price")
         high_val  = data.get("expected_high")
         low_val   = data.get("expected_low")
         ticker    = data.get("ticker", "")
+        path      = data.get("expected_path", "")
 
         # ── Auto-recover missing chart data from a lightweight yfinance call ──
-        # This happens when the DB cache has spot_price / decision / scores but
-        # the raw DataFrame was not serialised (old snapshots).  We only need
-        # OHLCV history here — no full analysis pipeline needed.
         if (df_daily is None or (hasattr(df_daily, "empty") and df_daily.empty) or spot is None) and ticker:
             try:
                 import yfinance as yf
                 _df = yf.Ticker(ticker).history(period="1y")
                 if not _df.empty:
-                    # Flatten multi-level columns (yfinance sometimes returns them)
                     if isinstance(_df.columns, pd.MultiIndex):
                         _df.columns = _df.columns.droplevel(1)
                     df_daily = _df
@@ -1098,183 +1095,173 @@ class TradeRecommendationEngineModule(FazDaneModule):
         if spot is None or df_daily is None or (hasattr(df_daily, "empty") and df_daily.empty):
             st.info("⚠️ No forecast data available. Please regenerate the analysis for this ticker.")
             return
-        
-        # Create standard deviation bands for plotting
-        days = np.arange(1, 41)
-        # expected range values per day
+
         daily_ind = data.get("daily_indicators") or {}
+        # iv_rank stores annualized IV (mean options-chain IV × 100); divide to get decimal
         iv = (daily_ind.get("iv_rank") or 30.0) / 100.0
-        z = st.session_state.get("re_cone_z", 1.64)
-        
-        upside_cone   = spot + z * spot * iv * np.sqrt(days / 252.0)
-        downside_cone = spot - z * spot * iv * np.sqrt(days / 252.0)
+        z  = st.session_state.get("re_cone_z", 1.64)
 
-        # Derive expected boundaries from cone when missing from DB cache
-        if high_val is None:
-            high_val = float(upside_cone[-1])
-        if low_val is None:
-            low_val = float(downside_cone[-1])
-        
-        # ── Build probability cone curves (σ = IV × √(d/252)) ──────────────
-        # 1σ band (68% probability)
-        sigma1_up   = spot + 1.0 * spot * iv * np.sqrt(days / 252.0)
-        sigma1_down = spot - 1.0 * spot * iv * np.sqrt(days / 252.0)
-        # 2σ band (95% probability)
-        sigma2_up   = spot + 2.0 * spot * iv * np.sqrt(days / 252.0)
-        sigma2_down = spot - 2.0 * spot * iv * np.sqrt(days / 252.0)
+        # ── Expected Path classification badge ───────────────────────────────
+        _path_meta = {
+            "directional_bullish":  ("🟢", "Directional Bullish",     "#22c55e", "rgba(34,197,94,0.12)"),
+            "mean_reversion_up":    ("🔵", "Mean Reversion Up",        "#60a5fa", "rgba(96,165,250,0.12)"),
+            "sideways_bullish":     ("🟡", "Sideways / Bullish Bias",  "#facc15", "rgba(250,204,21,0.12)"),
+            "directional_bearish":  ("🔴", "Directional Bearish",      "#ef4444", "rgba(239,68,68,0.12)"),
+            "sideways_bearish":     ("🟠", "Sideways / Bearish Bias",  "#f97316", "rgba(249,115,22,0.12)"),
+            "volatile_expansion":   ("⚡", "Volatile Expansion",        "#a78bfa", "rgba(167,139,250,0.12)"),
+            "sideways_range":       ("⚪", "Sideways / Range Bound",   "#94a3b8", "rgba(148,163,184,0.12)"),
+            "unclear":              ("❓", "Unclear / Mixed Signals",   "#94a3b8", "rgba(148,163,184,0.12)"),
+        }
+        if path in _path_meta:
+            icon, label, color, bg = _path_meta[path]
+            st.markdown(
+                f"<div style='display:inline-flex;align-items:center;gap:12px;"
+                f"background:{bg};border:1px solid {color}44;border-radius:8px;"
+                f"padding:9px 18px;margin-bottom:14px'>"
+                f"<span style='font-size:22px'>{icon}</span>"
+                f"<div><span style='color:#94a3b8;font-size:10px;text-transform:uppercase;"
+                f"letter-spacing:1.2px'>Expected 40D Path</span>"
+                f"<br><span style='color:{color};font-size:15px;font-weight:700'>{label}</span></div></div>",
+                unsafe_allow_html=True
+            )
 
-        # Render Plotly Chart
+        # ── Trading-day calendar helper ───────────────────────────────────────
+        def _trading_dates(from_date, n):
+            """Return the next n Mon-Fri trading dates after from_date."""
+            dates, cur = [], from_date
+            while len(dates) < n:
+                cur = cur + timedelta(days=1)
+                if cur.weekday() < 5:
+                    dates.append(cur)
+            return dates
+
+        hist_days = df_daily.tail(60)
+        last_date = hist_days.index[-1]
+
+        # 201-point grid (0 … 40 trading days) → smooth curves
+        N  = 201
+        t  = np.linspace(0, 40, N)          # trading days (0 = today)
+
+        # Map to calendar dates by proportional interpolation over ~56 cal days
+        td40       = _trading_dates(last_date, 40)
+        cal_span   = (td40[-1] - last_date).days          # ≈ 56
+        x_dates    = [last_date + timedelta(days=float(ti * cal_span / 40)) for ti in t]
+
+        # σ bands — σ₀ = 0 at t=0 (cone always starts at spot)
+        sigma = np.where(t > 0, spot * iv * np.sqrt(t / 252.0), 0.0)
+
+        s3_up   = spot + 3.0 * sigma;  s3_dn  = spot - 3.0 * sigma
+        s2_up   = spot + 2.0 * sigma;  s2_dn  = spot - 2.0 * sigma
+        s1_up   = spot + 1.0 * sigma;  s1_dn  = spot - 1.0 * sigma
+        s05_up  = spot + 0.5 * sigma;  s05_dn = spot - 0.5 * sigma
+        # z-scaled edge (user-controlled from sidebar slider)
+        z_up    = spot + z   * sigma;  z_dn   = spot - z   * sigma
+
+        # Blended model targets — z-scaled if falling outside cone
+        if high_val is None:  high_val = float(z_up[-1])
+        if low_val  is None:  low_val  = float(z_dn[-1])
+        # Already clamped to spot in run_forecast_engine, but guard again
+        high_val = max(high_val, spot)
+        low_val  = min(low_val,  spot)
+
+        blend_up = np.linspace(spot, high_val, N)
+        blend_dn = np.linspace(spot, low_val,  N)
+
+        # End-point label helpers
+        def _lbl(arr):
+            return [""] * (N - 1) + [f"${arr[-1]:.2f}"]
+
+        # ── Plotly figure ─────────────────────────────────────────────────────
         fig = go.Figure()
 
-        # ── Historical price line (last 60 days) ────────────────────────────
-        hist_days = df_daily.tail(60)
+        # 1. Historical close (60 days)
         fig.add_trace(go.Scatter(
-            x=hist_days.index,
-            y=hist_days["Close"],
+            x=hist_days.index, y=hist_days["Close"],
             name="Historical Close",
             line=dict(color="#3ab54a", width=2.5),
             hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Close: $%{y:.2f}<extra>Historical</extra>"
         ))
 
-        # Future dates for plotting — trading days from today (skip weekends approx)
-        last_date = hist_days.index[-1]
-        future_dates = [last_date + timedelta(days=int(d)) for d in days]
+        # 2. Layered cone fills — outer → inner, progressively more opaque
+        #    Each fill pair: anchor (invisible bottom) + top (filled to previous)
+        def _fill_band(fig, x, y_lo, y_hi, fill_color, legend_name=None):
+            fig.add_trace(go.Scatter(
+                x=x, y=y_lo, showlegend=False, hoverinfo="skip",
+                mode="lines", line=dict(width=0)
+            ))
+            fig.add_trace(go.Scatter(
+                x=x, y=y_hi,
+                name=legend_name or "", showlegend=bool(legend_name),
+                mode="lines", line=dict(width=0),
+                fill="tonexty", fillcolor=fill_color, hoverinfo="skip"
+            ))
 
-        # ── 2σ outer cone shaded fill ────────────────────────────────────────
-        # Lower 2σ fill base (invisible, fill anchor)
-        fig.add_trace(go.Scatter(
-            x=[last_date] + future_dates,
-            y=[spot] + list(sigma2_down),
-            showlegend=False, hoverinfo="skip", mode="lines",
-            line=dict(width=0)
-        ))
-        # Upper 2σ filled region
-        fig.add_trace(go.Scatter(
-            x=[last_date] + future_dates,
-            y=[spot] + list(sigma2_up),
-            name="2σ Cone (95%)",
-            mode="lines",
-            line=dict(width=0),
-            fill="tonexty",
-            fillcolor="rgba(139, 92, 246, 0.10)",
-            hoverinfo="skip",
-        ))
+        _fill_band(fig, x_dates, s3_dn,  s3_up,  "rgba(99,102,241,0.05)", "3σ Shadow")
+        _fill_band(fig, x_dates, s2_dn,  s2_up,  "rgba(139,92,246,0.10)", "2σ  (95%)")
+        _fill_band(fig, x_dates, s1_dn,  s1_up,  "rgba(139,92,246,0.20)", "1σ  (68%)")
+        _fill_band(fig, x_dates, s05_dn, s05_up, "rgba(167,139,250,0.28)", "0.5σ Core")
 
-        # ── 1σ inner cone shaded fill ────────────────────────────────────────
-        # Lower 1σ fill base (invisible)
-        fig.add_trace(go.Scatter(
-            x=[last_date] + future_dates,
-            y=[spot] + list(sigma1_down),
-            showlegend=False, hoverinfo="skip", mode="lines",
-            line=dict(width=0)
-        ))
-        # Upper 1σ filled region
-        fig.add_trace(go.Scatter(
-            x=[last_date] + future_dates,
-            y=[spot] + list(sigma1_up),
-            name="1σ Cone (68%)",
-            mode="lines",
-            line=dict(width=0),
-            fill="tonexty",
-            fillcolor="rgba(139, 92, 246, 0.20)",
-            hoverinfo="skip",
-        ))
+        # 3. σ boundary edge lines (smooth — 200+ pts makes them naturally curved)
+        for y_arr, color, dash, name in [
+            (s2_up,  "rgba(139,92,246,0.75)", "dash",  "+2σ"),
+            (s2_dn,  "rgba(139,92,246,0.75)", "dash",  "-2σ"),
+            (s1_up,  "rgba(167,139,250,0.90)", "dot",   "+1σ"),
+            (s1_dn,  "rgba(167,139,250,0.90)", "dot",   "-1σ"),
+        ]:
+            fig.add_trace(go.Scatter(
+                x=x_dates, y=y_arr, name=name,
+                mode="lines+text",
+                text=_lbl(y_arr), textposition="middle right",
+                textfont=dict(color=color, size=10, family="monospace"),
+                line=dict(color=color, width=1.3, dash=dash),
+                hovertemplate=f"<b>{name}</b><br>%{{x|%Y-%m-%d}}<br>$%{{y:.2f}}<extra></extra>"
+            ))
 
-        # ── 2σ outer boundary lines ──────────────────────────────────────────
-        # Upper 2σ edge
-        _lbl_2s_up   = [""] * 39 + [f"2σ ${sigma2_up[-1]:.2f}"]
-        _lbl_2s_down = [""] * 39 + [f"2σ ${sigma2_down[-1]:.2f}"]
-        fig.add_trace(go.Scatter(
-            x=[last_date] + future_dates,
-            y=[spot] + list(sigma2_up),
-            name="+2σ Upper",
-            mode="lines+text",
-            text=[""] + _lbl_2s_up,
-            textposition="middle right",
-            textfont=dict(color="#8b5cf6", size=11, family="monospace"),
-            line=dict(color="#8b5cf6", width=1.2, dash="dash"),
-            hovertemplate="<b>+2σ</b><br>Date: %{x|%Y-%m-%d}<br>Price: $%{y:.2f}<extra></extra>"
-        ))
-        # Lower 2σ edge
-        fig.add_trace(go.Scatter(
-            x=[last_date] + future_dates,
-            y=[spot] + list(sigma2_down),
-            name="-2σ Lower",
-            mode="lines+text",
-            text=[""] + _lbl_2s_down,
-            textposition="middle right",
-            textfont=dict(color="#8b5cf6", size=11, family="monospace"),
-            line=dict(color="#8b5cf6", width=1.2, dash="dash"),
-            hovertemplate="<b>-2σ</b><br>Date: %{x|%Y-%m-%d}<br>Price: $%{y:.2f}<extra></extra>"
-        ))
+        # 4. z-scaled confidence boundary (driven by sidebar slider)
+        for y_arr, name in [(z_up, f"+{z:.2f}σ"), (z_dn, f"-{z:.2f}σ")]:
+            fig.add_trace(go.Scatter(
+                x=x_dates, y=y_arr, name=name,
+                mode="lines+text",
+                text=_lbl(y_arr), textposition="middle right",
+                textfont=dict(color="#c4b5fd", size=10, family="monospace"),
+                line=dict(color="#c4b5fd", width=2.0),
+                hovertemplate=f"<b>{name} Conf.</b><br>%{{x|%Y-%m-%d}}<br>$%{{y:.2f}}<extra></extra>"
+            ))
 
-        # ── 1σ boundary lines ────────────────────────────────────────────────
-        _lbl_1s_up   = [""] * 39 + [f"1σ ${sigma1_up[-1]:.2f}"]
-        _lbl_1s_down = [""] * 39 + [f"1σ ${sigma1_down[-1]:.2f}"]
+        # 5. Blended model upper / lower
         fig.add_trace(go.Scatter(
-            x=[last_date] + future_dates,
-            y=[spot] + list(sigma1_up),
-            name="+1σ Upper",
+            x=x_dates, y=blend_up, name=f"Blended Target ${high_val:.2f}",
             mode="lines+text",
-            text=[""] + _lbl_1s_up,
-            textposition="middle right",
-            textfont=dict(color="#a78bfa", size=11, family="monospace"),
-            line=dict(color="#a78bfa", width=1.5, dash="dot"),
-            hovertemplate="<b>+1σ</b><br>Date: %{x|%Y-%m-%d}<br>Price: $%{y:.2f}<extra></extra>"
-        ))
-        fig.add_trace(go.Scatter(
-            x=[last_date] + future_dates,
-            y=[spot] + list(sigma1_down),
-            name="-1σ Lower",
-            mode="lines+text",
-            text=[""] + _lbl_1s_down,
-            textposition="middle right",
-            textfont=dict(color="#a78bfa", size=11, family="monospace"),
-            line=dict(color="#a78bfa", width=1.5, dash="dot"),
-            hovertemplate="<b>-1σ</b><br>Date: %{x|%Y-%m-%d}<br>Price: $%{y:.2f}<extra></extra>"
-        ))
-
-        # ── Blended expected upper/lower boundary (from engine model) ────────
-        _lbl_high = [""] * 39 + [f"Target ${high_val:.2f}"]
-        _lbl_low  = [""] * 39 + [f"Support ${low_val:.2f}"]
-        fig.add_trace(go.Scatter(
-            x=[last_date] + future_dates,
-            y=[spot] + list(np.linspace(spot, high_val, 41)),
-            name="Blended Upper Target",
-            mode="lines+text",
-            text=[""] + _lbl_high,
+            text=[""] * (N - 1) + [f"Target  ${high_val:.2f}"],
             textposition="middle right",
             textfont=dict(color="#10b981", size=11, family="monospace"),
-            line=dict(color="#10b981", width=2),
-            hovertemplate="<b>Blended Upper</b><br>Date: %{x|%Y-%m-%d}<br>Price: $%{y:.2f}<extra></extra>"
+            line=dict(color="#10b981", width=2.2),
+            hovertemplate="<b>Blended Upper</b><br>%{x|%Y-%m-%d}<br>$%{y:.2f}<extra></extra>"
         ))
         fig.add_trace(go.Scatter(
-            x=[last_date] + future_dates,
-            y=[spot] + list(np.linspace(spot, low_val, 41)),
-            name="Blended Lower Support",
+            x=x_dates, y=blend_dn, name=f"Blended Support ${low_val:.2f}",
             mode="lines+text",
-            text=[""] + _lbl_low,
+            text=[""] * (N - 1) + [f"Support  ${low_val:.2f}"],
             textposition="middle right",
             textfont=dict(color="#ef4444", size=11, family="monospace"),
-            line=dict(color="#ef4444", width=2),
-            hovertemplate="<b>Blended Lower</b><br>Date: %{x|%Y-%m-%d}<br>Price: $%{y:.2f}<extra></extra>"
+            line=dict(color="#ef4444", width=2.2),
+            hovertemplate="<b>Blended Lower</b><br>%{x|%Y-%m-%d}<br>$%{y:.2f}<extra></extra>"
         ))
 
-        # ── Spot price apex marker ────────────────────────────────────────────
+        # 6. Spot apex marker
         fig.add_trace(go.Scatter(
-            x=[last_date],
-            y=[spot],
+            x=[last_date], y=[spot],
             name=f"Spot ${spot:.2f}",
             mode="markers+text",
             text=[f"  ${spot:.2f}"],
             textposition="middle right",
             textfont=dict(color="#facc15", size=12, family="monospace"),
-            marker=dict(size=10, color="#facc15", symbol="diamond",
-                        line=dict(color="#0d1b2e", width=1.5)),
+            marker=dict(size=12, color="#facc15", symbol="diamond",
+                        line=dict(color="#0d1b2e", width=2)),
             hovertemplate=f"<b>Today Spot</b><br>${spot:.2f}<extra></extra>"
         ))
 
-        # ── "Today" vertical line ─────────────────────────────────────────────
+        # 7. "Today" vertical
         fig.add_vline(
             x=last_date.timestamp() * 1000,
             line_color="#facc15", line_width=1.5, line_dash="dot",
@@ -1283,21 +1270,38 @@ class TradeRecommendationEngineModule(FazDaneModule):
             annotation_font=dict(color="#facc15", size=11)
         )
 
+        # 8. Earnings date overlay (if within chart window)
+        earnings_str = data.get("earnings_date")
+        if earnings_str and earnings_str != "N/A":
+            try:
+                clean_ed = earnings_str.strip().lstrip("🔴🟡 ").strip()
+                ed_dt    = datetime.strptime(clean_ed, "%Y-%m-%d")
+                days_to  = (ed_dt.date() - last_date.date()).days
+                if 0 < days_to <= int(cal_span * 1.2):
+                    ed_color = "#ef4444" if days_to <= 20 else "#facc15"
+                    fig.add_vline(
+                        x=ed_dt.timestamp() * 1000,
+                        line_color=ed_color, line_width=1.5, line_dash="dashdot",
+                        annotation_text=f"<b>⚡ Earnings {clean_ed}</b>",
+                        annotation_position="top left",
+                        annotation_font=dict(color=ed_color, size=10)
+                    )
+            except Exception:
+                pass
+
         # ── Layout ────────────────────────────────────────────────────────────
-        ticker_label = data.get("ticker", "")
         fig.update_layout(
             title=dict(
-                text=f"40-Day Probability Cone: {ticker_label}  |  IV={iv*100:.1f}%  |  Confidence Z={z:.2f}",
+                text=(f"40-Day Probability Cone: {ticker}  |  "
+                      f"Annualized IV={iv*100:.1f}%  |  Confidence Z={z:.2f}σ"),
                 font=dict(color="#e2e8f0", size=14)
             ),
             xaxis=dict(
-                title="Date",
-                showgrid=True, gridcolor="#1e3a5f",
+                title="Date", showgrid=True, gridcolor="#1e3a5f",
                 zeroline=False, color="#94a3b8"
             ),
             yaxis=dict(
-                title="Stock Price ($)",
-                tickprefix="$",
+                title="Stock Price ($)", tickprefix="$",
                 showgrid=True, gridcolor="#1e3a5f",
                 zeroline=False, color="#94a3b8"
             ),
@@ -1305,11 +1309,17 @@ class TradeRecommendationEngineModule(FazDaneModule):
             paper_bgcolor="#0d1b2e",
             font=dict(color="#94a3b8", family="Inter, sans-serif"),
             legend=dict(
-                orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
-                font=dict(size=11), bgcolor="rgba(0,0,0,0)"
+                orientation="v",
+                yanchor="top", y=0.98,
+                xanchor="left", x=1.01,
+                font=dict(size=10, color="#cbd5e1"),
+                bgcolor="rgba(13,27,46,0.80)",
+                bordercolor="#1e3a5f",
+                borderwidth=1
             ),
             hovermode="x unified",
-            margin=dict(l=20, r=100, t=60, b=30)
+            margin=dict(l=20, r=175, t=60, b=30)
+
         )
 
         st.plotly_chart(fig, use_container_width=True)
@@ -1319,21 +1329,36 @@ class TradeRecommendationEngineModule(FazDaneModule):
         intervals = [5, 10, 15, 20, 25, 30, 35, 40]
         rows = []
         for d in intervals:
-            exp_move_1s = spot * iv * np.sqrt(d / 252.0)          # 1σ
-            exp_move_2s = 2.0 * exp_move_1s                        # 2σ
+            m1 = spot * iv * np.sqrt(d / 252.0)
             rows.append({
-                "Horizon":         f"{d} Days",
-                "1σ Up (+68%)":    f"${spot + exp_move_1s:.2f}",
-                "1σ Down (-68%)":  f"${spot - exp_move_1s:.2f}",
-                "2σ Up (+95%)":    f"${spot + exp_move_2s:.2f}",
-                "2σ Down (-95%)":  f"${spot - exp_move_2s:.2f}",
-                "Expected Move ±": f"${z * exp_move_1s:.2f}",
+                "Horizon":          f"{d}D",
+                "1σ Up  (+68%)":    f"${spot + m1:.2f}",
+                "1σ Down (-68%)":   f"${spot - m1:.2f}",
+                "2σ Up  (+95%)":    f"${spot + 2*m1:.2f}",
+                "2σ Down (-95%)":   f"${spot - 2*m1:.2f}",
+                f"±{z:.2f}σ Move":  f"${z * m1:.2f}",
             })
         df_ranges = pd.DataFrame(rows)
-        st.dataframe(df_ranges, use_container_width=True, hide_index=True)
 
+        def _style_ranges(df):
+            """Highlight the 20-day row (standard options cycle)."""
+            styles = pd.DataFrame("", index=df.index, columns=df.columns)
+            for i in df.index:
+                if str(df.loc[i, "Horizon"]) == "20D":
+                    for c in df.columns:
+                        styles.at[i, c] = (
+                            "background-color:rgba(139,92,246,0.20);"
+                            "font-weight:700"
+                        )
+            return styles
+
+        st.dataframe(
+            df_ranges.style.apply(_style_ranges, axis=None),
+            use_container_width=True, hide_index=True
+        )
 
     def _render_signal_matrix(self, data: dict):
+
         st.markdown("### Timeframe Indicator Agreement (3M vs Daily vs 1H)")
         
         daily = data.get("daily_indicators")
