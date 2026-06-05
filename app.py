@@ -890,6 +890,7 @@ with st.sidebar:
             "Universe Intelligence System",
             "Portfolio Module",
             "Multi-Timeframe Money Flow",
+            "Market Trend Analysis",
             "Market Structure Heatmap",
             "Correlation Matrix",
             "Earnings Calendar",
@@ -1162,6 +1163,17 @@ elif active_module == "Trade Intelligence Engine":
         st.error(f"Failed to load Trade Intelligence Engine: {e}")
         st.code(traceback.format_exc())
 
+elif active_module == "Market Trend Analysis":
+    try:
+        from modules.tier2.market_trend_analysis import MarketTrendAnalysisModule
+        module = MarketTrendAnalysisModule()
+        module.run()
+        logger.info("Market Trend Analysis")
+    except Exception as e:
+        import traceback
+        st.error(f"Failed to load Market Trend Analysis: {e}")
+        st.code(traceback.format_exc())
+
 elif active_module == "Price Action Story Engine":
     try:
         from modules.tier2.price_action_story import PriceActionStoryModule
@@ -1274,6 +1286,7 @@ else:
                 {"label": "Universe Intelligence System", "module": "Universe Intelligence System", "tier": 2, "key": "macro_universe_intelligence"},
                 {"label": "Portfolio Module", "module": "Portfolio Module", "tier": 2, "key": "macro_portfolio_module"},
                 {"label": "Multi-Timeframe Money Flow", "module": "Multi-Timeframe Money Flow", "tier": 2, "key": "macro_money_flow"},
+                {"label": "Market Trend Analysis", "module": "Market Trend Analysis", "tier": 2, "key": "macro_market_trend_analysis"},
                 {"label": "Market Structure Heatmap", "module": "Market Structure Heatmap", "tier": 2, "key": "macro_market_structure"},
                 {"label": "Correlation Matrix", "module": "Correlation Matrix", "tier": 2, "key": "macro_correlation"},
                 {"label": "Earnings Calendar", "module": "Earnings Calendar", "tier": 2, "key": "macro_earnings"},
