@@ -614,7 +614,7 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     # Map earnings risk category
     def get_earnings_risk(days):
         if pd.isnull(days):
-            return "🟢 Green (Earnings > 40d / None)"
+            return "No Color (No Risk / > 40d)"
         try:
             d = float(days)
             if 0 <= d <= 20:
@@ -623,7 +623,7 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
                 return "🟡 Yellow (Earnings 21-40d)"
         except (ValueError, TypeError):
             pass
-        return "🟢 Green (Earnings > 40d / None)"
+        return "No Color (No Risk / > 40d)"
     
     merged["earnings_risk_category"] = merged["days_to_earnings"].apply(get_earnings_risk)
     
