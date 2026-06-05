@@ -210,13 +210,17 @@ def format_fdts_signal(sig: str) -> str:
 def evaluate_price_action_lifecycle(ticker_df: pd.DataFrame, bench_df: pd.DataFrame) -> dict:
     """Calculate 8 Price Action story metrics and score the ticker state (Tier 2 Story Engine)."""
     required = {"Open", "High", "Low", "Close", "Volume"}
-    if ticker_df.empty or not required.issubset(ticker_df.columns) or len(ticker_df) < 50:
+    if ticker_df.empty or not required.issubset(ticker_df.columns):
         return {}
 
-    close = ticker_df["Close"].dropna()
-    volume = ticker_df["Volume"].dropna()
-    high = ticker_df["High"].dropna()
-    low = ticker_df["Low"].dropna()
+    df_clean = ticker_df[["Open", "High", "Low", "Close", "Volume"]].dropna()
+    if len(df_clean) < 50:
+        return {}
+
+    close = df_clean["Close"]
+    volume = df_clean["Volume"]
+    high = df_clean["High"]
+    low = df_clean["Low"]
     
     # 1. Trend Structure (20% Weight)
     sma20 = close.rolling(20).mean()

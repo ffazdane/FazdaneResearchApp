@@ -58,6 +58,9 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         if "cal_enable_ml_sort" not in st.session_state:
             st.session_state.cal_enable_ml_sort = False
             
+        # Default settings
+        self.use_synthetic_data = True
+            
         # Auto-load latest results on initialization
         if not st.session_state.cal_candidates:
             loaded = self.load_latest_run_from_db()
