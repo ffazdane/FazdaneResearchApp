@@ -540,6 +540,8 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
             try:
                 earn_date = datetime.strptime(earn_date_str, "%Y-%m-%d")
                 days_to_earnings = (earn_date - datetime.today()).days
+                if days_to_earnings < 0:
+                    days_to_earnings = 999  # past event, no upcoming risk
             except Exception:
                 pass
         days_to_earnings_list.append(days_to_earnings)
@@ -619,7 +621,7 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
             d = float(days)
             if 0 <= d <= 20:
                 return "🔴 Red (Earnings <= 20d)"
-            elif d <= 40:
+            elif 0 <= d <= 40:
                 return "🟡 Yellow (Earnings 21-40d)"
         except (ValueError, TypeError):
             pass
@@ -672,7 +674,7 @@ def build_display_df(df: pd.DataFrame) -> pd.DataFrame:
                 days_diff = (datetime.strptime(ed_val, "%Y-%m-%d").date() - datetime.now().date()).days
                 if 0 <= days_diff <= 20:
                     ed_val = f"🔴 {ed_val}"
-                elif days_diff <= 40:
+                elif 0 <= days_diff <= 40:
                     ed_val = f"🟡 {ed_val}"
             except Exception:
                 pass
