@@ -1037,29 +1037,33 @@ class TradeRecommendationEngineModule(FazDaneModule):
         st.markdown("### 📊 Scoring Weights & Strategy Selection Matrix")
         
         # Display sub-scores
-        scores = data["scores"]
+        scores = data.get("scores") or {}
+        if not scores:
+            st.info("⚠️ No scoring data available. Please regenerate the analysis for this ticker.")
+            return
+
         df_scores = pd.DataFrame([
-            {"Component": "Trend Structure", "Weight %": 20, "Score": scores["trend_score"]},
-            {"Component": "FDTS Signal", "Weight %": 15, "Score": scores["fdts_score"]},
-            {"Component": "MACD Momentum", "Weight %": 15, "Score": scores["momentum_score"]},
-            {"Component": "Darvas Box Structure", "Weight %": 15, "Score": scores["range_score"]},
-            {"Component": "Regression location", "Weight %": 10, "Score": scores["regression_score"]},
-            {"Component": "Volatility / IV condition", "Weight %": 10, "Score": scores["volatility_score"]},
-            {"Component": "WPR / Timing", "Weight %": 5, "Score": scores["timing_score"]},
-            {"Component": "Option Liquidity", "Weight %": 5, "Score": scores["liquidity_score"]},
-            {"Component": "Event Risk", "Weight %": 5, "Score": scores["event_risk_score"]}
+            {"Component": "Trend Structure",       "Weight %": 20, "Score": scores.get("trend_score",      "N/A")},
+            {"Component": "FDTS Signal",           "Weight %": 15, "Score": scores.get("fdts_score",       "N/A")},
+            {"Component": "MACD Momentum",         "Weight %": 15, "Score": scores.get("momentum_score",   "N/A")},
+            {"Component": "Darvas Box Structure",  "Weight %": 15, "Score": scores.get("range_score",      "N/A")},
+            {"Component": "Regression location",   "Weight %": 10, "Score": scores.get("regression_score", "N/A")},
+            {"Component": "Volatility / IV condition","Weight %":10,"Score": scores.get("volatility_score", "N/A")},
+            {"Component": "WPR / Timing",          "Weight %": 5,  "Score": scores.get("timing_score",     "N/A")},
+            {"Component": "Option Liquidity",      "Weight %": 5,  "Score": scores.get("liquidity_score",  "N/A")},
+            {"Component": "Event Risk",            "Weight %": 5,  "Score": scores.get("event_risk_score", "N/A")},
         ])
         
         st.dataframe(df_scores, use_container_width=True, hide_index=True)
         
         st.markdown("#### Strategy Decision Logic")
-        st.info(f"**Strategy Selected**: {data['strategy']}\n\n**Reasoning**: {data['strategy_reason']}")
+        st.info(f"**Strategy Selected**: {data.get('strategy', 'N/A')}\n\n**Reasoning**: {data.get('strategy_reason', 'N/A')}")
         
-        if data["alignment_reason"]:
+        if data.get("alignment_reason"):
             st.warning(f"**State Alignment Filter Action**: {data['alignment_reason']}")
             
         st.markdown("#### Options to Avoid")
-        if data["decision"] in ("Watch", "Wait"):
+        if data.get("decision") in ("Watch", "Wait"):
             st.markdown("- ⚠️ **Avoid** straight long call option structure until momentum trigger validates above resistance.")
         else:
             st.markdown("- ✔️ Standard risk parameters align. Avoid buying high IV premium legs if IV Rank drops.")
@@ -1222,32 +1226,50 @@ class TradeRecommendationEngineModule(FazDaneModule):
             st.info("⚠️ No indicator data available. Please regenerate the analysis for this ticker.")
             return
         
+        def _safe_cmp(a, b):
+            """Return True if both a and b are non-None numbers and a > b, else False."""
+            try:
+                return (a is not None and b is not None) and (a > b)
+            except Exception:
+                return False
+
+        d_price  = daily.get("price")
+        d_ma200  = daily.get("ma200")
+        d_ma50   = daily.get("ma50")
+        d_ma20   = daily.get("ma20")
+        h_price  = hourly.get("price")
+        h_ma20   = hourly.get("ma20")
+
         df_matrix = pd.DataFrame([
             {
                 "Indicator": "MA Trend Structure",
-                "3-Month": "Price above 200 EMA" if daily["price"] > daily["ma200"] else "Price below 200 EMA",
-                "Daily": "Price above 50 EMA" if daily["price"] > daily["ma50"] else "Price below 50 EMA",
-                "1-Hour": "Price above 20 EMA" if hourly["price"] > hourly["ma20"] else "Price below 20 EMA",
+                "3-Month": "Price above 200 EMA" if _safe_cmp(d_price, d_ma200) else ("Price below 200 EMA" if d_price is not None else "N/A"),
+                "Daily":   "Price above 50 EMA"  if _safe_cmp(d_price, d_ma50)  else ("Price below 50 EMA"  if d_price is not None else "N/A"),
+                "1-Hour":  "Price above 20 EMA"  if _safe_cmp(h_price, h_ma20)  else ("Price below 20 EMA"  if h_price is not None else "N/A"),
             },
             {
                 "Indicator": "MACD Momentum",
                 "3-Month": "N/A",
-                "Daily": daily["macd_signal"],
-                "1-Hour": hourly["macd_signal"],
+                "Daily":   daily.get("macd_signal") or "N/A",
+                "1-Hour":  hourly.get("macd_signal") or "N/A",
             },
             {
                 "Indicator": "FDTS Acceleration",
                 "3-Month": "N/A",
-                "Daily": daily["fdts_signal"],
-                "1-Hour": hourly["fdts_signal"],
+                "Daily":   daily.get("fdts_signal") or "N/A",
+                "1-Hour":  hourly.get("fdts_signal") or "N/A",
             }
         ])
         
         st.dataframe(df_matrix, use_container_width=True, hide_index=True)
         
-        # Verify agreement
-        bull_agree = daily["macd_signal"] == "Bullish" and hourly["macd_signal"] == "Bullish" and daily["fdts_signal"] == "Buy"
-        bear_agree = daily["macd_signal"] == "Bearish" and hourly["macd_signal"] == "Bearish" and daily["fdts_signal"] == "Sell"
+        # Verify agreement — safe against None
+        d_macd = daily.get("macd_signal")
+        h_macd = hourly.get("macd_signal")
+        d_fdts = daily.get("fdts_signal")
+
+        bull_agree = d_macd == "Bullish" and h_macd == "Bullish" and d_fdts == "Buy"
+        bear_agree = d_macd == "Bearish" and h_macd == "Bearish" and d_fdts == "Sell"
         
         if bull_agree:
             st.success("🟢 Strong bullish agreement confirmed across all timeframes.")
