@@ -1353,7 +1353,11 @@ class CalendarRotationModule(FazDaneModule):
                         key="cal_filter_ol_bias"
                     )
                 with col_f6:
-                    all_earnings_risk = sorted(list(df["earnings_risk_category"].unique()))
+                    all_earnings_risk = [
+                        "🔴 Red (Earnings <= 20d)",
+                        "🟡 Yellow (Earnings 21-40d)",
+                        "No Color (No Risk / > 40d)"
+                    ]
                     sel_earnings_risk = st.multiselect(
                         "Earnings Date Risk (Color Category)",
                         options=all_earnings_risk,
