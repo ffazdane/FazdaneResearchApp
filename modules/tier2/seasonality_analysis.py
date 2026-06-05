@@ -488,6 +488,60 @@ class SeasonalityAnalysisModule(FazDaneModule):
             weekly_stats = grouped_return_stats(cycle_df[cycle_df["ISOWeek"] <= 52], "ISOWeek").sort_values("ISOWeek")
             weekly_stats["Current"] = np.where(weekly_stats["ISOWeek"] == current_week, "Current Week", "Other Weeks")
 
+            # Calculate Historical, Last Year, and Current Year parameters
+            current_year = int(cycle_df["Year"].max())
+            last_year = current_year - 1
+            has_multiple_years = (cycle_df["Year"].nunique() >= 2) and (last_year in cycle_df["Year"].values)
+
+            if has_multiple_years:
+                hist_df = cycle_df[(cycle_df["Year"] < last_year) & (cycle_df["ISOWeek"] <= 52)]
+                ly_df = cycle_df[(cycle_df["Year"] == last_year) & (cycle_df["ISOWeek"] <= 52)]
+                cy_df = cycle_df[(cycle_df["Year"] == current_year) & (cycle_df["ISOWeek"] <= 52)]
+
+                hist_weekly = grouped_return_stats(hist_df, "ISOWeek").sort_values("ISOWeek") if not hist_df.empty else pd.DataFrame(columns=["ISOWeek", "Avg_ReturnPct", "Win_Rate", "Events"])
+                ly_weekly = grouped_return_stats(ly_df, "ISOWeek").sort_values("ISOWeek") if not ly_df.empty else pd.DataFrame(columns=["ISOWeek", "Avg_ReturnPct", "Win_Rate", "Events"])
+                cy_weekly = grouped_return_stats(cy_df, "ISOWeek").sort_values("ISOWeek") if not cy_df.empty else pd.DataFrame(columns=["ISOWeek", "Avg_ReturnPct", "Win_Rate", "Events"])
+
+                # Align to ISOWeeks 1-52
+                weeks_df = pd.DataFrame({"ISOWeek": range(1, 53)})
+                hist_aligned = pd.merge(weeks_df, hist_weekly, on="ISOWeek", how="left")
+                ly_aligned = pd.merge(weeks_df, ly_weekly, on="ISOWeek", how="left")
+                cy_aligned = pd.merge(weeks_df, cy_weekly, on="ISOWeek", how="left")
+
+                # Calculate Trend Seasonality Alignment KPIs
+                merge_hist = pd.merge(hist_weekly[["ISOWeek", "Avg_ReturnPct"]], cy_weekly[["ISOWeek", "Avg_ReturnPct"]], on="ISOWeek", suffixes=("_hist", "_cy")).dropna()
+                if not merge_hist.empty:
+                    merge_hist["Match"] = np.sign(merge_hist["Avg_ReturnPct_hist"]) == np.sign(merge_hist["Avg_ReturnPct_cy"])
+                    hist_matches = int(merge_hist["Match"].sum())
+                    hist_total = len(merge_hist)
+                    hist_alignment_pct = (hist_matches / hist_total) * 100
+                    hist_corr = merge_hist["Avg_ReturnPct_hist"].corr(merge_hist["Avg_ReturnPct_cy"])
+                else:
+                    hist_alignment_pct = 0.0
+                    hist_corr = 0.0
+                    hist_matches = 0
+                    hist_total = 0
+
+                merge_ly = pd.merge(ly_weekly[["ISOWeek", "Avg_ReturnPct"]], cy_weekly[["ISOWeek", "Avg_ReturnPct"]], on="ISOWeek", suffixes=("_ly", "_cy")).dropna()
+                if not merge_ly.empty:
+                    merge_ly["Match"] = np.sign(merge_ly["Avg_ReturnPct_ly"]) == np.sign(merge_ly["Avg_ReturnPct_cy"])
+                    ly_matches = int(merge_ly["Match"].sum())
+                    ly_total = len(merge_ly)
+                    ly_alignment_pct = (ly_matches / ly_total) * 100
+                    ly_corr = merge_ly["Avg_ReturnPct_ly"].corr(merge_ly["Avg_ReturnPct_cy"])
+                else:
+                    ly_alignment_pct = 0.0
+                    ly_corr = 0.0
+                    ly_matches = 0
+                    ly_total = 0
+
+                curr_wk_hist_match = None
+                curr_wk_ly_match = None
+                if current_week in merge_hist["ISOWeek"].values:
+                    curr_wk_hist_match = bool(merge_hist[merge_hist["ISOWeek"] == current_week]["Match"].values[0])
+                if current_week in merge_ly["ISOWeek"].values:
+                    curr_wk_ly_match = bool(merge_ly[merge_ly["ISOWeek"] == current_week]["Match"].values[0])
+
             monthly_perf = stats[[
                 "Month", "Avg_DailyPctChange", "Median_DailyPctChange", "Pct_Positive",
                 "Max_DailyPctChange", "Min_DailyPctChange", "Total_Days",
@@ -506,109 +560,235 @@ class SeasonalityAnalysisModule(FazDaneModule):
 
             yearly_cycle, cycle_summary = annual_election_cycle_stats(cycle_df)
             quarter_stats = grouped_return_stats(cycle_df, "Quarter").sort_values("Quarter")
+            sub_tabs = st.tabs([
+                "Weekday Performance",
+                "Weekly Performance",
+                "Monthly Performance",
+                "Election & Quarter Cycles"
+            ])
 
-            st.markdown("### Average Day Performance")
-            fig_weekday = px.bar(
-                weekday_stats,
-                x="Weekday",
-                y="Avg_ReturnPct",
-                color="Avg_ReturnPct",
-                color_continuous_scale=["#ef4444", "#facc15", "#22c55e"],
-                category_orders={"Weekday": WEEKDAY_ORDER},
-                hover_data={"Median_ReturnPct": ":.2f", "Win_Rate": ":.1f", "Events": True},
-                title="Average Daily Return by Weekday",
-            )
-            fig_weekday.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
-            fig_weekday.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=380)
-            st.plotly_chart(fig_weekday, use_container_width=True)
-            st.dataframe(weekday_stats.round(2), use_container_width=True, hide_index=True)
-
-            st.markdown("### Average Week Performance")
-            fig_week = px.bar(
-                weekly_stats,
-                x="ISOWeek",
-                y="Avg_ReturnPct",
-                color="Current",
-                color_discrete_map={"Current Week": "#38bdf8", "Other Weeks": "#64748b"},
-                hover_data={"Median_ReturnPct": ":.2f", "Win_Rate": ":.1f", "Events": True},
-                title=f"Average Daily Return by ISO Week (Current Week: {current_week})",
-            )
-            if current_week <= 52:
-                fig_week.add_vline(x=current_week, line_dash="dash", line_color="#38bdf8")
-            fig_week.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
-            fig_week.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=440)
-            st.plotly_chart(fig_week, use_container_width=True)
-            st.dataframe(weekly_stats.drop(columns=["Current"]).round(2), use_container_width=True, hide_index=True)
-
-            st.markdown("### Average Month Performance")
-            fig_month_perf = px.bar(
-                monthly_perf,
-                x="Month",
-                y="Avg_ReturnPct",
-                color="Avg_ReturnPct",
-                color_continuous_scale=["#ef4444", "#facc15", "#22c55e"],
-                category_orders={"Month": MONTH_ORDER},
-                hover_data={"Median_ReturnPct": ":.2f", "Win_Rate": ":.1f", "Events": True},
-                title="Average Daily Return by Month",
-            )
-            fig_month_perf.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
-            fig_month_perf.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=420)
-            st.plotly_chart(fig_month_perf, use_container_width=True)
-            st.dataframe(monthly_perf.round(2), use_container_width=True, hide_index=True)
-
-            st.markdown("### Yearly Analysis by Election Cycle")
-            if cycle_summary.empty:
-                st.info("Not enough yearly data to calculate election-cycle analysis.")
-            else:
-                fig_cycle = px.bar(
-                    cycle_summary,
-                    x="ElectionCycle",
-                    y="Avg_YearReturnPct",
-                    color="Avg_YearReturnPct",
-                    color_continuous_scale=["#ef4444", "#facc15", "#22c55e"],
-                    hover_data={"Median_YearReturnPct": ":.2f", "Win_Rate": ":.1f", "Years": True},
-                    title="Average Annual Return by US Presidential Election Cycle",
-                )
-                fig_cycle.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
-                fig_cycle.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=420)
-                st.plotly_chart(fig_cycle, use_container_width=True)
-                st.dataframe(cycle_summary.round(2), use_container_width=True, hide_index=True)
-                st.markdown("#### Year-by-Year Returns")
-                st.dataframe(
-                    yearly_cycle[["Year", "ElectionCycle", "YearReturnPct", "TradingDays", "StartDate", "EndDate"]].round(2),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-            st.markdown("### Additional Useful Seasonality Reads")
-            extra_left, extra_right = st.columns(2)
-            with extra_left:
-                st.markdown("#### Quarter Performance")
-                fig_quarter = px.bar(
-                    quarter_stats,
-                    x="Quarter",
+            with sub_tabs[0]:
+                st.markdown("### Average Day Performance")
+                fig_weekday = px.bar(
+                    weekday_stats,
+                    x="Weekday",
                     y="Avg_ReturnPct",
                     color="Avg_ReturnPct",
                     color_continuous_scale=["#ef4444", "#facc15", "#22c55e"],
+                    category_orders={"Weekday": WEEKDAY_ORDER},
                     hover_data={"Median_ReturnPct": ":.2f", "Win_Rate": ":.1f", "Events": True},
-                    title="Average Daily Return by Quarter",
+                    title="Average Daily Return by Weekday",
                 )
-                fig_quarter.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
-                fig_quarter.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=360)
-                st.plotly_chart(fig_quarter, use_container_width=True)
-            with extra_right:
-                st.markdown("#### Strongest / Weakest Calendar Buckets")
-                leaders = pd.DataFrame(
-                    [
-                        {"Bucket": "Best Weekday", "Value": str(weekday_stats.sort_values("Avg_ReturnPct", ascending=False).iloc[0]["Weekday"]), "Avg %": weekday_stats["Avg_ReturnPct"].max()},
-                        {"Bucket": "Worst Weekday", "Value": str(weekday_stats.sort_values("Avg_ReturnPct", ascending=True).iloc[0]["Weekday"]), "Avg %": weekday_stats["Avg_ReturnPct"].min()},
-                        {"Bucket": "Best ISO Week", "Value": str(int(weekly_stats.sort_values("Avg_ReturnPct", ascending=False).iloc[0]["ISOWeek"])), "Avg %": weekly_stats["Avg_ReturnPct"].max()},
-                        {"Bucket": "Worst ISO Week", "Value": str(int(weekly_stats.sort_values("Avg_ReturnPct", ascending=True).iloc[0]["ISOWeek"])), "Avg %": weekly_stats["Avg_ReturnPct"].min()},
-                        {"Bucket": "Best Month", "Value": str(monthly_perf.sort_values("Avg_ReturnPct", ascending=False).iloc[0]["Month"]), "Avg %": monthly_perf["Avg_ReturnPct"].max()},
-                        {"Bucket": "Worst Month", "Value": str(monthly_perf.sort_values("Avg_ReturnPct", ascending=True).iloc[0]["Month"]), "Avg %": monthly_perf["Avg_ReturnPct"].min()},
+                fig_weekday.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
+                fig_weekday.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=380)
+                st.plotly_chart(fig_weekday, use_container_width=True)
+                st.dataframe(weekday_stats.round(2), use_container_width=True, hide_index=True)
+
+            with sub_tabs[1]:
+                st.markdown("### Average Week Performance")
+                if has_multiple_years:
+                    st.markdown("#### 📊 Trend Seasonality Alignment KPIs")
+                    col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
+                    
+                    with col_kpi1:
+                        hist_corr_str = f"{hist_corr:+.2f}" if not pd.isna(hist_corr) else "N/A"
+                        st.metric(
+                            label="Historical Seasonality Alignment",
+                            value=f"{hist_alignment_pct:.1f}%",
+                            delta=f"Pearson Corr: {hist_corr_str}",
+                            help="Percentage of weeks this year where the return direction (up/down) matches the long-term historical average (prior to last year)."
+                        )
+                        st.caption(f"{hist_matches} of {hist_total} weeks matched")
+                        
+                    with col_kpi2:
+                        ly_corr_str = f"{ly_corr:+.2f}" if not pd.isna(ly_corr) else "N/A"
+                        st.metric(
+                            label=f"Prior Year ({last_year}) Alignment",
+                            value=f"{ly_alignment_pct:.1f}%",
+                            delta=f"Pearson Corr: {ly_corr_str}",
+                            help=f"Percentage of weeks this year where the return direction (up/down) matches the previous year ({last_year})."
+                        )
+                        st.caption(f"{ly_matches} of {ly_total} weeks matched")
+                        
+                    with col_kpi3:
+                        # Current Week status summary vs Hist and Last Year
+                        if curr_wk_hist_match is not None and curr_wk_ly_match is not None:
+                            status_label = "In Sync" if (curr_wk_hist_match and curr_wk_ly_match) else "Mixed" if (curr_wk_hist_match or curr_wk_ly_match) else "Out of Sync"
+                            delta_label = []
+                            if curr_wk_hist_match:
+                                delta_label.append("Hist Avg")
+                            if curr_wk_ly_match:
+                                delta_label.append(str(last_year))
+                            delta_str = "Aligns with " + " & ".join(delta_label) if delta_label else "Opposite of both"
+                        else:
+                            status_label = "No Active Week"
+                            delta_str = ""
+                        st.metric(
+                            label=f"Current Week ({current_week}) Trend",
+                            value=status_label,
+                            delta=delta_str,
+                            help="Tells whether the current week's market direction matches the long-term historical trend, the prior year's trend, or neither."
+                        )
+                    st.markdown("---")
+                    quarters = [
+                        ("Q1 (Weeks 1-13)", 1, 13),
+                        ("Q2 (Weeks 14-26)", 14, 26),
+                        ("Q3 (Weeks 27-39)", 27, 39),
+                        ("Q4 (Weeks 40-52+)", 40, 53)
                     ]
+                    
+                    for q_label, start_wk, end_wk in quarters:
+                        ly_q = ly_aligned[(ly_aligned["ISOWeek"] >= start_wk) & (ly_aligned["ISOWeek"] <= end_wk)]
+                        cy_q = cy_aligned[(cy_aligned["ISOWeek"] >= start_wk) & (cy_aligned["ISOWeek"] <= end_wk)]
+                        
+                        if ly_q.empty and cy_q.empty:
+                            continue
+                            
+                        fig_q = go.Figure()
+                        
+                        # Last Year (Solid Slate Grey)
+                        fig_q.add_trace(go.Bar(
+                            x=ly_q["ISOWeek"],
+                            y=ly_q["Avg_ReturnPct"],
+                            name=f"Last Year ({last_year})",
+                            marker_color="#4b5563",
+                            customdata=np.stack([
+                                ly_q["Win_Rate"].fillna(0),
+                                ly_q["Events"].fillna(0).astype(int)
+                            ], axis=-1),
+                            hovertemplate=f"<b>Week %{{x}} ({last_year})</b><br>Avg Return: %{{y:.2f}}%<br>Win Rate: %{{customdata[0]:.1f}}%<br>Days: %{{customdata[1]}}<extra></extra>"
+                        ))
+
+                        # Current Year (Rich Red/Green)
+                        cy_q_colors = ["#059669" if (not pd.isna(r) and r >= 0) else "#dc2626" if (not pd.isna(r) and r < 0) else "rgba(0,0,0,0)" for r in cy_q["Avg_ReturnPct"]]
+                        fig_q.add_trace(go.Bar(
+                            x=cy_q["ISOWeek"],
+                            y=cy_q["Avg_ReturnPct"],
+                            name=f"Current Year ({current_year})",
+                            marker_color=cy_q_colors,
+                            customdata=np.stack([
+                                cy_q["Win_Rate"].fillna(0),
+                                cy_q["Events"].fillna(0).astype(int)
+                            ], axis=-1),
+                            hovertemplate=f"<b>Week %{{x}} ({current_year})</b><br>Avg Return: %{{y:.2f}}%<br>Win Rate: %{{customdata[0]:.1f}}%<br>Days: %{{customdata[1]}}<extra></extra>"
+                        ))
+
+                        # Add current week vertical line if the data goes up to the current calendar year and falls within this quarter
+                        today_year = pd.Timestamp.today().year
+                        if current_year == today_year and start_wk <= current_week <= end_wk:
+                            fig_q.add_vline(x=current_week, line_dash="dash", line_color="#38bdf8")
+
+                        fig_q.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
+                        fig_q.update_layout(
+                            barmode="group",
+                            template="plotly_dark",
+                            paper_bgcolor="#0d1b2e",
+                            plot_bgcolor="#0d1b2e",
+                            height=350,
+                            title=f"{q_label} Performance ({last_year} vs {current_year})",
+                            xaxis=dict(title="ISO Week", tickmode="linear", tick0=start_wk, dtick=1),
+                            yaxis=dict(title="Avg Daily Return (%)")
+                        )
+                        st.plotly_chart(fig_q, use_container_width=True)
+
+                    df_table = pd.DataFrame({
+                        "ISOWeek": range(1, 53),
+                        f"{last_year} Return %": ly_aligned["Avg_ReturnPct"].round(2),
+                        f"{last_year} Win Rate %": ly_aligned["Win_Rate"].round(1),
+                        f"{last_year} Days": ly_aligned["Events"].fillna(0).astype(int),
+                        f"{current_year} Return %": cy_aligned["Avg_ReturnPct"].round(2),
+                        f"{current_year} Win Rate %": cy_aligned["Win_Rate"].round(1),
+                        f"{current_year} Days": cy_aligned["Events"].fillna(0).astype(int),
+                    })
+                    st.dataframe(df_table, use_container_width=True, hide_index=True)
+                else:
+                    fig_week = px.bar(
+                        weekly_stats,
+                        x="ISOWeek",
+                        y="Avg_ReturnPct",
+                        color="Current",
+                        color_discrete_map={"Current Week": "#38bdf8", "Other Weeks": "#64748b"},
+                        hover_data={"Median_ReturnPct": ":.2f", "Win_Rate": ":.1f", "Events": True},
+                        title=f"Average Daily Return by ISO Week (Current Week: {current_week})",
+                    )
+                    if current_week <= 52:
+                        fig_week.add_vline(x=current_week, line_dash="dash", line_color="#38bdf8")
+                    fig_week.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
+                    fig_week.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=440)
+                    st.plotly_chart(fig_week, use_container_width=True)
+                    st.dataframe(weekly_stats.drop(columns=["Current"]).round(2), use_container_width=True, hide_index=True)
+
+            with sub_tabs[2]:
+                st.markdown("### Average Month Performance")
+                fig_month_perf = px.bar(
+                    monthly_perf,
+                    x="Month",
+                    y="Avg_ReturnPct",
+                    color="Avg_ReturnPct",
+                    color_continuous_scale=["#ef4444", "#facc15", "#22c55e"],
+                    category_orders={"Month": MONTH_ORDER},
+                    hover_data={"Median_ReturnPct": ":.2f", "Win_Rate": ":.1f", "Events": True},
+                    title="Average Daily Return by Month",
                 )
-                st.dataframe(leaders.round(2), use_container_width=True, hide_index=True)
+                fig_month_perf.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
+                fig_month_perf.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=420)
+                st.plotly_chart(fig_month_perf, use_container_width=True)
+                st.dataframe(monthly_perf.round(2), use_container_width=True, hide_index=True)
+
+            with sub_tabs[3]:
+                st.markdown("### Yearly Analysis by Election Cycle")
+                if cycle_summary.empty:
+                    st.info("Not enough yearly data to calculate election-cycle analysis.")
+                else:
+                    fig_cycle = px.bar(
+                        cycle_summary,
+                        x="ElectionCycle",
+                        y="Avg_YearReturnPct",
+                        color="Avg_YearReturnPct",
+                        color_continuous_scale=["#ef4444", "#facc15", "#22c55e"],
+                        hover_data={"Median_YearReturnPct": ":.2f", "Win_Rate": ":.1f", "Years": True},
+                        title="Average Annual Return by US Presidential Election Cycle",
+                    )
+                    fig_cycle.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
+                    fig_cycle.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=420)
+                    st.plotly_chart(fig_cycle, use_container_width=True)
+                    st.dataframe(cycle_summary.round(2), use_container_width=True, hide_index=True)
+                    st.markdown("#### Year-by-Year Returns")
+                    st.dataframe(
+                        yearly_cycle[["Year", "ElectionCycle", "YearReturnPct", "TradingDays", "StartDate", "EndDate"]].round(2),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                st.markdown("### Additional Useful Seasonality Reads")
+                extra_left, extra_right = st.columns(2)
+                with extra_left:
+                    st.markdown("#### Quarter Performance")
+                    fig_quarter = px.bar(
+                        quarter_stats,
+                        x="Quarter",
+                        y="Avg_ReturnPct",
+                        color="Avg_ReturnPct",
+                        color_continuous_scale=["#ef4444", "#facc15", "#22c55e"],
+                        hover_data={"Median_ReturnPct": ":.2f", "Win_Rate": ":.1f", "Events": True},
+                        title="Average Daily Return by Quarter",
+                    )
+                    fig_quarter.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
+                    fig_quarter.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=360)
+                    st.plotly_chart(fig_quarter, use_container_width=True)
+                with extra_right:
+                    st.markdown("#### Strongest / Weakest Calendar Buckets")
+                    leaders = pd.DataFrame(
+                        [
+                            {"Bucket": "Best Weekday", "Value": str(weekday_stats.sort_values("Avg_ReturnPct", ascending=False).iloc[0]["Weekday"]), "Avg %": weekday_stats["Avg_ReturnPct"].max()},
+                            {"Bucket": "Worst Weekday", "Value": str(weekday_stats.sort_values("Avg_ReturnPct", ascending=True).iloc[0]["Weekday"]), "Avg %": weekday_stats["Avg_ReturnPct"].min()},
+                            {"Bucket": "Best ISO Week", "Value": str(int(weekly_stats.sort_values("Avg_ReturnPct", ascending=False).iloc[0]["ISOWeek"])), "Avg %": weekly_stats["Avg_ReturnPct"].max()},
+                            {"Bucket": "Worst ISO Week", "Value": str(int(weekly_stats.sort_values("Avg_ReturnPct", ascending=True).iloc[0]["ISOWeek"])), "Avg %": weekly_stats["Avg_ReturnPct"].min()},
+                            {"Bucket": "Best Month", "Value": str(monthly_perf.sort_values("Avg_ReturnPct", ascending=False).iloc[0]["Month"]), "Avg %": monthly_perf["Avg_ReturnPct"].max()},
+                            {"Bucket": "Worst Month", "Value": str(monthly_perf.sort_values("Avg_ReturnPct", ascending=True).iloc[0]["Month"]), "Avg %": monthly_perf["Avg_ReturnPct"].min()},
+                        ]
+                    )
+                    st.dataframe(leaders.round(2), use_container_width=True, hide_index=True)
 
         with tab_edge:
             edge_summary = pd.DataFrame(
