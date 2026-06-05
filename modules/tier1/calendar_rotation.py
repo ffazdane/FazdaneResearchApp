@@ -16,6 +16,10 @@ from modules.base_module import FazDaneModule
 from utils.universe_manager import render_universe_manager
 from utils.persistence import get_db_path
 from utils.formatting import calculate_strength_pct, format_strength_meter, format_strength_meter_html
+from modules.calendar_scoring.database import insert_decision_log, insert_option_setup
+from modules.calendar_scoring.data_loader import fetch_option_chain_data, black_scholes_call
+from modules.calendar_scoring.trade_setup_engine import select_calendar_setup
+from modules.calendar_scoring.config import MODEL_VERSION
 
 logger = logging.getLogger("CalendarRotation")
 
@@ -236,7 +240,8 @@ def compute_live_market_metrics(tickers: tuple) -> dict[str, dict]:
                 if ticker_df.empty:
                     metrics[ticker] = {
                         "fdts_signal": "No Trade", "strength_pct": None,
-                        "spot": None, "net_change_val": None, "net_change_pct": None, "atr": None
+                        "spot": None, "net_change_val": None, "net_change_pct": None, "atr": None,
+                        "hv_30": 0.30
                     }
                     continue
                 
@@ -256,18 +261,27 @@ def compute_live_market_metrics(tickers: tuple) -> dict[str, dict]:
                 atr_series = calculate_atr(ticker_df["High"], ticker_df["Low"], ticker_df["Close"], period=14)
                 atr = float(atr_series.iloc[-1]) if not atr_series.dropna().empty else None
                 
+                try:
+                    hist_vol_30 = float(ticker_df['Close'].pct_change().rolling(30).std().iloc[-1] * np.sqrt(252))
+                    if np.isnan(hist_vol_30) or hist_vol_30 <= 0:
+                        hist_vol_30 = 0.30
+                except Exception:
+                    hist_vol_30 = 0.30
+                
                 metrics[ticker] = {
                     "fdts_signal": sig,
                     "strength_pct": strength_pct,
                     "spot": spot,
                     "net_change_val": net_change_val,
                     "net_change_pct": net_change_pct,
-                    "atr": atr
+                    "atr": atr,
+                    "hv_30": hist_vol_30
                 }
             except Exception:
                 metrics[ticker] = {
                     "fdts_signal": "No Trade", "strength_pct": None,
-                    "spot": None, "net_change_val": None, "net_change_pct": None, "atr": None
+                    "spot": None, "net_change_val": None, "net_change_pct": None, "atr": None,
+                    "hv_30": 0.30
                 }
     except Exception as e:
         logger.warning(f"compute_live_market_metrics batch download failed: {e}")
@@ -337,7 +351,13 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     tickers_upper = [t.strip().upper() for t in tickers]
     merged = pd.DataFrame({"ticker": tickers_upper})
     
-    df_cs = pd.DataFrame(columns=["ticker", "earnings_date", "fdts_signal", "cs_rec", "cs_score", "cs_reason"])
+    df_cs = pd.DataFrame(columns=[
+        "ticker", "earnings_date", "fdts_signal", "cs_rec", "cs_score", "cs_reason",
+        "trend_score", "option_structure_score", "volatility_score", "pca_score",
+        "cluster_score", "leading_lagging_score", "liquidity_score", "event_risk_score",
+        "price_at_decision", "atr_14", "rsi_14", "adx_14", "ema_20", "ema_50", "ema_200",
+        "iv_rank", "iv_percentile", "event_risk_flag"
+    ])
     df_mre = pd.DataFrame(columns=["ticker", "mre_rec", "mre_sig", "current_state", "bear_prob_1d", "stickiness_score", "mre_fdts", "realized_vol"])
     df_pa = pd.DataFrame(columns=["ticker", "pa_rec", "pa_score", "atr", "atr_min", "atr_max", "volume"])
     
@@ -346,7 +366,10 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
             with sqlite3.connect(cs_db) as conn:
                 # Latest Calendar Scoring recommendation for each ticker
                 q_cs = """
-                    SELECT ticker, earnings_date, fdts_signal, recommendation as cs_rec, final_score as cs_score, reason_summary as cs_reason
+                    SELECT ticker, earnings_date, fdts_signal, recommendation as cs_rec, final_score as cs_score, reason_summary as cs_reason,
+                           trend_score, option_structure_score, volatility_score, pca_score, cluster_score, leading_lagging_score,
+                           liquidity_score, event_risk_score, price_at_decision, atr_14, rsi_14, adx_14, ema_20, ema_50, ema_200,
+                           iv_rank, iv_percentile, event_risk_flag
                     FROM ticker_decision_log t1
                     WHERE decision_id = (
                         SELECT MAX(decision_id) FROM ticker_decision_log t2 WHERE t2.ticker = t1.ticker
@@ -404,6 +427,17 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
     merged["mre_sig"] = merged["mre_sig"].fillna(0.0)
     merged["pa_rec"] = merged["pa_rec"].fillna("N/A")
     merged["pa_score"] = merged["pa_score"].fillna(0.0)
+    for col, default_val in [
+        ("trend_score", 80.0), ("option_structure_score", 80.0), ("volatility_score", 80.0),
+        ("pca_score", 80.0), ("cluster_score", 80.0), ("leading_lagging_score", 80.0),
+        ("liquidity_score", 80.0), ("event_risk_score", 80.0), ("rsi_14", 55.0),
+        ("adx_14", 22.0), ("ema_20", 0.0), ("ema_50", 0.0), ("ema_200", 0.0),
+        ("iv_rank", 30.0), ("iv_percentile", 30.0), ("event_risk_flag", 0)
+    ]:
+        if col not in merged.columns:
+            merged[col] = default_val
+        else:
+            merged[col] = merged[col].fillna(default_val)
 
     # --- LIVE Market Metrics override: always recalculate from fresh price data ---
     # The DB value can be stale (from a previous engine run). Live calculation
@@ -444,6 +478,9 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
         lambda t: live_metrics.get(t, {}).get("net_change_pct") if pd.notnull(live_metrics.get(t, {}).get("net_change_pct")) else None
     )
     merged["atr"] = merged.apply(get_atr, axis=1)
+    merged["hv_30"] = merged["ticker"].map(
+        lambda t: live_metrics.get(t, {}).get("hv_30", 0.30)
+    )
 
     opt_summary = query_options_liquidity_store(tickers_upper)
     earnings_dates = query_earnings_calendar_store(tickers_upper)
@@ -855,6 +892,237 @@ def _render_detail_panel(row: pd.Series) -> None:
         )
 
     st.divider()
+
+    # ── Option Calendar Spread Leg Calculator & Deployment ──
+    if spot is not None:
+        st.markdown("### 🛠️ Options Look-and-Deploy Spread Setup")
+        
+        # Options controls
+        col_ctrl1, col_ctrl2 = st.columns([1, 1])
+        with col_ctrl1:
+            force_synthetic = st.checkbox(
+                "Force Synthetic Option Chain Fallback",
+                value=False,
+                help="Use generated synthetic options chains if live market data is slow or unavailable."
+            )
+        with col_ctrl2:
+            target_delta_val = st.slider(
+                "Target Short Leg Delta",
+                min_value=0.10,
+                max_value=0.50,
+                value=0.25,
+                step=0.05,
+                help="The delta used to pick the short option leg. Default is 0.25 delta."
+            )
+            
+        # Get HV30
+        hv_30_val = row.get("hv_30", 0.30)
+        
+        # Load and select optimal legs
+        with st.spinner("Calculating optimal calendar spread legs..."):
+            option_chain = fetch_option_chain_data(ticker, spot, use_synthetic=force_synthetic)
+            setup = select_calendar_setup(ticker, option_chain, spot, hv_30_val, target_delta=target_delta_val)
+            
+        if not setup:
+            st.warning("⚠️ Could not load option chain or select optimal calendar legs. Check internet connectivity or toggle synthetic fallback.")
+        else:
+            # Let's display the legs in a clean UI
+            st.markdown(f"**🎯 Strategy Selected: {setup['strategy_type']}**")
+            
+            c_leg1, c_leg2, c_leg3 = st.columns(3)
+            with c_leg1:
+                st.markdown("##### 🔴 Short Front Leg (Sell)")
+                st.markdown(f"**Expiry**: `{setup['short_expiry']}` (DTE: `{setup['short_dte']}`)")
+                st.markdown(f"**Strike**: `${setup['selected_strike']:.1f}`")
+                st.markdown(f"**Bid/Ask**: `${setup['short_bid']:.2f}` / `${setup['short_ask']:.2f}`")
+                st.markdown(f"**Mid Price**: `${setup['short_mid']:.2f}`")
+            with c_leg2:
+                st.markdown("##### 🟢 Long Back Leg (Buy)")
+                st.markdown(f"**Expiry**: `{setup['long_expiry']}` (DTE: `{setup['long_dte']}`)")
+                st.markdown(f"**Strike**: `${setup['selected_strike']:.1f}`")
+                st.markdown(f"**Bid/Ask**: `${setup['long_bid']:.2f}` / `${setup['long_ask']:.2f}`")
+                st.markdown(f"**Mid Price**: `${setup['long_mid']:.2f}`")
+            with c_leg3:
+                st.markdown("##### 💰 Spread Costs & Parameters")
+                st.markdown(f"**Net Debit (Cost/Risk)**: `${setup['net_debit']:.2f}`")
+                st.markdown(f"**Max Potential Loss**: `${setup['max_risk']:.2f}`")
+                st.markdown(f"**Bid-Ask Spread**: `{setup['bid_ask_spread_pct']*100:.2f}%`")
+                st.markdown(f"**Breakevens**: `${setup['breakeven_low']:.2f}` to `${setup['breakeven_high']:.2f}`")
+                
+            st.markdown("##### 📐 Consolidated Greeks")
+            cg1, cg2, cg3, cg4 = st.columns(4)
+            with cg1:
+                st.metric("Net Delta", f"{setup['setup_delta']:.4f}")
+            with cg2:
+                st.metric("Net Gamma", f"{setup['setup_gamma']:.4f}")
+            with cg3:
+                st.metric("Net Theta", f"{setup['setup_theta']:.4f}", help="Positive is beneficial (Theta collection)")
+            with cg4:
+                st.metric("Net Vega", f"{setup['setup_vega']:.4f}", help="Positive is beneficial (Long Volatility)")
+                
+            st.divider()
+            
+            # Payoff chart and trade plan columns
+            col_chart, col_plan = st.columns([4, 3])
+            
+            with col_chart:
+                st.markdown("##### 📈 Spread Payoff Profile (Front-Month Expiration)")
+                prices = np.linspace(spot * 0.85, spot * 1.15, 80)
+                payoff = []
+                r = 0.045
+                for p in prices:
+                    T_back_rem = (setup["long_dte"] - setup["short_dte"]) / 365.0
+                    back_val, _, _, _, _ = black_scholes_call(p, setup["selected_strike"], T_back_rem, r, setup["back_iv"])
+                    short_val = max(0.0, p - setup["selected_strike"])
+                    spread_val = back_val - short_val
+                    pnl = spread_val - setup["net_debit"]
+                    payoff.append(pnl)
+                    
+                fig = go.Figure()
+                # Draw PnL area
+                fig.add_trace(go.Scatter(
+                    x=prices, y=payoff, name="PnL at Front Expiry",
+                    line=dict(color='#00D4AA', width=3),
+                    fill='tozeroy', fillcolor='rgba(0, 212, 170, 0.08)'
+                ))
+                # Add spot marker line
+                fig.add_vline(x=spot, line_dash="dash", line_color="#ffb800", annotation_text="Current Spot", annotation_position="top left")
+                # Add break-even horizontal line
+                fig.add_hline(y=0.0, line_color="#64748b", line_width=1)
+                
+                fig.update_layout(
+                    xaxis_title="Stock Price",
+                    yaxis_title="Profit / Loss ($)",
+                    height=280,
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#E2E8F0"),
+                    xaxis=dict(gridcolor="#1e3a5f", showgrid=True),
+                    yaxis=dict(gridcolor="#1e3a5f", showgrid=True)
+                )
+                st.plotly_chart(fig, use_container_width=True, theme=None)
+                
+            with col_plan:
+                st.markdown("##### 📋 Copyable Trade Plan")
+                # Trade plan text block
+                trade_plan_text = f"""=== FAZDANE RESEARCH SYSTEM - CALENDAR TRADE PLAN ===
+Ticker: {ticker}
+Current Spot: ${spot:,.2f}
+Strategy: Bullish Calendar Spread
+Option Structure: Sell {setup['short_expiry']} (DTE {setup['short_dte']}) ${setup['selected_strike']:.1f} Call / Buy {setup['long_expiry']} (DTE {setup['long_dte']}) ${setup['selected_strike']:.1f} Call
+Target Strike: ${setup['selected_strike']:.2f}
+Est. Net Debit (Max Risk): ${setup['net_debit']:.2f}
+Net Greeks:
+  - Delta: {setup['setup_delta']:.4f}
+  - Gamma: {setup['setup_gamma']:.4f}
+  - Theta: {setup['setup_theta']:.4f}
+  - Vega:  {setup['setup_vega']:.4f}
+Est. Breakeven Low: ${setup['breakeven_low']:.2f}
+Est. Breakeven High: ${setup['breakeven_high']:.2f}
+Rules:
+  - Entry Trigger: Pullback confirmation near 20MA or 1H reversion to mean.
+  - Invalidation: Close below support or stop loss hit.
+  - Profit Target: Exit at 30% - 50% of debit paid (${setup['net_debit']*0.3:.2f} - ${setup['net_debit']*0.5:.2f} gain).
+  - Stop Loss: Exit if spread value loses 35% - 50% of debit paid (${setup['net_debit']*0.35:.2f} - ${setup['net_debit']*0.5:.2f} loss).
+"""
+                st.code(trade_plan_text, language="markdown")
+                
+            st.divider()
+            
+            # Action button for deployment
+            deploy_btn_col, _ = st.columns([2, 3])
+            with deploy_btn_col:
+                if st.button("🚀 Log & Deploy Calendar Spread Setup", use_container_width=True, type="primary"):
+                    try:
+                        # Log decision & option setup to paper database
+                        now = datetime.now()
+                        now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+                        today_str = now.strftime("%Y-%m-%d")
+                        
+                        # Find next earnings date if available
+                        earn_date = row.get("earnings_date")
+                        if earn_date == "N/A" or not earn_date:
+                            earn_date = (now + timedelta(days=45)).strftime("%Y-%m-%d")
+                            
+                        decision_data = {
+                            "decision_datetime": now_str,
+                            "decision_date": today_str,
+                            "ticker": ticker,
+                            "strategy_type": "Bullish Calendar Spread",
+                            "recommendation": "Deploy",
+                            "rank_today": 1,
+                            "final_score": float(row.get("cs_score", 80.0)),
+                            "market_regime": row.get("current_state", "SIDEWAYS") + " State",
+                            "fdts_signal": row.get("fdts_signal", "Neutral"),
+                            "fdts_score": float(row.get("cs_score", 80.0)),
+                            "trend_score": float(row.get("trend_score", 80.0)),
+                            "option_structure_score": float(row.get("option_liquidity_score", 80.0)),
+                            "volatility_score": 80.0,
+                            "pca_score": 80.0,
+                            "cluster_score": 80.0,
+                            "leading_lagging_score": float(row.get("strength_pct", 80.0) or 80.0),
+                            "liquidity_score": float(row.get("option_liquidity_score", 80.0)),
+                            "event_risk_score": 80.0,
+                            "institutional_flow_score": 0.0,
+                            "cluster_label": row.get("pa_display_rec", "Stage 3 Active"),
+                            "leading_lagging_state": row.get("pa_display_rec", "Stage 3 Active"),
+                            "price_at_decision": float(spot),
+                            "atr_14": float(row.get("atr", spot * 0.02) or spot * 0.02),
+                            "rsi_14": float(row.get("rsi_14", 55.0) or 55.0),
+                            "adx_14": float(row.get("adx_14", 22.0) or 22.0),
+                            "ema_20": float(row.get("ema_20", spot) or spot),
+                            "ema_50": float(row.get("ema_50", spot) or spot),
+                            "ema_200": float(row.get("ema_200", spot) or spot),
+                            "iv_rank": float(row.get("iv_rank", 30.0) or 30.0),
+                            "iv_percentile": float(row.get("iv_percentile", 30.0) or 30.0),
+                            "front_iv": float(setup.get("front_iv", 0.30)),
+                            "back_iv": float(setup.get("back_iv", 0.32)),
+                            "iv_term_structure": float(setup.get("back_iv", 0.32) - setup.get("front_iv", 0.30)),
+                            "avg_option_volume": float(setup.get("avg_option_volume", 1000.0)),
+                            "avg_open_interest": float(setup.get("avg_open_interest", 5000.0)),
+                            "bid_ask_spread_pct": float(setup.get("bid_ask_spread_pct", 0.015)),
+                            "earnings_date": earn_date,
+                            "event_risk_flag": 0,
+                            "reason_summary": f"Manually deployed from Consolidated Strategy Matrix. PA: {row.get('pa_display_rec')}. Regime: {row.get('mre_display_rec')}",
+                            "model_version": MODEL_VERSION,
+                            "ml_predicted_return": 0.0
+                        }
+                        
+                        decision_id = insert_decision_log(decision_data)
+                        
+                        if decision_id:
+                            setup_data = {
+                                "decision_id": decision_id,
+                                "ticker": ticker,
+                                "strategy_type": "Bullish Calendar Spread",
+                                "short_dte": int(setup["short_dte"]),
+                                "long_dte": int(setup["long_dte"]),
+                                "target_delta": float(setup["target_delta"]),
+                                "short_expiry": setup["short_expiry"],
+                                "long_expiry": setup["long_expiry"],
+                                "selected_strike": float(setup["selected_strike"]),
+                                "short_bid": float(setup["short_bid"]),
+                                "short_ask": float(setup["short_ask"]),
+                                "short_mid": float(setup["short_mid"]),
+                                "long_bid": float(setup["long_bid"]),
+                                "long_ask": float(setup["long_ask"]),
+                                "long_mid": float(setup["long_mid"]),
+                                "net_debit": float(setup["net_debit"]),
+                                "max_risk": float(setup["max_risk"]),
+                                "setup_delta": float(setup["setup_delta"]),
+                                "setup_gamma": float(setup["setup_gamma"]),
+                                "setup_theta": float(setup["setup_theta"]),
+                                "setup_vega": float(setup["setup_vega"]),
+                                "breakeven_low": float(setup["breakeven_low"]),
+                                "breakeven_high": float(setup["breakeven_high"])
+                            }
+                            insert_option_setup(setup_data)
+                            st.success(f"🚀 Calendar Spread for **{ticker}** logged and deployed successfully to SQLite (decision_id: {decision_id}, strike: ${setup['selected_strike']:.1f})!")
+                        else:
+                            st.error("Failed to insert decision record into the database.")
+                    except Exception as ex:
+                        st.error(f"Error deploying trade setup: {ex}")
 
 
 def render_matrix_native(filtered_df: pd.DataFrame) -> None:

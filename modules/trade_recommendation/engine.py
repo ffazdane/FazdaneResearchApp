@@ -24,6 +24,7 @@ from modules.trade_recommendation.selector import (
 from modules.trade_recommendation.plan_generator import generate_trade_plan
 from modules.calendar_scoring.data_loader import fetch_option_chain_data
 from modules.calendar_scoring.trade_setup_engine import select_calendar_setup
+from modules.tier1.calendar_rotation import load_consolidated_recommendations
 
 logger = logging.getLogger("TradeRecommendationEngine")
 
@@ -101,18 +102,42 @@ class TradeRecommendationEngineModule(FazDaneModule):
         # 1. Universe Overview Table
         st.markdown("### 📋 Watchlist Summary Overview")
         
-        col_gen, col_spacing = st.columns([1, 2])
+        col_gen, col_mode, col_spacing = st.columns([1.2, 1.5, 1.8])
         with col_gen:
             if st.button("🔄 Generate / Update Watchlist Data", use_container_width=True):
                 self._generate_watchlist_data(tickers)
+        with col_mode:
+            view_mode = st.selectbox(
+                "Display Columns View",
+                options=["Standard Watchlist", "Consolidated Matrix View"],
+                key="re_view_mode_sel",
+                label_visibility="collapsed"
+            )
                 
         df_universe = self._get_universe_summary_table(tickers)
         
         if not df_universe.empty:
+            # Filter columns based on selected view mode
+            standard_cols = [
+                "Ticker", "Company Name", "Ticker Price", "Net Change", "ATR", "FDTS", "Strength", 
+                "Earnings Date", "Score", "Decision", "State", "Regime", "Strategy", "40D Range", "Last Updated"
+            ]
+            consolidated_cols = [
+                "Ticker", "Company Name", "Ticker Price", "Net Change", "Alignment", "Cal Score Rec", 
+                "Price Action Rec", "Markov Setup", "Option Bias", "Score", "Decision", "Strategy", "Earnings Date"
+            ]
+            
+            if view_mode == "Consolidated Matrix View":
+                cols_to_use = [c for c in consolidated_cols if c in df_universe.columns]
+            else:
+                cols_to_use = [c for c in standard_cols if c in df_universe.columns]
+                
+            display_df = df_universe[cols_to_use]
+            
             # ── Single-row selection using native st.dataframe on_select ────────
             # This replaces the multi-select data_editor approach and gives clean
             # single-row click-to-select behaviour with a highlighted active row.
-            styled_df = df_universe.style.apply(self._apply_watchlist_styles, axis=None)
+            styled_df = display_df.style.apply(self._apply_watchlist_styles, axis=None)
             event = st.dataframe(
                 styled_df,
                 use_container_width=True,
@@ -123,7 +148,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
             )
             selected_rows = event.selection.rows if event.selection else []
             if selected_rows:
-                chosen = df_universe.iloc[selected_rows[0]]["Ticker"]
+                chosen = display_df.iloc[selected_rows[0]]["Ticker"]
                 if chosen != active_ticker:
                     st.session_state["re_ticker"] = chosen
                     st.rerun()
@@ -221,8 +246,37 @@ class TradeRecommendationEngineModule(FazDaneModule):
         from modules.trade_recommendation.database import fetch_latest_ticker_snapshot, deserialize_analysis_data
         from utils.formatting import calculate_strength_pct, format_strength_meter
         
+        # Load consolidated rotation recommendations
+        cal_dict = {}
+        try:
+            df_cal = load_consolidated_recommendations(tickers)
+            if not df_cal.empty:
+                for _, r in df_cal.iterrows():
+                    cal_dict[r["ticker"]] = r.to_dict()
+        except Exception as e:
+            logger.error(f"Failed to load consolidated rotation recommendations: {e}")
+
         for t in tickers:
             snap = fetch_latest_ticker_snapshot(t)
+            
+            # Lookup cal recommendations
+            cal_data = cal_dict.get(t, {})
+            cs_rec = cal_data.get("cs_rec", "N/A")
+            pa_display_rec = cal_data.get("pa_display_rec", "N/A")
+            mre_display_rec = cal_data.get("mre_display_rec", "N/A")
+            ol_bias = cal_data.get("ol_bias", "N/A")
+
+            # Calculate alignment index (0-5)
+            score_count = 0
+            if cs_rec in ["Deploy", "Watch"]:
+                score_count += 1
+            if isinstance(pa_display_rec, str) and pa_display_rec.startswith("🟢"):
+                score_count += 1
+            if mre_display_rec == "✅ Yes":
+                score_count += 1
+            if ol_bias in ["🟢 Call Heavy", "⚪ Balanced"]:
+                score_count += 1
+
             if snap:
                 raw_json = snap.get("raw_analysis_json")
                 daily_data = {}
@@ -309,6 +363,21 @@ class TradeRecommendationEngineModule(FazDaneModule):
                     except Exception:
                         pass
                 
+                # 5. TI Decision
+                ti_decision = snap["trade_decision"] or "N/A"
+                if ti_decision in ["Deploy", "Watch"]:
+                    score_count += 1
+                
+                emoji_map = {
+                    5: "🟢 5/5 Aligned",
+                    4: "🟢 4/5 Aligned",
+                    3: "🟡 3/5 Aligned",
+                    2: "🔵 2/5 Aligned",
+                    1: "🔴 1/5 Aligned",
+                    0: "🔴 0/5 Aligned"
+                }
+                alignment_str = emoji_map.get(score_count, "🔴 0/5 Aligned")
+
                 rows.append({
                     "Ticker": t,
                     "Company Name": get_company_name(t),
@@ -319,14 +388,29 @@ class TradeRecommendationEngineModule(FazDaneModule):
                     "Strength": strength_icon,
                     "Earnings Date": ed_val,
                     "Score": f"{snap['trade_score']:.1f}" if snap['trade_score'] else "N/A",
-                    "Decision": snap["trade_decision"] or "N/A",
+                    "Decision": ti_decision,
                     "State": snap["trend_state"] or "N/A",
                     "Regime": snap["market_state"] or "N/A",
                     "Strategy": snap["recommended_strategy"] or "N/A",
                     "40D Range": f"${snap['expected_40d_low']:.2f} - ${snap['expected_40d_high']:.2f}" if (snap['expected_40d_low'] and snap['expected_40d_high']) else "N/A",
-                    "Last Updated": snap["snapshot_datetime"]
+                    "Last Updated": snap["snapshot_datetime"],
+                    
+                    "Alignment": alignment_str,
+                    "Cal Score Rec": cs_rec,
+                    "Price Action Rec": pa_display_rec,
+                    "Markov Setup": mre_display_rec,
+                    "Option Bias": ol_bias
                 })
             else:
+                emoji_map = {
+                    4: "🟢 4/5 Aligned",
+                    3: "🟡 3/5 Aligned",
+                    2: "🔵 2/5 Aligned",
+                    1: "🔴 1/5 Aligned",
+                    0: "🔴 0/5 Aligned"
+                }
+                alignment_str = emoji_map.get(score_count, "🔴 0/5 Aligned")
+
                 rows.append({
                     "Ticker": t,
                     "Company Name": get_company_name(t),
@@ -342,7 +426,13 @@ class TradeRecommendationEngineModule(FazDaneModule):
                     "Regime": "-",
                     "Strategy": "-",
                     "40D Range": "-",
-                    "Last Updated": "-"
+                    "Last Updated": "-",
+                    
+                    "Alignment": alignment_str,
+                    "Cal Score Rec": cs_rec,
+                    "Price Action Rec": pa_display_rec,
+                    "Markov Setup": mre_display_rec,
+                    "Option Bias": ol_bias
                 })
         return pd.DataFrame(rows)
 
@@ -354,85 +444,149 @@ class TradeRecommendationEngineModule(FazDaneModule):
             row = df.loc[i]
             
             # Ticker
-            styles.at[i, "Ticker"] = "font-weight: 700; color: #60a5fa"
+            if "Ticker" in df.columns:
+                styles.at[i, "Ticker"] = "font-weight: 700; color: #60a5fa"
             
             # Ticker Price
-            styles.at[i, "Ticker Price"] = "font-weight: 600;"
+            if "Ticker Price" in df.columns:
+                styles.at[i, "Ticker Price"] = "font-weight: 600;"
             
             # Net Change
-            nc = str(row.get("Net Change", ""))
-            if nc.startswith("+"):
-                styles.at[i, "Net Change"] = "color: #22c55e; font-weight: 700"
-            elif nc.startswith("-"):
-                styles.at[i, "Net Change"] = "color: #ef4444; font-weight: 700"
+            if "Net Change" in df.columns:
+                nc = str(row.get("Net Change", ""))
+                if nc.startswith("+"):
+                    styles.at[i, "Net Change"] = "color: #22c55e; font-weight: 700"
+                elif nc.startswith("-"):
+                    styles.at[i, "Net Change"] = "color: #ef4444; font-weight: 700"
                 
             # FDTS
-            fdts = str(row.get("FDTS", ""))
-            if "Buy" in fdts:
-                styles.at[i, "FDTS"] = "color: #22c55e; font-weight: 700"
-            elif "Sell" in fdts:
-                styles.at[i, "FDTS"] = "color: #ef4444; font-weight: 700"
-            else:
-                styles.at[i, "FDTS"] = "color: #94a3b8"
+            if "FDTS" in df.columns:
+                fdts = str(row.get("FDTS", ""))
+                if "Buy" in fdts:
+                    styles.at[i, "FDTS"] = "color: #22c55e; font-weight: 700"
+                elif "Sell" in fdts:
+                    styles.at[i, "FDTS"] = "color: #ef4444; font-weight: 700"
+                else:
+                    styles.at[i, "FDTS"] = "color: #94a3b8"
                 
             # Strength
-            st_val = str(row.get("Strength", ""))
-            if "▲" in st_val:
-                styles.at[i, "Strength"] = "color: #00D4AA; font-weight: 700; font-size: 18px; text-align: center"
-            elif "▼" in st_val:
-                styles.at[i, "Strength"] = "color: #FF4B4B; font-weight: 700; font-size: 18px; text-align: center"
-            elif "▶" in st_val:
-                styles.at[i, "Strength"] = "color: #FFA421; font-weight: 700; font-size: 18px; text-align: center"
-            else:
-                styles.at[i, "Strength"] = "color: #888888; text-align: center"
+            if "Strength" in df.columns:
+                st_val = str(row.get("Strength", ""))
+                if "▲" in st_val:
+                    styles.at[i, "Strength"] = "color: #00D4AA; font-weight: 700; font-size: 18px; text-align: center"
+                elif "▼" in st_val:
+                    styles.at[i, "Strength"] = "color: #FF4B4B; font-weight: 700; font-size: 18px; text-align: center"
+                elif "▶" in st_val:
+                    styles.at[i, "Strength"] = "color: #FFA421; font-weight: 700; font-size: 18px; text-align: center"
+                else:
+                    styles.at[i, "Strength"] = "color: #888888; text-align: center"
                 
             # Earnings Date
-            ed = str(row.get("Earnings Date", ""))
-            if "🔴" in ed:
-                styles.at[i, "Earnings Date"] = "background-color: rgba(220,38,38,0.28); color: #ef4444; font-weight: 700"
-            elif "🟡" in ed:
-                styles.at[i, "Earnings Date"] = "background-color: rgba(255,184,0,0.22); color: #ffb800; font-weight: 700"
+            if "Earnings Date" in df.columns:
+                ed = str(row.get("Earnings Date", ""))
+                if "🔴" in ed:
+                    styles.at[i, "Earnings Date"] = "background-color: rgba(220,38,38,0.28); color: #ef4444; font-weight: 700"
+                elif "🟡" in ed:
+                    styles.at[i, "Earnings Date"] = "background-color: rgba(255,184,0,0.22); color: #ffb800; font-weight: 700"
                 
             # Decision
-            dec = str(row.get("Decision", ""))
-            if "Deploy" in dec:
-                styles.at[i, "Decision"] = "background-color: rgba(58, 181, 74, 0.22); color: #3ab54a; font-weight: 700"
-            elif "Watch" in dec:
-                styles.at[i, "Decision"] = "background-color: rgba(255, 184, 0, 0.18); color: #ffb800; font-weight: 700"
-            elif "Wait" in dec:
-                styles.at[i, "Decision"] = "background-color: rgba(2, 132, 199, 0.18); color: #0284c7; font-weight: 700"
-            elif "Reject" in dec or "Avoid" in dec:
-                styles.at[i, "Decision"] = "background-color: rgba(220, 38, 38, 0.18); color: #ef4444; font-weight: 700"
+            if "Decision" in df.columns:
+                dec = str(row.get("Decision", ""))
+                if "Deploy" in dec:
+                    styles.at[i, "Decision"] = "background-color: rgba(58, 181, 74, 0.22); color: #3ab54a; font-weight: 700"
+                elif "Watch" in dec:
+                    styles.at[i, "Decision"] = "background-color: rgba(255, 184, 0, 0.18); color: #ffb800; font-weight: 700"
+                elif "Wait" in dec:
+                    styles.at[i, "Decision"] = "background-color: rgba(2, 132, 199, 0.18); color: #0284c7; font-weight: 700"
+                elif "Reject" in dec or "Avoid" in dec:
+                    styles.at[i, "Decision"] = "background-color: rgba(220, 38, 38, 0.18); color: #ef4444; font-weight: 700"
                 
             # State
-            state = str(row.get("State", ""))
-            if "Bull" in state:
-                styles.at[i, "State"] = "background-color: rgba(34, 197, 94, 0.15); color: #22c55e; font-weight: 700"
-            elif "Bear" in state or "Breakdown" in state:
-                styles.at[i, "State"] = "background-color: rgba(220, 38, 38, 0.15); color: #ef4444; font-weight: 700"
-            elif "Late" in state or "Transition" in state or "Mixed" in state or "Overextended" in state:
-                styles.at[i, "State"] = "background-color: rgba(255, 184, 0, 0.15); color: #ffb800; font-weight: 700"
-            elif "Sideways" in state or "Range" in state:
-                styles.at[i, "State"] = "background-color: rgba(2, 132, 199, 0.15); color: #0284c7; font-weight: 700"
+            if "State" in df.columns:
+                state = str(row.get("State", ""))
+                if "Bull" in state:
+                    styles.at[i, "State"] = "background-color: rgba(34, 197, 94, 0.15); color: #22c55e; font-weight: 700"
+                elif "Bear" in state or "Breakdown" in state:
+                    styles.at[i, "State"] = "background-color: rgba(220, 38, 38, 0.15); color: #ef4444; font-weight: 700"
+                elif "Late" in state or "Transition" in state or "Mixed" in state or "Overextended" in state:
+                    styles.at[i, "State"] = "background-color: rgba(255, 184, 0, 0.15); color: #ffb800; font-weight: 700"
+                elif "Sideways" in state or "Range" in state:
+                    styles.at[i, "State"] = "background-color: rgba(2, 132, 199, 0.15); color: #0284c7; font-weight: 700"
                 
             # Regime
-            reg = str(row.get("Regime", ""))
-            if "Trending" in reg:
-                styles.at[i, "Regime"] = "background-color: rgba(34, 197, 94, 0.15); color: #22c55e; font-weight: 700"
-            elif "Volatile" in reg:
-                styles.at[i, "Regime"] = "background-color: rgba(220, 38, 38, 0.15); color: #ef4444; font-weight: 700"
-            elif "Compressed" in reg:
-                styles.at[i, "Regime"] = "background-color: rgba(139, 92, 246, 0.15); color: #a78bfa; font-weight: 700"
-            elif "Mean Reverting" in reg:
-                styles.at[i, "Regime"] = "background-color: rgba(2, 132, 199, 0.15); color: #0284c7; font-weight: 700"
+            if "Regime" in df.columns:
+                reg = str(row.get("Regime", ""))
+                if "Trending" in reg:
+                    styles.at[i, "Regime"] = "background-color: rgba(34, 197, 94, 0.15); color: #22c55e; font-weight: 700"
+                elif "Volatile" in reg:
+                    styles.at[i, "Regime"] = "background-color: rgba(220, 38, 38, 0.15); color: #ef4444; font-weight: 700"
+                elif "Compressed" in reg:
+                    styles.at[i, "Regime"] = "background-color: rgba(139, 92, 246, 0.15); color: #a78bfa; font-weight: 700"
+                elif "Mean Reverting" in reg:
+                    styles.at[i, "Regime"] = "background-color: rgba(2, 132, 199, 0.15); color: #0284c7; font-weight: 700"
                 
             # Strategy
-            strat = str(row.get("Strategy", ""))
-            if "Reject" in strat:
-                styles.at[i, "Strategy"] = "background-color: rgba(220, 38, 38, 0.15); color: #ef4444; font-weight: 700"
-            elif strat != "-" and strat != "N/A" and strat != "Pending Scan":
-                styles.at[i, "Strategy"] = "background-color: rgba(58, 181, 74, 0.15); color: #3ab54a; font-weight: 700"
-                
+            if "Strategy" in df.columns:
+                strat = str(row.get("Strategy", ""))
+                if "Reject" in strat:
+                    styles.at[i, "Strategy"] = "background-color: rgba(220, 38, 38, 0.15); color: #ef4444; font-weight: 700"
+                elif strat != "-" and strat != "N/A" and strat != "Pending Scan":
+                    styles.at[i, "Strategy"] = "background-color: rgba(58, 181, 74, 0.15); color: #3ab54a; font-weight: 700"
+
+            # Alignment
+            if "Alignment" in df.columns:
+                align = str(row.get("Alignment", ""))
+                if "5/5" in align or "4/5" in align:
+                    styles.at[i, "Alignment"] = "background-color: rgba(58, 181, 74, 0.22); color: #3ab54a; font-weight: 700"
+                elif "3/5" in align:
+                    styles.at[i, "Alignment"] = "background-color: rgba(255, 184, 0, 0.18); color: #ffb800; font-weight: 700"
+                elif "2/5" in align:
+                    styles.at[i, "Alignment"] = "background-color: rgba(2, 132, 199, 0.18); color: #0284c7; font-weight: 700"
+                elif "1/5" in align or "0/5" in align:
+                    styles.at[i, "Alignment"] = "background-color: rgba(220, 38, 38, 0.18); color: #ef4444; font-weight: 700"
+
+            # Cal Score Rec
+            if "Cal Score Rec" in df.columns:
+                csr = str(row.get("Cal Score Rec", ""))
+                if "Deploy" in csr:
+                    styles.at[i, "Cal Score Rec"] = "background-color: rgba(58, 181, 74, 0.22); color: #3ab54a; font-weight: 700"
+                elif "Watch" in csr:
+                    styles.at[i, "Cal Score Rec"] = "background-color: rgba(255, 184, 0, 0.18); color: #ffb800; font-weight: 700"
+                elif "Wait" in csr:
+                    styles.at[i, "Cal Score Rec"] = "background-color: rgba(2, 132, 199, 0.18); color: #0284c7; font-weight: 700"
+                elif "Avoid" in csr or "Reject" in csr:
+                    styles.at[i, "Cal Score Rec"] = "background-color: rgba(220, 38, 38, 0.18); color: #ef4444; font-weight: 700"
+
+            # Price Action Rec
+            if "Price Action Rec" in df.columns:
+                par = str(row.get("Price Action Rec", ""))
+                if "Deploy" in par:
+                    styles.at[i, "Price Action Rec"] = "background-color: rgba(58, 181, 74, 0.15); color: #3ab54a; font-weight: 700"
+                elif "Watch" in par:
+                    styles.at[i, "Price Action Rec"] = "background-color: rgba(255, 184, 0, 0.15); color: #ffb800; font-weight: 700"
+                elif "Avoid" in par or "Reject" in par:
+                    styles.at[i, "Price Action Rec"] = "background-color: rgba(220, 38, 38, 0.15); color: #ef4444; font-weight: 700"
+
+            # Markov Setup
+            if "Markov Setup" in df.columns:
+                mks = str(row.get("Markov Setup", ""))
+                if "Yes" in mks or "✅" in mks:
+                    styles.at[i, "Markov Setup"] = "background-color: rgba(58, 181, 74, 0.22); color: #3ab54a; font-weight: 700; text-align: center"
+                elif "No" in mks or "❌" in mks:
+                    styles.at[i, "Markov Setup"] = "background-color: rgba(220, 38, 38, 0.18); color: #ef4444; font-weight: 700; text-align: center"
+
+            # Option Bias
+            if "Option Bias" in df.columns:
+                opb = str(row.get("Option Bias", ""))
+                if "Call Heavy" in opb:
+                    styles.at[i, "Option Bias"] = "background-color: rgba(58, 181, 74, 0.15); color: #3ab54a; font-weight: 700"
+                elif "Balanced" in opb:
+                    styles.at[i, "Option Bias"] = "background-color: rgba(2, 132, 199, 0.15); color: #0284c7; font-weight: 700"
+                elif "Put Heavy" in opb:
+                    styles.at[i, "Option Bias"] = "background-color: rgba(220, 38, 38, 0.15); color: #ef4444; font-weight: 700"
+                elif "Slight Put" in opb:
+                    styles.at[i, "Option Bias"] = "background-color: rgba(255, 184, 0, 0.15); color: #ffb800; font-weight: 700"
+                    
         return styles
 
     def _generate_watchlist_data(self, tickers: list):
