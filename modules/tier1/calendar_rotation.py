@@ -611,6 +611,22 @@ def load_consolidated_recommendations(tickers: list[str]) -> pd.DataFrame:
                 ol_bias_list.append("⚪ Balanced")
     merged["ol_bias"] = ol_bias_list
     
+    # Map earnings risk category
+    def get_earnings_risk(days):
+        if pd.isnull(days):
+            return "🟢 Green (Earnings > 40d / None)"
+        try:
+            d = float(days)
+            if 0 <= d <= 20:
+                return "🔴 Red (Earnings <= 20d)"
+            elif d <= 40:
+                return "🟡 Yellow (Earnings 21-40d)"
+        except (ValueError, TypeError):
+            pass
+        return "🟢 Green (Earnings > 40d / None)"
+    
+    merged["earnings_risk_category"] = merged["days_to_earnings"].apply(get_earnings_risk)
+    
     return merged
 
 
@@ -1325,7 +1341,7 @@ class CalendarRotationModule(FazDaneModule):
                         default=all_fdts_sigs,
                         key="cal_filter_fdts"
                     )
-                col_f5, _ = st.columns([1, 3])
+                col_f5, col_f6 = st.columns(2)
                 with col_f5:
                     all_ol_bias = sorted(list(df["ol_bias"].unique()))
                     sel_ol_bias = st.multiselect(
@@ -1334,6 +1350,14 @@ class CalendarRotationModule(FazDaneModule):
                         default=all_ol_bias,
                         key="cal_filter_ol_bias"
                     )
+                with col_f6:
+                    all_earnings_risk = sorted(list(df["earnings_risk_category"].unique()))
+                    sel_earnings_risk = st.multiselect(
+                        "Earnings Date Risk (Color Category)",
+                        options=all_earnings_risk,
+                        default=all_earnings_risk,
+                        key="cal_filter_earnings_risk"
+                    )
 
             # Apply filters
             filtered_df = df[
@@ -1341,7 +1365,8 @@ class CalendarRotationModule(FazDaneModule):
                 df["pa_display_rec"].isin(sel_pa_display_recs) &
                 df["mre_display_rec"].isin(sel_mre_display_recs) &
                 df["fdts_signal"].isin(sel_fdts_sigs) &
-                df["ol_bias"].isin(sel_ol_bias)
+                df["ol_bias"].isin(sel_ol_bias) &
+                df["earnings_risk_category"].isin(sel_earnings_risk)
             ]
             
             if filtered_df.empty:
