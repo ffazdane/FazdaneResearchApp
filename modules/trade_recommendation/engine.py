@@ -992,10 +992,12 @@ class TradeRecommendationEngineModule(FazDaneModule):
                 unsafe_allow_html=True
             )
             
-            # Metrics
-            st.metric("Trade Quality Score", f"{data['composite_score']:.1f} / 100")
-            st.metric("Spot Price", f"${data['spot_price']:.2f}")
-            st.metric("Suggested Strategy", data["strategy"])
+            # Metrics — guard against None values from stale DB cache
+            composite = data.get('composite_score')
+            spot_p = data.get('spot_price')
+            st.metric("Trade Quality Score", f"{composite:.1f} / 100" if composite is not None else "N/A")
+            st.metric("Spot Price", f"${spot_p:.2f}" if spot_p is not None else "N/A")
+            st.metric("Suggested Strategy", data.get("strategy") or "N/A")
             
             # Log button
             if st.button("🚀 Log & Deploy Trade Setup", use_container_width=True, type="primary"):
@@ -1065,15 +1067,20 @@ class TradeRecommendationEngineModule(FazDaneModule):
     def _render_forecast_map(self, data: dict):
         st.markdown("### 40-Day Blended Expected Range & Probability Cone")
         
-        df_daily = data["df_daily"]
-        spot = data["spot_price"]
-        high_val = data["expected_high"]
-        low_val = data["expected_low"]
+        df_daily = data.get("df_daily")
+        spot = data.get("spot_price")
+        high_val = data.get("expected_high")
+        low_val = data.get("expected_low")
+
+        if spot is None or df_daily is None or df_daily.empty:
+            st.info("⚠️ No forecast data available. Please regenerate the analysis for this ticker.")
+            return
         
         # Create standard deviation bands for plotting
         days = np.arange(1, 41)
         # expected range values per day
-        iv = data["daily_indicators"]["iv_rank"] / 100.0
+        daily_ind = data.get("daily_indicators") or {}
+        iv = (daily_ind.get("iv_rank") or 30.0) / 100.0
         z = st.session_state.get("re_cone_z", 1.64)
         
         upside_cone = spot + z * spot * iv * np.sqrt(days / 252.0)
@@ -1208,8 +1215,12 @@ class TradeRecommendationEngineModule(FazDaneModule):
     def _render_signal_matrix(self, data: dict):
         st.markdown("### Timeframe Indicator Agreement (3M vs Daily vs 1H)")
         
-        daily = data["daily_indicators"]
-        hourly = data["hourly_indicators"]
+        daily = data.get("daily_indicators")
+        hourly = data.get("hourly_indicators")
+
+        if not daily or not hourly:
+            st.info("⚠️ No indicator data available. Please regenerate the analysis for this ticker.")
+            return
         
         df_matrix = pd.DataFrame([
             {
