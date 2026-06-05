@@ -1071,12 +1071,31 @@ class TradeRecommendationEngineModule(FazDaneModule):
     def _render_forecast_map(self, data: dict):
         st.markdown("### 40-Day Blended Expected Range & Probability Cone")
         
-        df_daily = data.get("df_daily")
-        spot = data.get("spot_price")
-        high_val = data.get("expected_high")
-        low_val = data.get("expected_low")
+        df_daily  = data.get("df_daily")
+        spot      = data.get("spot_price")
+        high_val  = data.get("expected_high")
+        low_val   = data.get("expected_low")
+        ticker    = data.get("ticker", "")
 
-        if spot is None or df_daily is None or df_daily.empty:
+        # ── Auto-recover missing chart data from a lightweight yfinance call ──
+        # This happens when the DB cache has spot_price / decision / scores but
+        # the raw DataFrame was not serialised (old snapshots).  We only need
+        # OHLCV history here — no full analysis pipeline needed.
+        if (df_daily is None or (hasattr(df_daily, "empty") and df_daily.empty) or spot is None) and ticker:
+            try:
+                import yfinance as yf
+                _df = yf.Ticker(ticker).history(period="1y")
+                if not _df.empty:
+                    # Flatten multi-level columns (yfinance sometimes returns them)
+                    if isinstance(_df.columns, pd.MultiIndex):
+                        _df.columns = _df.columns.droplevel(1)
+                    df_daily = _df
+                    if spot is None:
+                        spot = float(_df["Close"].iloc[-1])
+            except Exception:
+                pass
+
+        if spot is None or df_daily is None or (hasattr(df_daily, "empty") and df_daily.empty):
             st.info("⚠️ No forecast data available. Please regenerate the analysis for this ticker.")
             return
         
@@ -1087,8 +1106,14 @@ class TradeRecommendationEngineModule(FazDaneModule):
         iv = (daily_ind.get("iv_rank") or 30.0) / 100.0
         z = st.session_state.get("re_cone_z", 1.64)
         
-        upside_cone = spot + z * spot * iv * np.sqrt(days / 252.0)
+        upside_cone   = spot + z * spot * iv * np.sqrt(days / 252.0)
         downside_cone = spot - z * spot * iv * np.sqrt(days / 252.0)
+
+        # Derive expected boundaries from cone when missing from DB cache
+        if high_val is None:
+            high_val = float(upside_cone[-1])
+        if low_val is None:
+            low_val = float(downside_cone[-1])
         
         # Render Plotly Chart
         fig = go.Figure()
