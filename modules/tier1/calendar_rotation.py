@@ -1347,6 +1347,15 @@ class CalendarRotationModule(FazDaneModule):
             if filtered_df.empty:
                 st.info("No tickers match the active recommendation filters.")
             else:
+                tickers_list = sorted(list(filtered_df["ticker"].unique()))
+                tickers_str = ", ".join(tickers_list)
+                st.markdown(
+                    f"<div style='font-size:14px; font-weight:600; color:#94a3b8; margin-top:8px; margin-bottom:4px;'>"
+                    f"📋 Copy Filtered Tickers ({len(tickers_list)} symbols)</div>", 
+                    unsafe_allow_html=True
+                )
+                st.code(tickers_str, language="text")
+                st.write("")
                 render_matrix_native(filtered_df)
 
         # ── TAB 2: RRG Rotation Matrix (Backed up visualizations) ────────────
