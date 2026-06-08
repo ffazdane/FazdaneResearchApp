@@ -1614,13 +1614,41 @@ class VolatilityEngineModule(FazDaneModule):
             st.markdown(panel_intro(display_ticker, "Historical Fragility & Drawdown Study", "Analyzes option Put/Call ratios and VIX levels on the trading day BEFORE a significant market drop to detect fragility zone signatures."), unsafe_allow_html=True)
             st.markdown('<p class="panel-title">Pre-Drawdown Historical Volatility & Ratio Study</p>', unsafe_allow_html=True)
 
+            def get_duration_string(start_date, end_date):
+                years = end_date.year - start_date.year
+                months = end_date.month - start_date.month
+                days = end_date.day - start_date.day
+                if days < 0:
+                    months -= 1
+                    import calendar
+                    prev_month = end_date.month - 1 if end_date.month > 1 else 12
+                    prev_year = end_date.year if end_date.month > 1 else end_date.year - 1
+                    _, days_in_prev = calendar.monthrange(prev_year, prev_month)
+                    days += days_in_prev
+                if months < 0:
+                    years -= 1
+                    months += 12
+                parts = []
+                if years > 0:
+                    parts.append(f"{years} Year" + ("s" if years > 1 else ""))
+                if months > 0:
+                    parts.append(f"{months} Month" + ("s" if months > 1 else ""))
+                if days > 0:
+                    parts.append(f"{days} Day" + ("s" if days > 1 else ""))
+                return ", ".join(parts) if parts else "0 Days"
+
+            def clean_html(html_str):
+                return "\n".join(line.strip() for line in html_str.split("\n"))
+
             # Interactive Controls
-            c_ctrl1, c_ctrl2, c_ctrl3 = st.columns(3)
+            c_ctrl1, c_ctrl2, c_ctrl3, c_ctrl4 = st.columns(4)
             with c_ctrl1:
                 dd_ticker = st.text_input("Benchmark Market Ticker", value="SPY", key="ve_dd_ticker").strip().upper()
             with c_ctrl2:
-                dd_threshold = st.slider("Daily Drawdown Threshold (%)", min_value=-5.0, max_value=-0.5, value=-1.0, step=0.25, key="ve_dd_threshold")
+                dd_vol_metric = st.selectbox("Volatility Overlay Metric", options=["VIX Close", "Put/Call Ratio"], index=0, key="ve_dd_vol_metric")
             with c_ctrl3:
+                dd_threshold = st.slider("Daily Drawdown Threshold (%)", min_value=-5.0, max_value=-0.5, value=-1.0, step=0.25, key="ve_dd_threshold")
+            with c_ctrl4:
                 dd_lookback = st.selectbox("Lookback Window", options=["1 Year", "2 Years", "3 Years", "5 Years", "Max"], index=1, key="ve_dd_lookback")
 
             # Resolve lookback days
@@ -1706,114 +1734,527 @@ class VolatilityEngineModule(FazDaneModule):
 
                         if events:
                             df_events = pd.DataFrame(events)
+                            df_events_parsed = df_events.copy()
+                            df_events_parsed["Drawdown Date (T)"] = pd.to_datetime(df_events_parsed["Drawdown Date (T)"])
+                            df_events_parsed["Previous Date (T-1)"] = pd.to_datetime(df_events_parsed["Previous Date (T-1)"])
 
-                            # Detect current year activity for scatter differentiation
-                            cur_yr = datetime.today().year
-                            df_events["Is_Current_Year"] = pd.to_datetime(df_events["Drawdown Date (T)"]).dt.year == cur_yr
-                            df_events["Marker_Symbol"] = ["diamond" if cy else "circle" for cy in df_events["Is_Current_Year"]]
-                            df_events["Marker_Line_Width"] = [2.5 if cy else 1.0 for cy in df_events["Is_Current_Year"]]
-                            df_events["Marker_Line_Color"] = ["#3ab54a" if cy else "rgba(255, 255, 255, 0.2)" for cy in df_events["Is_Current_Year"]]
+                            # Dynamic title dates
+                            actual_start_date = study_df.index[0]
+                            actual_end_date = study_df.index[-1]
+                            start_date_display = actual_start_date.strftime("%b %Y")
+                            end_date_display = actual_end_date.strftime("%b %Y")
 
-                            # Metrics Summary
-                            m_col1, m_col2, m_col3, m_col4 = st.columns(4)
-                            m_col1.metric("Drawdown Events Found", f"{len(df_events)}")
-                            m_col2.metric("Avg Decline on T", f"{df_events['Decline % (T)'].mean():.2f}%")
-                            m_col3.metric("Avg VIX Close (T-1)", f"{df_events['VIX Close (T-1)'].mean():.2f}")
-                            m_col4.metric("Avg Put/Call (T-1)", f"{df_events['Put/Call Ratio (T-1)'].mean():.2f}")
+                            # Theme Configuration
+                            theme = st.session_state.get("theme_colors", {})
+                            color_scheme = theme.get("color_scheme", "dark")
+                            is_dark = color_scheme == "dark"
 
-                            st.markdown("---")
-
-                            # Visualizations Column Layout
-                            fig_dd1, fig_dd2 = st.columns(2)
-                            
-                            with fig_dd1:
-                                # Scatter Plot VIX vs P/C Ratio on T-1
-                                scatter_fig = go.Figure()
-                                scatter_fig.add_trace(go.Scatter(
-                                    x=df_events["Put/Call Ratio (T-1)"],
-                                    y=df_events["VIX Close (T-1)"],
-                                    mode="markers",
-                                    marker=dict(
-                                        size=np.clip(np.abs(df_events["Decline % (T)"]) * 8, 8, 25),
-                                        color=df_events["Decline % (T)"],
-                                        colorscale="OrRd_r",
-                                        showscale=True,
-                                        colorbar=dict(title="Decline on T (%)"),
-                                        symbol=df_events["Marker_Symbol"],
-                                        line=dict(
-                                            width=df_events["Marker_Line_Width"],
-                                            color=df_events["Marker_Line_Color"]
-                                        )
-                                    ),
-                                    text=[
-                                        f"T-1 Date: {row['Previous Date (T-1)']}<br>"
-                                        f"T-1 VIX: {row['VIX Close (T-1)']}<br>"
-                                        f"T-1 P/C: {row['Put/Call Ratio (T-1)']}<br>"
-                                        f"T Drawdown: {row['Decline % (T)']}%"
-                                        for _, row in df_events.iterrows()
-                                    ],
-                                    hoverinfo="text"
-                                ))
-                                scatter_fig.update_layout(
-                                    title=dict(text=f"Fragility Zone Scatter (Day T-1 prior to {dd_threshold}% Drop)", font=dict(size=14, color="#E0E6F0")),
-                                    xaxis=dict(title="Put/Call Ratio (T-1)", gridcolor="rgba(255,255,255,0.05)", color="#8B9CB6"),
-                                    yaxis=dict(title="VIX Close (T-1)", gridcolor="rgba(255,255,255,0.05)", color="#8B9CB6"),
-                                    plot_bgcolor="rgba(0,0,0,0)",
-                                    paper_bgcolor="rgba(0,0,0,0)",
-                                    height=360,
-                                    margin=dict(l=10, r=10, t=50, b=20)
-                                )
-                                st.plotly_chart(scatter_fig, use_container_width=True)
-                                st.caption(f"🟢 **Diamonds with green borders** represent current calendar year ({cur_yr}) activity. **Circles** represent previous years.")
-
-                            with fig_dd2:
-                                # Price timeline chart highlighting drawdowns
-                                timeline_fig = go.Figure()
-                                timeline_fig.add_trace(go.Scatter(
-                                    x=study_df.index,
-                                    y=study_df["Market_Close"],
-                                    mode="lines",
-                                    name=f"{dd_ticker} Price",
-                                    line=dict(color="#00ADB5", width=1.5)
-                                ))
+                            if is_dark:
+                                red_header_bg = "rgba(185, 28, 28, 0.9)"
+                                red_row_even = "rgba(185, 28, 28, 0.05)"
+                                red_row_odd = "rgba(185, 28, 28, 0.1)"
+                                red_border = "rgba(185, 28, 28, 0.3)"
                                 
-                                # Highlight drawdown days
-                                dd_dates = pd.to_datetime(df_events["Drawdown Date (T)"])
-                                timeline_fig.add_trace(go.Scatter(
-                                    x=dd_dates,
-                                    y=study_df.loc[dd_dates, "Market_Close"],
-                                    mode="markers",
-                                    name="Drawdown Day (T)",
-                                    marker=dict(color="#FF6B6B", size=8, symbol="triangle-down")
-                                ))
+                                blue_header_bg = "rgba(29, 78, 216, 0.9)"
+                                blue_row_even = "rgba(29, 78, 216, 0.05)"
+                                blue_row_odd = "rgba(29, 78, 216, 0.1)"
+                                blue_border = "rgba(29, 78, 216, 0.3)"
                                 
-                                timeline_fig.update_layout(
-                                    title=dict(text=f"{dd_ticker} Price Timeline & Drawdown Hits", font=dict(size=14, color="#E0E6F0")),
-                                    xaxis=dict(gridcolor="rgba(255,255,255,0.05)", color="#8B9CB6"),
-                                    yaxis=dict(gridcolor="rgba(255,255,255,0.05)", color="#8B9CB6"),
-                                    plot_bgcolor="rgba(0,0,0,0)",
-                                    paper_bgcolor="rgba(0,0,0,0)",
-                                    height=360,
-                                    margin=dict(l=10, r=10, t=50, b=20)
-                                )
-                                st.plotly_chart(timeline_fig, use_container_width=True)
+                                green_header_bg = "rgba(4, 120, 87, 0.9)"
+                                green_row_even = "rgba(4, 120, 87, 0.05)"
+                                green_row_odd = "rgba(4, 120, 87, 0.1)"
+                                green_border = "rgba(4, 120, 87, 0.3)"
+                                
+                                text_color = "var(--text-color, #e2e8f0)"
+                            else:
+                                red_header_bg = "#dc2626"
+                                red_row_even = "#fff5f5"
+                                red_row_odd = "#ffe3e3"
+                                red_border = "#fca5a5"
+                                
+                                blue_header_bg = "#1d4ed8"
+                                blue_row_even = "#eff6ff"
+                                blue_row_odd = "#dbeafe"
+                                blue_border = "#bfdbfe"
+                                
+                                green_header_bg = "#047857"
+                                green_row_even = "#f0fdf4"
+                                green_row_odd = "#dcfce7"
+                                green_border = "#bbf7d0"
+                                
+                                text_color = "var(--text-color, #1e293b)"
 
-                            st.markdown("---")
+                            overlay_col = "VIX Close (T-1)" if dd_vol_metric == "VIX Close" else "Put/Call Ratio (T-1)"
+                            overlay_label = "VIX Close" if dd_vol_metric == "VIX Close" else "Put/Call Ratio"
 
-                            # Dataframe View
-                            st.markdown("#### 📋 Drawdown Alignment Data Ledger")
-                            st.dataframe(df_events, use_container_width=True, hide_index=True)
-
-                            # Export CSV button
-                            csv_data = df_events.to_csv(index=False)
-                            st.download_button(
-                                label="📥 Export Historical Drawdown Data to CSV",
-                                data=csv_data,
-                                file_name=f"{dd_ticker}_historical_drawdown_analysis.csv",
-                                mime="text/csv",
-                                use_container_width=True,
-                                key="ve_export_dd_csv"
+                            # ------------------------------------------------
+                            # DASHBOARD TITLE & KPI ROW
+                            # ------------------------------------------------
+                            st.markdown(
+                                f"""
+                                <h2 style='text-align: center; color: var(--accent-color); font-family: "Courier Prime", monospace; margin-top: 15px; margin-bottom: 25px;'>
+                                    Market Drawdowns & Volatility ({start_date_display} &ndash; {end_date_display})
+                                </h2>
+                                """,
+                                unsafe_allow_html=True
                             )
+
+                            max_dec_row = df_events_parsed.loc[df_events_parsed["Decline % (T)"].idxmin()]
+                            max_dec_val = max_dec_row["Decline % (T)"]
+                            max_dec_date = max_dec_row["Drawdown Date (T)"].strftime("%b %d, %Y")
+
+                            kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
+                            with kpi_col1:
+                                st.markdown(
+                                    clean_html(f"""
+                                    <div style="background: var(--card-bg, rgba(255,255,255,0.03)); border: 1px solid rgba(220, 50, 50, 0.3); border-radius: 8px; padding: 15px; text-align: center;">
+                                        <div style="color: #FF6B6B; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">Total Drawdown Events</div>
+                                        <div style="color: #FF6B6B; font-size: 2.2rem; font-weight: 800; line-height: 1;">{len(df_events_parsed)}</div>
+                                    </div>
+                                    """),
+                                    unsafe_allow_html=True
+                                )
+                            with kpi_col2:
+                                st.markdown(
+                                    clean_html(f"""
+                                    <div style="background: var(--card-bg, rgba(255,255,255,0.03)); border: 1px solid rgba(0, 173, 181, 0.3); border-radius: 8px; padding: 15px; text-align: center;">
+                                        <div style="color: #00ADB5; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">Average Decline %</div>
+                                        <div style="color: #00ADB5; font-size: 2.2rem; font-weight: 800; line-height: 1;">{df_events_parsed["Decline % (T)"].mean():.2f}%</div>
+                                    </div>
+                                    """),
+                                    unsafe_allow_html=True
+                                )
+                            with kpi_col3:
+                                st.markdown(
+                                    clean_html(f"""
+                                    <div style="background: var(--card-bg, rgba(255,255,255,0.03)); border: 1px solid rgba(177, 149, 248, 0.3); border-radius: 8px; padding: 15px; text-align: center;">
+                                        <div style="color: #B195F8; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">Max Decline %</div>
+                                        <div style="color: #B195F8; font-size: 2.2rem; font-weight: 800; line-height: 1;">
+                                            {max_dec_val:.2f}% <span style="font-size: 0.85rem; font-weight: 400; color: #94a3b8; vertical-align: middle;">({max_dec_date})</span>
+                                        </div>
+                                    </div>
+                                    """),
+                                    unsafe_allow_html=True
+                                )
+
+                            # ------------------------------------------------
+                            # DYNAMIC CHARTS ROW (3 COLUMNS)
+                            # ------------------------------------------------
+                            fig_dec = go.Figure()
+                            fig_dec.add_trace(go.Scatter(
+                                x=df_events_parsed["Drawdown Date (T)"],
+                                y=df_events_parsed["Decline % (T)"],
+                                mode="lines+markers",
+                                name="Decline %",
+                                line=dict(color="#FF6B6B", width=1.5),
+                                marker=dict(color="#FF6B6B", size=6, symbol="circle"),
+                                hoverinfo="text",
+                                text=[f"Date: {d.strftime('%Y-%m-%d')}<br>Decline: {v:.2f}%" for d, v in zip(df_events_parsed["Drawdown Date (T)"], df_events_parsed["Decline % (T)"])]
+                            ))
+                            fig_dec.update_layout(
+                                title=dict(text="1. Decline % Over Time", font=dict(size=13, color="#FF6B6B" if is_dark else "#851c1c")),
+                                xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)" if is_dark else "rgba(0,0,0,0.05)", color="#8B9CB6"),
+                                yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)" if is_dark else "rgba(0,0,0,0.05)", ticksuffix="%", color="#8B9CB6"),
+                                plot_bgcolor="rgba(0,0,0,0)",
+                                paper_bgcolor="rgba(0,0,0,0)",
+                                height=280,
+                                margin=dict(l=40, r=10, t=40, b=30),
+                                showlegend=False
+                            )
+
+                            y_data = df_events_parsed[overlay_col]
+                            fig_vol = go.Figure()
+                            fig_vol.add_trace(go.Scatter(
+                                x=df_events_parsed["Drawdown Date (T)"],
+                                y=y_data,
+                                mode="lines+markers",
+                                name=overlay_label,
+                                line=dict(color="#00ADB5", width=1.5),
+                                marker=dict(color="#00ADB5", size=6, symbol="circle"),
+                                hoverinfo="text",
+                                text=[f"Date: {d.strftime('%Y-%m-%d')}<br>{overlay_label}: {v:.2f}" for d, v in zip(df_events_parsed["Drawdown Date (T)"], y_data)]
+                            ))
+                            fig_vol.update_layout(
+                                title=dict(text=f"2. {overlay_label} (T-1) Over Time", font=dict(size=13, color="#00ADB5" if is_dark else "#007A80")),
+                                xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)" if is_dark else "rgba(0,0,0,0.05)", color="#8B9CB6"),
+                                yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)" if is_dark else "rgba(0,0,0,0.05)", color="#8B9CB6"),
+                                plot_bgcolor="rgba(0,0,0,0)",
+                                paper_bgcolor="rgba(0,0,0,0)",
+                                height=280,
+                                margin=dict(l=40, r=10, t=40, b=30),
+                                showlegend=False
+                            )
+
+                            fig_idx = go.Figure()
+                            fig_idx.add_trace(go.Scatter(
+                                x=df_events_parsed["Drawdown Date (T)"],
+                                y=df_events_parsed["Index Close (T-1)"],
+                                mode="lines+markers",
+                                name="Index Close (T-1)",
+                                line=dict(color="#52D68A", width=1.5),
+                                marker=dict(color="#52D68A", size=6, symbol="circle"),
+                                hoverinfo="text",
+                                text=[f"Date: {d.strftime('%Y-%m-%d')}<br>Index Close (T-1): {v:,.2f}" for d, v in zip(df_events_parsed["Drawdown Date (T)"], df_events_parsed["Index Close (T-1)"])]
+                            ))
+                            fig_idx.update_layout(
+                                title=dict(text="3. Index Close Over Time", font=dict(size=13, color="#52D68A" if is_dark else "#1b8f47")),
+                                xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)" if is_dark else "rgba(0,0,0,0.05)", color="#8B9CB6"),
+                                yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)" if is_dark else "rgba(0,0,0,0.05)", color="#8B9CB6"),
+                                plot_bgcolor="rgba(0,0,0,0)",
+                                paper_bgcolor="rgba(0,0,0,0)",
+                                height=280,
+                                margin=dict(l=40, r=10, t=40, b=30),
+                                showlegend=False
+                            )
+
+                            chart_col1, chart_col2, chart_col3 = st.columns(3)
+                            with chart_col1:
+                                st.plotly_chart(fig_dec, use_container_width=True)
+                            with chart_col2:
+                                st.plotly_chart(fig_vol, use_container_width=True)
+                            with chart_col3:
+                                st.plotly_chart(fig_idx, use_container_width=True)
+
+                            # ------------------------------------------------
+                            # STATISTICS TABLES ROW (3 COLUMNS)
+                            # ------------------------------------------------
+                            table_css = f"""
+                            <style>
+                            .dashboard-table {{
+                                width: 100%;
+                                border-collapse: collapse;
+                                font-family: 'Inter', sans-serif;
+                                font-size: 0.76rem;
+                                color: {text_color};
+                                margin-bottom: 15px;
+                            }}
+                            .dashboard-table th {{
+                                padding: 7px 9px;
+                                text-align: left;
+                                font-weight: 700;
+                                color: #ffffff !important;
+                                font-size: 0.76rem;
+                                border-bottom: 2px solid rgba(255,255,255,0.1);
+                            }}
+                            .dashboard-table td {{
+                                padding: 7px 9px;
+                                border-bottom: 1px solid rgba(255,255,255,0.05);
+                                font-size: 0.74rem;
+                            }}
+                            .table-title {{
+                                font-size: 0.82rem;
+                                font-weight: 700;
+                                text-align: left;
+                                margin-bottom: 8px;
+                                text-transform: uppercase;
+                                letter-spacing: 0.8px;
+                            }}
+                            </style>
+                            """
+                            st.markdown(table_css, unsafe_allow_html=True)
+
+                            # 1. Top 5 table
+                            top5_df = df_events_parsed.sort_values(by="Decline % (T)").head(5)
+                            top5_rows_html = ""
+                            for i, (_, row_data) in enumerate(top5_df.iterrows()):
+                                bg_color = red_row_even if i % 2 == 0 else red_row_odd
+                                date_str = row_data["Drawdown Date (T)"].strftime("%m/%d/%Y")
+                                dec_val = f"{row_data['Decline % (T)']:.2f}%"
+                                vol_val = f"{row_data[overlay_col]:.2f}"
+                                idx_val = f"{row_data['Index Close (T-1)']:,.2f}"
+                                
+                                top5_rows_html += f"""
+                                <tr style="background-color: {bg_color};">
+                                    <td style="border: 1px solid {red_border}; text-align: center;">{date_str}</td>
+                                    <td style="border: 1px solid {red_border}; text-align: center; color: #FF6B6B; font-weight: 700;">{dec_val}</td>
+                                    <td style="border: 1px solid {red_border}; text-align: center;">{vol_val}</td>
+                                    <td style="border: 1px solid {red_border}; text-align: center;">{idx_val}</td>
+                                </tr>
+                                """
+                            
+                            top5_table_html = f"""
+                            <div>
+                                <div class="table-title" style="color: #FF6B6B;">Top 5 Largest Declines</div>
+                                <table class="dashboard-table" style="border: 1px solid {red_border};">
+                                    <thead>
+                                        <tr style="background-color: {red_header_bg};">
+                                            <th style="border: 1px solid {red_border}; text-align: center;">Date</th>
+                                            <th style="border: 1px solid {red_border}; text-align: center;">Decline %</th>
+                                            <th style="border: 1px solid {red_border}; text-align: center;">{overlay_label}</th>
+                                            <th style="border: 1px solid {red_border}; text-align: center;">Index (T-1)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {top5_rows_html}
+                                    </tbody>
+                                </table>
+                            </div>
+                            """
+
+                            # 2. Summary stats calculations
+                            total_events = len(df_events_parsed)
+                            avg_decline = df_events_parsed["Decline % (T)"].mean()
+                            median_decline = df_events_parsed["Decline % (T)"].median()
+                            
+                            max_decline_row = df_events_parsed.loc[df_events_parsed["Decline % (T)"].idxmin()]
+                            max_decline_val = max_decline_row["Decline % (T)"]
+                            max_decline_date = max_decline_row["Drawdown Date (T)"].strftime("%b %d, %Y")
+                            
+                            min_decline_row = df_events_parsed.loc[df_events_parsed["Decline % (T)"].idxmax()]
+                            min_decline_val = min_decline_row["Decline % (T)"]
+                            min_decline_date = min_decline_row["Drawdown Date (T)"].strftime("%b %d, %Y")
+                            
+                            avg_vix = df_events_parsed[overlay_col].mean()
+                            max_vix_row = df_events_parsed.loc[df_events_parsed[overlay_col].idxmax()]
+                            max_vix_val = max_vix_row[overlay_col]
+                            max_vix_date = max_vix_row["Previous Date (T-1)"].strftime("%b %d, %Y")
+                            
+                            avg_idx = df_events_parsed["Index Close (T-1)"].mean()
+                            max_idx_row = df_events_parsed.loc[df_events_parsed["Index Close (T-1)"].idxmax()]
+                            max_idx_val = max_idx_row["Index Close (T-1)"]
+                            max_idx_date = max_idx_row["Previous Date (T-1)"].strftime("%b %d, %Y")
+                            
+                            min_idx_row = df_events_parsed.loc[df_events_parsed["Index Close (T-1)"].idxmin()]
+                            min_idx_val = min_idx_row["Index Close (T-1)"]
+                            min_idx_date = min_idx_row["Previous Date (T-1)"].strftime("%b %d, %Y")
+
+                            stats_items = [
+                                ("Total Events", f"{total_events}"),
+                                ("Average Decline %", f"{avg_decline:.2f}%"),
+                                ("Median Decline %", f"{median_decline:.2f}%"),
+                                ("Max Decline %", f"{max_decline_val:.2f}% ({max_decline_date})"),
+                                ("Min Decline %", f"{min_decline_val:.2f}% ({min_decline_date})"),
+                                (f"Average {overlay_label}", f"{avg_vix:.2f}"),
+                                (f"Max {overlay_label}", f"{max_vix_val:.2f} ({max_vix_date})"),
+                                ("Average Index Close (T-1)", f"{avg_idx:,.2f}"),
+                                ("Max Index Close (T-1)", f"{max_idx_val:,.2f} ({max_idx_date})"),
+                                ("Min Index Close (T-1)", f"{min_idx_val:,.2f} ({min_idx_date})"),
+                            ]
+                            
+                            stats_rows_html = ""
+                            for i, (label, val) in enumerate(stats_items):
+                                bg_color = blue_row_even if i % 2 == 0 else blue_row_odd
+                                stats_rows_html += f"""
+                                <tr style="background-color: {bg_color};">
+                                    <td style="border: 1px solid {blue_border}; font-weight: 500; padding-left: 10px;">{label}</td>
+                                    <td style="border: 1px solid {blue_border}; text-align: right; padding-right: 10px; font-weight: 600;">{val}</td>
+                                </tr>
+                                """
+                                
+                            stats_table_html = f"""
+                            <div>
+                                <div class="table-title" style="color: #00ADB5;">Summary Statistics</div>
+                                <table class="dashboard-table" style="border: 1px solid {blue_border};">
+                                    <thead>
+                                        <tr style="background-color: {blue_header_bg};">
+                                            <th style="border: 1px solid {blue_border}; padding-left: 10px;">Metric</th>
+                                            <th style="border: 1px solid {blue_border}; text-align: right; padding-right: 10px;">Value</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {stats_rows_html}
+                                    </tbody>
+                                </table>
+                            </div>
+                            """
+
+                            # 3. Period Overview calculations
+                            period_start = study_df.index[0]
+                            period_end = study_df.index[-1]
+                            duration_str = get_duration_string(period_start, period_end)
+                            
+                            total_days = (period_end - period_start).days
+                            total_months = total_days / 30.4375
+                            events_per_month = total_events / total_months if total_months > 0 else 0.0
+                            
+                            lowest_close_idx = study_df["Market_Close"].idxmin()
+                            lowest_close_val = study_df["Market_Close"].min()
+                            lowest_close_date = lowest_close_idx.strftime("%b %d, %Y")
+                            
+                            highest_close_idx = study_df["Market_Close"].idxmax()
+                            highest_close_val = study_df["Market_Close"].max()
+                            highest_close_date = highest_close_idx.strftime("%b %d, %Y")
+                            
+                            first_close = study_df["Market_Close"].iloc[0]
+                            last_close = study_df["Market_Close"].iloc[-1]
+                            net_change = last_close - first_close
+                            pct_change_val = (last_close / first_close - 1) * 100
+                            net_change_str = f"{net_change:+.2f} ({pct_change_val:+.1f}%)"
+
+                            overview_items = [
+                                ("Start Date", period_start.strftime("%b %d, %Y")),
+                                ("End Date", period_end.strftime("%b %d, %Y")),
+                                ("Duration", duration_str),
+                                ("Events per Month (Avg)", f"{events_per_month:.2f}"),
+                            ]
+                            
+                            regime_items = [
+                                ("Lowest Index Close", f"{lowest_close_val:,.2f} ({lowest_close_date})"),
+                                ("Highest Index Close", f"{highest_close_val:,.2f} ({highest_close_date})"),
+                                ("Net Change", net_change_str),
+                            ]
+                            
+                            overview_rows_html = ""
+                            ridx = 0
+                            for label, val in overview_items:
+                                bg_color = green_row_even if ridx % 2 == 0 else green_row_odd
+                                overview_rows_html += f"""
+                                <tr style="background-color: {bg_color};">
+                                    <td style="border: 1px solid {green_border}; font-weight: 500; padding-left: 10px;">{label}</td>
+                                    <td style="border: 1px solid {green_border}; text-align: right; padding-right: 10px; font-weight: 600;">{val}</td>
+                                </tr>
+                                """
+                                ridx += 1
+                                
+                            overview_rows_html += f"""
+                            <tr style="background-color: {green_header_bg};">
+                                <th colspan="2" style="border: 1px solid {green_border}; text-align: center; color: #ffffff !important; font-weight: 700; font-size: 0.74rem;">Market Regimes (by Index Close)</th>
+                            </tr>
+                            """
+                            
+                            for label, val in regime_items:
+                                bg_color = green_row_even if ridx % 2 == 0 else green_row_odd
+                                overview_rows_html += f"""
+                                <tr style="background-color: {bg_color};">
+                                    <td style="border: 1px solid {green_border}; font-weight: 500; padding-left: 10px;">{label}</td>
+                                    <td style="border: 1px solid {green_border}; text-align: right; padding-right: 10px; font-weight: 600;">{val}</td>
+                                </tr>
+                                """
+                                ridx += 1
+                                
+                            overview_table_html = f"""
+                            <div>
+                                <div class="table-title" style="color: #52D68A;">Period Overview</div>
+                                <table class="dashboard-table" style="border: 1px solid {green_border};">
+                                    <thead>
+                                        <tr style="background-color: {green_header_bg};">
+                                            <th style="border: 1px solid {green_border}; padding-left: 10px;">Period Metric</th>
+                                            <th style="border: 1px solid {green_border}; text-align: right; padding-right: 10px;">Value</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {overview_rows_html}
+                                    </tbody>
+                                </table>
+                            </div>
+                            """
+
+                            tbl_col1, tbl_col2, tbl_col3 = st.columns(3)
+                            with tbl_col1:
+                                st.markdown(clean_html(top5_table_html), unsafe_allow_html=True)
+                            with tbl_col2:
+                                st.markdown(clean_html(stats_table_html), unsafe_allow_html=True)
+                            with tbl_col3:
+                                st.markdown(clean_html(overview_table_html), unsafe_allow_html=True)
+
+                            st.markdown(
+                                clean_html(f"""
+                                <div style="text-align: center; color: var(--text-muted, #94a3b8); font-size: 0.7rem; font-style: italic; margin-top: 5px; margin-bottom: 20px;">
+                                    Note: Data represents market drawdown events with corresponding {overlay_label} and Index levels from previous trading day (T-1).
+                                </div>
+                                """),
+                                unsafe_allow_html=True
+                            )
+
+                            # ------------------------------------------------
+                            # ADVANCED ANALYSIS & EXPORT SECTION
+                            # ------------------------------------------------
+                            st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
+                            with st.expander("🔍 Advanced Drawdown Analysis & Data Export", expanded=False):
+                                adv_col1, adv_col2 = st.columns(2)
+                                with adv_col1:
+                                    # Scatter Plot VIX vs P/C Ratio on T-1
+                                    df_events_scatter = df_events.copy()
+                                    cur_yr = datetime.today().year
+                                    df_events_scatter["Is_Current_Year"] = pd.to_datetime(df_events_scatter["Drawdown Date (T)"]).dt.year == cur_yr
+                                    df_events_scatter["Marker_Symbol"] = ["diamond" if cy else "circle" for cy in df_events_scatter["Is_Current_Year"]]
+                                    df_events_scatter["Marker_Line_Width"] = [2.5 if cy else 1.0 for cy in df_events_scatter["Is_Current_Year"]]
+                                    df_events_scatter["Marker_Line_Color"] = ["#3ab54a" if cy else "rgba(255, 255, 255, 0.2)" for cy in df_events_scatter["Is_Current_Year"]]
+
+                                    scatter_fig = go.Figure()
+                                    scatter_fig.add_trace(go.Scatter(
+                                        x=df_events_scatter["Put/Call Ratio (T-1)"],
+                                        y=df_events_scatter["VIX Close (T-1)"],
+                                        mode="markers",
+                                        marker=dict(
+                                            size=np.clip(np.abs(df_events_scatter["Decline % (T)"]) * 8, 8, 25),
+                                            color=df_events_scatter["Decline % (T)"],
+                                            colorscale="OrRd_r",
+                                            showscale=True,
+                                            colorbar=dict(title="Decline on T (%)"),
+                                            symbol=df_events_scatter["Marker_Symbol"],
+                                            line=dict(
+                                                width=df_events_scatter["Marker_Line_Width"],
+                                                color=df_events_scatter["Marker_Line_Color"]
+                                            )
+                                        ),
+                                        text=[
+                                            f"T-1 Date: {row['Previous Date (T-1)']}<br>"
+                                            f"T-1 VIX: {row['VIX Close (T-1)']}<br>"
+                                            f"T-1 P/C: {row['Put/Call Ratio (T-1)']}<br>"
+                                            f"T Drawdown: {row['Decline % (T)']}%"
+                                            for _, row in df_events_scatter.iterrows()
+                                        ],
+                                        hoverinfo="text"
+                                    ))
+                                    scatter_fig.update_layout(
+                                        title=dict(text=f"Fragility Zone Scatter (Day T-1 prior to {dd_threshold}% Drop)", font=dict(size=14, color="#E0E6F0")),
+                                        xaxis=dict(title="Put/Call Ratio (T-1)", gridcolor="rgba(255,255,255,0.05)", color="#8B9CB6"),
+                                        yaxis=dict(title="VIX Close (T-1)", gridcolor="rgba(255,255,255,0.05)", color="#8B9CB6"),
+                                        plot_bgcolor="rgba(0,0,0,0)",
+                                        paper_bgcolor="rgba(0,0,0,0)",
+                                        height=340,
+                                        margin=dict(l=10, r=10, t=50, b=20)
+                                    )
+                                    st.plotly_chart(scatter_fig, use_container_width=True)
+                                    st.caption(f"🟢 **Diamonds with green borders** represent current calendar year ({cur_yr}) activity. **Circles** represent previous years.")
+
+                                with adv_col2:
+                                    # Price timeline chart highlighting drawdowns
+                                    timeline_fig = go.Figure()
+                                    timeline_fig.add_trace(go.Scatter(
+                                        x=study_df.index,
+                                        y=study_df["Market_Close"],
+                                        mode="lines",
+                                        name=f"{dd_ticker} Price",
+                                        line=dict(color="#00ADB5", width=1.5)
+                                    ))
+                                    
+                                    # Highlight drawdown days
+                                    dd_dates = pd.to_datetime(df_events_scatter["Drawdown Date (T)"])
+                                    timeline_fig.add_trace(go.Scatter(
+                                        x=dd_dates,
+                                        y=study_df.loc[dd_dates, "Market_Close"],
+                                        mode="markers",
+                                        name="Drawdown Day (T)",
+                                        marker=dict(color="#FF6B6B", size=8, symbol="triangle-down")
+                                    ))
+                                    
+                                    timeline_fig.update_layout(
+                                        title=dict(text=f"{dd_ticker} Price Timeline & Drawdown Hits", font=dict(size=14, color="#E0E6F0")),
+                                        xaxis=dict(gridcolor="rgba(255,255,255,0.05)", color="#8B9CB6"),
+                                        yaxis=dict(gridcolor="rgba(255,255,255,0.05)", color="#8B9CB6"),
+                                        plot_bgcolor="rgba(0,0,0,0)",
+                                        paper_bgcolor="rgba(0,0,0,0)",
+                                        height=340,
+                                        margin=dict(l=10, r=10, t=50, b=20)
+                                    )
+                                    st.plotly_chart(timeline_fig, use_container_width=True)
+
+                                st.markdown("---")
+                                st.markdown("#### 📋 Drawdown Alignment Data Ledger (Complete Set)")
+                                st.dataframe(df_events, use_container_width=True, hide_index=True)
+
+                                # Export CSV button
+                                csv_data = df_events.to_csv(index=False)
+                                st.download_button(
+                                    label="📥 Export Historical Drawdown Data to CSV",
+                                    data=csv_data,
+                                    file_name=f"{dd_ticker}_historical_drawdown_analysis.csv",
+                                    mime="text/csv",
+                                    use_container_width=True,
+                                    key="ve_export_dd_csv"
+                                )
                         else:
                             st.info(f"No daily drawdown events of {dd_threshold}% or worse found for {dd_ticker} in the selected {dd_lookback} window.")
                     else:
