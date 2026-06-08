@@ -374,7 +374,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
         with tab_rt:
             self._render_rejected_log()
 
-    # ═══════    def _get_universe_summary_table(self, tickers: list) -> pd.DataFrame:
+    def _get_universe_summary_table(self, tickers: list) -> pd.DataFrame:
         """Compile a summary table for all tickers in the universe from database snapshots."""
         rows = []
         from utils.universe_manager import get_company_name
