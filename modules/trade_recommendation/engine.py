@@ -135,10 +135,28 @@ class TradeRecommendationEngineModule(FazDaneModule):
             display_df = df_universe[cols_to_use]
             
             # ── Watchlist Filtering ───────────────────────────────────────────
-            # Dynamically filter by column and value
+            # Dynamically filter by multiple columns and values
+            if "re_active_filters" not in st.session_state:
+                st.session_state["re_active_filters"] = {}
+                
+            # Automatically clean up active filters that are not in the selected cols_to_use
+            st.session_state["re_active_filters"] = {
+                k: v for k, v in st.session_state["re_active_filters"].items()
+                if k in cols_to_use
+            }
+
             def clear_filters():
+                st.session_state["re_active_filters"] = {}
                 st.session_state["re_filter_col"] = "-- Select Column --"
                 st.session_state["re_filter_val"] = "-- Select Value --"
+
+            def add_filter():
+                col = st.session_state.get("re_filter_col")
+                val = st.session_state.get("re_filter_val")
+                if col and col != "-- Select Column --" and val and val != "-- Select Value --":
+                    st.session_state["re_active_filters"][col] = val
+                    st.session_state["re_filter_col"] = "-- Select Column --"
+                    st.session_state["re_filter_val"] = "-- Select Value --"
 
             filter_cols_to_use = [c for c in cols_to_use if c not in {"Ticker Price", "Net Change", "ATR", "40D Range", "Last Updated", "Company Name"}]
             filter_options = ["-- Select Column --"] + filter_cols_to_use
@@ -149,7 +167,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
                 if "re_filter_val" in st.session_state:
                     st.session_state["re_filter_val"] = "-- Select Value --"
             
-            filt_col, filt_val, filt_clear = st.columns([1.5, 1.5, 1.0])
+            filt_col, filt_val, filt_btn = st.columns([1.5, 1.5, 1.0])
             with filt_col:
                 selected_col = st.selectbox(
                     "🔍 Filter by Column Name",
@@ -172,12 +190,16 @@ class TradeRecommendationEngineModule(FazDaneModule):
                         options=val_options,
                         key="re_filter_val"
                     )
-                with filt_clear:
+                with filt_btn:
                     st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-                    st.button("❌ Clear Filter", use_container_width=True, on_click=clear_filters)
-                        
-                if selected_val != "-- Select Value --":
-                    display_df = display_df[display_df[selected_col].astype(str) == selected_val]
+                    is_val_selected = (selected_val != "-- Select Value --")
+                    st.button(
+                        "➕ Add Filter", 
+                        use_container_width=True, 
+                        on_click=add_filter,
+                        disabled=not is_val_selected,
+                        type="primary"
+                    )
             else:
                 with filt_val:
                     st.selectbox(
@@ -186,9 +208,37 @@ class TradeRecommendationEngineModule(FazDaneModule):
                         disabled=True,
                         key="re_filter_val_disabled"
                     )
-                with filt_clear:
+                with filt_btn:
                     st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-                    st.button("❌ Clear Filter", disabled=True, use_container_width=True)
+                    st.button("➕ Add Filter", disabled=True, use_container_width=True)
+            
+            # Apply all active filters to the dataframe
+            for filter_col, filter_val in st.session_state["re_active_filters"].items():
+                if filter_col in display_df.columns:
+                    display_df = display_df[display_df[filter_col].astype(str) == filter_val]
+            
+            # Display active filters as tags/buttons
+            active_filters = st.session_state["re_active_filters"]
+            if active_filters:
+                st.markdown("**Active Filters (Refined):**")
+                filter_items = list(active_filters.items())
+                tag_cols = st.columns(len(filter_items) + 1)
+                
+                for idx, (f_col, f_val) in enumerate(filter_items):
+                    with tag_cols[idx]:
+                        # Closure builder to capture the key to delete
+                        def make_delete_callback(col_to_del):
+                            return lambda: st.session_state["re_active_filters"].pop(col_to_del, None)
+                        
+                        st.button(
+                            f"❌ {f_col}: {f_val}",
+                            key=f"rm_filt_{f_col}",
+                            on_click=make_delete_callback(f_col),
+                            use_container_width=True
+                        )
+                with tag_cols[-1]:
+                    st.button("❌ Clear All", on_click=clear_filters, use_container_width=True, type="secondary")
+                st.write("")
             
             if display_df.empty:
                 st.warning("⚠️ No tickers match the current filter criteria.")
