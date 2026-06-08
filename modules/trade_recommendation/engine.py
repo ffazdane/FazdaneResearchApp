@@ -135,9 +135,15 @@ class TradeRecommendationEngineModule(FazDaneModule):
             display_df = df_universe[cols_to_use]
             
             # ── Watchlist Filtering ───────────────────────────────────────────
-            # Dynamically filter by multiple columns and values
-            if "re_active_filters" not in st.session_state:
+            # Dynamically filter by multiple columns and values (supporting multiple values per column)
+            if "re_active_filters" not in st.session_state or not isinstance(st.session_state["re_active_filters"], dict):
                 st.session_state["re_active_filters"] = {}
+            else:
+                # Compatibility: convert any old single-value strings to lists of strings
+                for k in list(st.session_state["re_active_filters"].keys()):
+                    val = st.session_state["re_active_filters"][k]
+                    if not isinstance(val, list):
+                        st.session_state["re_active_filters"][k] = [val]
                 
             # Automatically clean up active filters that are not in the selected cols_to_use
             st.session_state["re_active_filters"] = {
@@ -154,7 +160,10 @@ class TradeRecommendationEngineModule(FazDaneModule):
                 col = st.session_state.get("re_filter_col")
                 val = st.session_state.get("re_filter_val")
                 if col and col != "-- Select Column --" and val and val != "-- Select Value --":
-                    st.session_state["re_active_filters"][col] = val
+                    if col not in st.session_state["re_active_filters"]:
+                        st.session_state["re_active_filters"][col] = []
+                    if val not in st.session_state["re_active_filters"][col]:
+                        st.session_state["re_active_filters"][col].append(val)
                     st.session_state["re_filter_col"] = "-- Select Column --"
                     st.session_state["re_filter_val"] = "-- Select Value --"
 
@@ -212,28 +221,39 @@ class TradeRecommendationEngineModule(FazDaneModule):
                     st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
                     st.button("➕ Add Filter", disabled=True, use_container_width=True)
             
-            # Apply all active filters to the dataframe
-            for filter_col, filter_val in st.session_state["re_active_filters"].items():
-                if filter_col in display_df.columns:
-                    display_df = display_df[display_df[filter_col].astype(str) == filter_val]
+            # Apply all active filters to the dataframe (AND between columns, OR within same column)
+            for filter_col, filter_vals in st.session_state["re_active_filters"].items():
+                if filter_col in display_df.columns and filter_vals:
+                    display_df = display_df[display_df[filter_col].astype(str).isin(filter_vals)]
             
             # Display active filters as tags/buttons
             active_filters = st.session_state["re_active_filters"]
-            if active_filters:
+            # Flatten to list of (col, val) tuples
+            filter_items = []
+            for f_col, f_vals in active_filters.items():
+                for f_val in f_vals:
+                    filter_items.append((f_col, f_val))
+                    
+            if filter_items:
                 st.markdown("**Active Filters (Refined):**")
-                filter_items = list(active_filters.items())
                 tag_cols = st.columns(len(filter_items) + 1)
                 
                 for idx, (f_col, f_val) in enumerate(filter_items):
                     with tag_cols[idx]:
-                        # Closure builder to capture the key to delete
-                        def make_delete_callback(col_to_del):
-                            return lambda: st.session_state["re_active_filters"].pop(col_to_del, None)
+                        # Closure builder callback to capture the exact col and val to remove
+                        def make_delete_callback(col_to_mod, val_to_rm):
+                            def callback():
+                                if col_to_mod in st.session_state["re_active_filters"]:
+                                    if val_to_rm in st.session_state["re_active_filters"][col_to_mod]:
+                                        st.session_state["re_active_filters"][col_to_mod].remove(val_to_rm)
+                                    if not st.session_state["re_active_filters"][col_to_mod]:
+                                        st.session_state["re_active_filters"].pop(col_to_mod, None)
+                            return callback
                         
                         st.button(
                             f"❌ {f_col}: {f_val}",
-                            key=f"rm_filt_{f_col}",
-                            on_click=make_delete_callback(f_col),
+                            key=f"rm_filt_{f_col}_{f_val}",
+                            on_click=make_delete_callback(f_col, f_val),
                             use_container_width=True
                         )
                 with tag_cols[-1]:
