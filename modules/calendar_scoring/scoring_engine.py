@@ -83,6 +83,20 @@ def calculate_volatility_score(iv_rank: float, iv_percentile: float) -> float:
 
     # blend in percentile
     final_score = (score * 0.7) + (iv_percentile * 0.3)
+
+    # Apply penalty if the broad Volatility Engine detects HIGH or EXTREME fragility risk
+    try:
+        from modules.tier4.volatility_risk_api import get_current_volatility_risk
+        vol_risk = get_current_volatility_risk()
+        if vol_risk:
+            regime = vol_risk.get("risk_regime", "LOW")
+            if regime == "EXTREME":
+                final_score -= 25.0
+            elif regime == "HIGH":
+                final_score -= 15.0
+    except Exception:
+        pass
+
     return min(100.0, max(0.0, final_score))
 
 

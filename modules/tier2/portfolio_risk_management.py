@@ -130,7 +130,7 @@ def fetch_regime_snapshot() -> dict[str, float | str]:
         regime = "Neutral Compression"
         risk_level = "Balanced"
 
-    return {
+    res = {
         "regime": regime,
         "risk_level": risk_level,
         "vix": vix_last,
@@ -141,6 +141,16 @@ def fetch_regime_snapshot() -> dict[str, float | str]:
         "spy_skew": spy_skew,
         "skew_label": skew_label,
     }
+    try:
+        from modules.tier4.volatility_risk_api import get_current_volatility_risk
+        vol_risk = get_current_volatility_risk()
+        if vol_risk:
+            res["vol_engine_score"] = vol_risk["volatility_risk_score"]
+            res["vol_engine_regime"] = vol_risk["risk_regime"]
+            res["vol_engine_delta_action"] = vol_risk["delta_action"]
+    except Exception:
+        pass
+    return res
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -547,10 +557,28 @@ def _risk_band(score: float) -> str:
 
 
 def _recommend_position(row: pd.Series) -> str:
+    # Query volatility risk delta action
+    delta_action = "HOLD"
+    try:
+        from modules.tier4.volatility_risk_api import get_current_volatility_risk
+        vol_risk = get_current_volatility_risk()
+        if vol_risk:
+            delta_action = vol_risk.get("delta_action", "HOLD")
+    except Exception:
+        pass
+
     if row["risk_score"] < 25:
         return "Eliminate"
     if row["dte"] < 10 and row["theta"] < 0 and row["pl_day"] < 0:
         return "Eliminate"
+
+    # Bias recommendation toward Trim/Hedge when delta_action is REDUCE_50 or NEUTRAL for high positive delta positions
+    delta_val = row.get("delta_exposure", 0.0)
+    if delta_action in ["REDUCE_50", "NEUTRAL"] and delta_val > 500:
+        if delta_action == "NEUTRAL":
+            return "Hedge"
+        return "Trim"
+
     if row["weight_pct"] >= 18 or row["gamma_component"] < 45:
         return "Trim"
     if row["theta"] < 0 and row["risk_score"] < 55:
@@ -586,8 +614,15 @@ def build_ai_commentary(df: pd.DataFrame, totals: dict[str, float], regime: dict
     if not actions:
         actions = "- Maintain current exposure; no critical pressure candidates were detected."
 
+    vol_text = ""
+    if "vol_engine_score" in regime:
+        vol_text = (
+            f" The Volatility Engine reports a Fragility Score of {regime['vol_engine_score']:.1f}/100 "
+            f"({regime['vol_engine_regime']} risk), suggesting a '{regime['vol_engine_delta_action']}' stance."
+        )
+
     return (
-        f"Portfolio is operating in a {regime['regime']} tape with {regime['risk_level']} market risk. "
+        f"Portfolio is operating in a {regime['regime']} tape with {regime['risk_level']} market risk.{vol_text} "
         f"Portfolio heat is {heat:.0f}/100, net delta is {totals['total_delta']:+.2f}, and the book has {theta_text} "
         f"of {totals['total_theta']:+.2f} per day. {sector_text}, so hidden correlation should be monitored before adding similar beta.\n\n"
         f"Recommended actions:\n{actions}"

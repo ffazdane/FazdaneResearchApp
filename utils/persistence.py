@@ -49,6 +49,10 @@ DATABASES = {
         "env_var": "TRADE_RECOMMENDATION_DB_PATH",
         "default_path": REPO_ROOT / "data" / "trade_recommendation" / "trade_recommendation.sqlite",
     },
+    "volatility_engine": {
+        "env_var": "VOLATILITY_ENGINE_DB_PATH",
+        "default_path": REPO_ROOT / "data" / "volatility_engine" / "volatility_engine.sqlite",
+    },
 }
 
 BACKUP_DIR = REPO_ROOT / "data" / "backups"

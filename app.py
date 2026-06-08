@@ -331,8 +331,8 @@ st.markdown(
             pointer-events: auto !important;
         }}
 
-        /* Permanently hide sidebar collapse and expand controls */
-        [data-testid="collapsedControl"],
+        /* Permanently hide sidebar collapse control (inside expanded sidebar) */
+        /*
         [data-testid="stSidebarCollapseButton"] {{
             opacity: 0 !important;
             pointer-events: none !important;
@@ -341,6 +341,7 @@ st.markdown(
             height: 0 !important;
             overflow: hidden !important;
         }}
+        */
 
         /* Hide decorative bar, toolbar, hamburger menu, deploy button, and footer */
         [data-testid="stDecoration"],
@@ -437,6 +438,22 @@ st.markdown(
         [data-testid="stSidebar"] {{
             background: var(--sidebar-bg);
             border-right: 1px solid var(--border-color);
+        }}
+        /* Force sidebar to be open and layout correctly even if Streamlit thinks it is collapsed */
+        [data-testid="stAppViewContainer"][data-sidebar-collapsed="true"] [data-testid="stSidebar"] {{
+            transform: translate3d(0, 0, 0) !important;
+            margin-left: 0 !important;
+            width: 21rem !important;
+            display: flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+        }}
+        [data-testid="stAppViewContainer"][data-sidebar-collapsed="true"] [data-testid="stSidebar"] * {{
+            visibility: visible !important;
+            opacity: 1 !important;
+        }}
+        [data-testid="stAppViewContainer"][data-sidebar-collapsed="true"] [data-testid="stMain"] {{
+            margin-left: 21rem !important;
         }}
         [data-testid="stSidebar"] * {{ color: var(--text-color) !important; }}
         [data-testid="stSidebar"] .stButton > button {{
@@ -643,20 +660,6 @@ st.markdown(
         }}
 
     </style>
-    <script>
-        (function() {{
-            function expandSidebar() {{
-                const sidebar = document.querySelector('[data-testid="stSidebar"]');
-                const expandButton = document.querySelector('[data-testid="collapsedControl"] button');
-                if (sidebar && sidebar.getAttribute('data-collapsed') === 'true' && expandButton) {{
-                    expandButton.click();
-                }}
-            }}
-            expandSidebar();
-            const interval = setInterval(expandSidebar, 100);
-            setTimeout(() => clearInterval(interval), 3000);
-        }})();
-    </script>
     """,
     unsafe_allow_html=True,
 )
@@ -671,6 +674,40 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
 if not st.session_state.authenticated:
+    # Renders the sidebar with branding and system status when logged out
+    with st.sidebar:
+        # Logo
+        try:
+            st.image("assets/logo.png", use_container_width=True)
+        except Exception:
+            st.markdown(
+                "<h2 style='color:#3ab54a;text-align:center;'>Research & Trading Intelligence Platform</h2>",
+                unsafe_allow_html=True,
+            )
+        
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        
+        st.markdown(
+            """
+            <div style="
+                background: rgba(26,58,143,0.15);
+                border: 1px solid #1e3a5f;
+                border-radius: 8px;
+                padding: 12px 14px;
+                margin-bottom: 16px;
+            ">
+                <div style="color:#3ab54a;font-weight:700;font-size:14px;margin-bottom:4px;">SYSTEM STATUS</div>
+                <div style="color:#e2e8f0;font-size:12px;">📊 Broad VIX: Connected</div>
+                <div style="color:#e2e8f0;font-size:12px;">🗄️ Database: Active</div>
+                <div style="color:#e2e8f0;font-size:12px;">⚡ API Engine: Online</div>
+            </div>
+            <div style="text-align:center;color:#64748b;font-size:11px;margin-top:20px;">
+                Please authenticate in the main panel to access workspace modules.
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    
     authenticator = FazDaneAuthenticator()
     authenticator.render_login_screen()
     st.stop()

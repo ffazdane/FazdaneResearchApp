@@ -374,11 +374,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
         with tab_rt:
             self._render_rejected_log()
 
-    # ══════════════════════════════════════════════════════════════════════
-    # ANALYTICAL DATA FETCHING & PIPELINE
-    # ══════════════════════════════════════════════════════════════════════
-
-    def _get_universe_summary_table(self, tickers: list) -> pd.DataFrame:
+    # ═══════    def _get_universe_summary_table(self, tickers: list) -> pd.DataFrame:
         """Compile a summary table for all tickers in the universe from database snapshots."""
         rows = []
         from utils.universe_manager import get_company_name
@@ -404,6 +400,18 @@ class TradeRecommendationEngineModule(FazDaneModule):
             pa_display_rec = cal_data.get("pa_display_rec", "N/A")
             mre_display_rec = cal_data.get("mre_display_rec", "N/A")
             ol_bias = cal_data.get("ol_bias", "N/A")
+
+            # Lookup volatility risk score
+            vol_risk_str = "N/A"
+            try:
+                from modules.tier4.volatility_risk_api import get_volatility_risk_for_symbol
+                v_risk = get_volatility_risk_for_symbol(t)
+                if not v_risk:
+                    v_risk = get_volatility_risk_for_symbol("SPY")
+                if v_risk:
+                    vol_risk_str = f"{v_risk['volatility_risk_score']:.0f} ({v_risk['risk_regime']})"
+            except Exception:
+                pass
 
             # Calculate alignment index (0-5)
             score_count = 0
@@ -516,7 +524,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
                     0: "🔴 0/5 Aligned"
                 }
                 alignment_str = emoji_map.get(score_count, "🔴 0/5 Aligned")
-
+ 
                 rows.append({
                     "Ticker": t,
                     "Company Name": get_company_name(t),
@@ -526,6 +534,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
                     "FDTS": fdts_emoji,
                     "Strength": strength_icon,
                     "Earnings Date": ed_val,
+                    "Vol Risk": vol_risk_str,
                     "Score": f"{snap['trade_score']:.1f}" if snap['trade_score'] else "N/A",
                     "Decision": ti_decision,
                     "State": snap["trend_state"] or "N/A",
@@ -549,7 +558,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
                     0: "🔴 0/5 Aligned"
                 }
                 alignment_str = emoji_map.get(score_count, "🔴 0/5 Aligned")
-
+ 
                 rows.append({
                     "Ticker": t,
                     "Company Name": get_company_name(t),
@@ -559,6 +568,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
                     "FDTS": "⚪ Pending",
                     "Strength": "—",
                     "Earnings Date": "N/A",
+                    "Vol Risk": vol_risk_str,
                     "Score": "-",
                     "Decision": "Pending Scan",
                     "State": "-",
@@ -725,6 +735,18 @@ class TradeRecommendationEngineModule(FazDaneModule):
                     styles.at[i, "Option Bias"] = "background-color: rgba(220, 38, 38, 0.15); color: #ef4444; font-weight: 700"
                 elif "Slight Put" in opb:
                     styles.at[i, "Option Bias"] = "background-color: rgba(255, 184, 0, 0.15); color: #ffb800; font-weight: 700"
+                    
+            # Vol Risk
+            if "Vol Risk" in df.columns:
+                vr = str(row.get("Vol Risk", ""))
+                if "EXTREME" in vr:
+                    styles.at[i, "Vol Risk"] = "background-color: rgba(220, 38, 38, 0.28); color: #ef4444; font-weight: 700"
+                elif "HIGH" in vr:
+                    styles.at[i, "Vol Risk"] = "background-color: rgba(255, 150, 50, 0.22); color: #ffb800; font-weight: 700"
+                elif "ELEVATED" in vr:
+                    styles.at[i, "Vol Risk"] = "background-color: rgba(255, 215, 0, 0.15); color: #ffd700; font-weight: 700"
+                elif "LOW" in vr:
+                    styles.at[i, "Vol Risk"] = "background-color: rgba(82, 214, 138, 0.15); color: #52D68A; font-weight: 700"
                     
         return styles
 
@@ -1131,6 +1153,32 @@ class TradeRecommendationEngineModule(FazDaneModule):
                 unsafe_allow_html=True
             )
             
+            # Query broad volatility engine risk
+            try:
+                from modules.tier4.volatility_risk_api import get_current_volatility_risk
+                vol_risk = get_current_volatility_risk()
+                if vol_risk:
+                    score_val = vol_risk["volatility_risk_score"]
+                    regime_val = vol_risk["risk_regime"]
+                    action_val = vol_risk["delta_action"]
+                    
+                    regime_colors = {"LOW": "rgba(82,214,138,0.2)", "ELEVATED": "rgba(255,215,0,0.2)", "HIGH": "rgba(255,150,50,0.2)", "EXTREME": "rgba(255,107,107,0.2)"}
+                    reg_c = regime_colors.get(regime_val, "rgba(180,180,180,0.2)")
+                    
+                    st.markdown(
+                        f"<div style='background:{reg_c};border:1px solid rgba(255,255,255,0.05);padding:12px;border-radius:8px;margin-bottom:18px;font-size:0.85rem;'>"
+                        f"⚡ <strong>Volatility Engine Risk</strong><br>"
+                        f"Fragility Score: <strong>{score_val:.1f} ({regime_val})</strong><br>"
+                        f"Rec Action: <strong>{action_val}</strong>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                    
+                    if regime_val in ["HIGH", "EXTREME"]:
+                        st.warning("⚠️ Volatility Engine detects elevated fragility — prefer defined-risk strategies")
+            except Exception:
+                pass
+
             # Metrics — guard against None values from stale DB cache
             composite = data.get('composite_score')
             spot_p = data.get('spot_price')

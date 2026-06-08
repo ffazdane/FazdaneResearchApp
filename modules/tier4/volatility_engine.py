@@ -17,6 +17,8 @@ import yfinance as yf
 from modules.base_module import FazDaneModule
 from utils.universe_manager import format_ticker_display, get_ticker_names, render_universe_manager
 from utils.volatility_pdf_generator import generate_pdf_report
+from modules.tier4.volatility_run_database import save_volatility_run, get_run_history
+from modules.tier4.volatility_score_engine import calculate_volatility_risk_score
 INDEX_PROXIES = {"SPX": "SPY", "^GSPC": "SPY", "NDX": "QQQ", "^NDX": "QQQ", "RUT": "IWM", "^RUT": "IWM"}
 ASSET_TYPES = {
     "SPX": "Index", "^GSPC": "Index", "NDX": "Index", "^NDX": "Index", "RUT": "Index", "^RUT": "Index",
@@ -916,6 +918,106 @@ class VolatilityEngineModule(FazDaneModule):
         upper_range = current_price + exp_move
         lower_range = current_price - exp_move
 
+        # Compute new scoring inputs
+        ema20 = df["Close"].ewm(span=20, adjust=False).mean()
+        ema50 = df["Close"].ewm(span=50, adjust=False).mean()
+        spy_vs_20ema_pct = float((current_price - ema20.iloc[-1]) / ema20.iloc[-1] * 100) if not ema20.empty else 0.0
+        spy_vs_50ema_pct = float((current_price - ema50.iloc[-1]) / ema50.iloc[-1] * 100) if not ema50.empty else 0.0
+
+        # Fetch SPY specifically for SPY deviation KPIs
+        ve_start = st.session_state.get("ve_start_date") or (datetime.today() - timedelta(days=365))
+        ve_end = st.session_state.get("ve_end_date") or datetime.today()
+        if data_ticker.upper() == "SPY":
+            spy_full_df = df
+        else:
+            spy_full_df = get_price_data("SPY", ve_start, ve_end)
+            if spy_full_df is None or spy_full_df.empty:
+                spy_full_df = df
+
+        spy_curr_close = float(spy_full_df["Close"].iloc[-1])
+        spy_ema20 = spy_full_df["Close"].ewm(span=20, adjust=False).mean()
+        spy_ema20_val = float(spy_ema20.dropna().iloc[-1]) if not spy_ema20.dropna().empty else spy_curr_close
+        spy_dev_20ema_pct = ((spy_curr_close - spy_ema20_val) / spy_ema20_val) * 100 if spy_ema20_val != 0 else 0.0
+
+        spy_lookback_len = min(252, len(spy_full_df))
+        spy_highs = spy_full_df["High"].iloc[-spy_lookback_len:].dropna()
+        spy_high_52w = float(spy_highs.max()) if not spy_highs.empty else spy_curr_close
+        spy_dev_from_high_pct = ((spy_curr_close - spy_high_52w) / spy_high_52w) * 100 if spy_high_52w != 0 else 0.0
+
+
+        # Put/Call ratio
+        put_volume = puts["volume"].fillna(0).sum() if (puts is not None and not puts.empty and "volume" in puts.columns) else 0
+        call_volume = calls["volume"].fillna(0).sum() if (calls is not None and not calls.empty and "volume" in calls.columns) else 0
+        put_call_ratio = float(put_volume / call_volume) if call_volume > 0 else 0.7
+
+        # Consecutive down days
+        consecutive_down_days = 0
+        close_series = df["Close"]
+        for i in range(len(close_series) - 1, 0, -1):
+            if close_series.iloc[i] < close_series.iloc[i-1]:
+                consecutive_down_days += 1
+            else:
+                break
+
+        # 5d returns for SPY & QQQ
+        start_d_str = (datetime.today() - timedelta(days=15)).strftime("%Y-%m-%d")
+        end_d_str = datetime.today().strftime("%Y-%m-%d")
+        spy_df = get_price_data("SPY", start_d_str, end_d_str)
+        qqq_df = get_price_data("QQQ", start_d_str, end_d_str)
+
+        if spy_df is not None and len(spy_df) >= 5:
+            spy_5d_return = float((spy_df["Close"].iloc[-1] - spy_df["Close"].iloc[-5]) / spy_df["Close"].iloc[-5])
+        else:
+            if "SPY" in data_ticker.upper() and len(df) >= 5:
+                spy_5d_return = float((df["Close"].iloc[-1] - df["Close"].iloc[-5]) / df["Close"].iloc[-5])
+            else:
+                spy_5d_return = 0.0
+
+        if qqq_df is not None and len(qqq_df) >= 5:
+            qqq_5d_return = float((qqq_df["Close"].iloc[-1] - qqq_df["Close"].iloc[-5]) / qqq_df["Close"].iloc[-5])
+        else:
+            if "QQQ" in data_ticker.upper() and len(df) >= 5:
+                qqq_5d_return = float((df["Close"].iloc[-1] - df["Close"].iloc[-5]) / df["Close"].iloc[-5])
+            else:
+                qqq_5d_return = 0.0
+
+        qqq_spy_divergence = qqq_5d_return - spy_5d_return
+
+        # Gamma regime from GEX engine if available
+        gamma_regime = "Positive Gamma"
+        try:
+            from modules.tier4.gamma_flip.data_loader import load_option_chain, get_available_expirations
+            from modules.tier4.gamma_flip.gex_engine import build_gex_analysis
+            gex_exps = get_available_expirations(data_ticker)
+            if gex_exps:
+                gex_result = load_option_chain(data_ticker, tuple(gex_exps[:3]))
+                if not gex_result.chain.empty:
+                    gex_analysis = build_gex_analysis(gex_result.chain, data_ticker, current_price, range_pct=10.0, step_pct=0.5)
+                    gamma_regime = gex_analysis["summary"].iloc[0]["Gamma Regime"]
+        except Exception as gex_err:
+            import logging
+            logging.getLogger("VolatilityEngine").warning(f"Could not calculate GEX regime: {gex_err}")
+
+        # Calculate Volatility Risk Score
+        risk_score_dict = calculate_volatility_risk_score(
+            vix_current=vix_current,
+            vix_percentile=vix_pct,
+            vvix_current=vvix_val,
+            term_shape=term_shape,
+            put_call_ratio=put_call_ratio,
+            spy_vs_20ema_pct=spy_vs_20ema_pct,
+            spy_vs_50ema_pct=spy_vs_50ema_pct,
+            trend_label=trend_label,
+            consecutive_down_days=consecutive_down_days,
+            spy_5d_return=spy_5d_return,
+            qqq_spy_divergence=qqq_spy_divergence,
+            gamma_regime=gamma_regime,
+            liquidity_label=liq_label,
+            hvr=hvr,
+            days_to_earnings=days_to_earnings,
+            macro_event_flagged=st.session_state.get("ve_macro_event", False)
+        )
+
         result = strategy_engine(
             hvr=hvr, atm_iv=atm_iv, hv20=hv20, trend_label=trend_label,
             skew_label=skew_label, term_shape=term_shape, vix_pct=vix_pct,
@@ -927,6 +1029,29 @@ class VolatilityEngineModule(FazDaneModule):
 
         # Save successfully fetched live options and volatility data to cache
         if not live_fetch_failed:
+            save_volatility_run(
+                symbol=display_ticker,
+                volatility_risk_score=risk_score_dict["volatility_risk_score"],
+                risk_regime=risk_score_dict["risk_regime"],
+                delta_action=risk_score_dict["delta_action"],
+                sub_scores=risk_score_dict["sub_scores"],
+                raw_inputs={
+                    "vix_current": vix_current,
+                    "vix_percentile": vix_pct,
+                    "vvix_current": vvix_val,
+                    "hvr": hvr,
+                    "atm_iv": atm_iv,
+                    "hv20": hv20,
+                    "term_shape": term_shape,
+                    "skew_label": skew_label,
+                    "put_call_ratio": put_call_ratio,
+                    "spy_vs_20ema_pct": spy_vs_20ema_pct,
+                    "spy_vs_50ema_pct": spy_vs_50ema_pct,
+                    "gamma_regime": gamma_regime,
+                    "days_to_earnings": days_to_earnings,
+                    "macro_event_flagged": st.session_state.get("ve_macro_event", False)
+                }
+            )
             save_volatility_cache(
                 symbol=display_ticker,
                 last_price=current_price,
@@ -954,10 +1079,10 @@ class VolatilityEngineModule(FazDaneModule):
                 best_expiry=best_expiry
             )
 
-        # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ────────────────────────────────────────────
         # TABS
-        # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Snapshot", "Volatility Structure", "Strategy Engine", "VIX Seasonal Analysis", "User Guide"])
+        # ────────────────────────────────────────────
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Snapshot", "Volatility Structure", "Strategy Engine", "Fragility Score", "Historical Drawdowns", "VIX Seasonal Analysis", "User Guide"])
         fig = None
         fig_ts = None # Pre-initialize for PDF export
 
@@ -980,6 +1105,14 @@ class VolatilityEngineModule(FazDaneModule):
                 f'{make_badge(f"VIX {vix_current:.1f}" if vix_current else "VIX N/A", "blue")}'
                 f'</div>', unsafe_allow_html=True
             )
+
+            # Second row of metrics: Market Context KPIs
+            st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+            k_cols = st.columns(4)
+            k_cols[0].metric("Current VIX", f"{vix_current:.2f}" if vix_current else "N/A")
+            k_cols[1].metric("Options P/C Ratio", f"{put_call_ratio:.2f}")
+            k_cols[2].metric("SPY Dev from 52W High", f"{spy_dev_from_high_pct:+.2f}%", f"52W High: ${spy_high_52w:.2f}")
+            k_cols[3].metric("SPY Dev from 20 EMA", f"{spy_dev_20ema_pct:+.2f}%", f"20 EMA: ${spy_ema20_val:.2f}")
 
             st.markdown("---")
             ch1, ch2 = st.columns([3, 2])
@@ -1342,9 +1475,358 @@ class VolatilityEngineModule(FazDaneModule):
         # TAB 4: USER GUIDE
         # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
         # ════════════════════════════════════════════════════════════
-        # TAB 4: VIX SEASONAL ANALYSIS
+        # TAB 4: FRAGILITY SCORE
         # ════════════════════════════════════════════════════════════
         with tab4:
+            st.markdown(panel_intro(display_ticker, "Volatility Risk & Fragility Score", "Identifies market fragility zones by measuring 6 distinct volatility and market-structure categories. Designed to detect environments with high probability of a one-day index decline greater than -0.5%."), unsafe_allow_html=True)
+            st.markdown('<p class="panel-title">Market Fragility & Volatility Risk Engine</p>', unsafe_allow_html=True)
+            
+            # Overview Metrics Row
+            fr_col1, fr_col2, fr_col3 = st.columns(3)
+            fr_col1.metric("Composite Risk Score", f"{risk_score_dict['volatility_risk_score']:.1f} / 100")
+            
+            # Regime style
+            regime_colors = {"LOW": "green", "ELEVATED": "yellow", "HIGH": "orange", "EXTREME": "red"}
+            reg_color = regime_colors.get(risk_score_dict["risk_regime"], "gray")
+            fr_col2.markdown(f"**Risk Regime:**<br>{make_badge(risk_score_dict['risk_regime'], reg_color)}", unsafe_allow_html=True)
+            
+            # Delta action badge style
+            action_colors = {"HOLD": "green", "REDUCE_25": "yellow", "REDUCE_50": "orange", "NEUTRAL": "red"}
+            act_color = action_colors.get(risk_score_dict["delta_action"], "gray")
+            fr_col3.markdown(f"**Delta Exposure Recommendation:**<br>{make_badge(risk_score_dict['delta_action'], act_color)}", unsafe_allow_html=True)
+
+            # Second row of metrics: Market Context KPIs
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            fr_kcols = st.columns(4)
+            fr_kcols[0].metric("Current VIX", f"{vix_current:.2f}" if vix_current else "N/A")
+            fr_kcols[1].metric("Options P/C Ratio", f"{put_call_ratio:.2f}")
+            fr_kcols[2].metric("SPY Dev from 52W High", f"{spy_dev_from_high_pct:+.2f}%", f"52W High: ${spy_high_52w:.2f}")
+            fr_kcols[3].metric("SPY Dev from 20 EMA", f"{spy_dev_20ema_pct:+.2f}%", f"20 EMA: ${spy_ema20_val:.2f}")
+
+            st.markdown("---")
+            
+            # Visualizations
+            fig_col1, fig_col2 = st.columns(2)
+            with fig_col1:
+                # Gauge Chart
+                fig_gauge = go.Figure(go.Indicator(
+                    mode = "gauge+number",
+                    value = risk_score_dict["volatility_risk_score"],
+                    domain = {'x': [0, 1], 'y': [0, 1]},
+                    gauge = {
+                        'axis': {'range': [None, 100], 'tickwidth': 1, 'tickcolor': "#8B9CB6"},
+                        'bar': {'color': "#00ADB5"},
+                        'bgcolor': "rgba(255,255,255,0.05)",
+                        'borderwidth': 2,
+                        'bordercolor': "rgba(255,255,255,0.1)",
+                        'steps': [
+                            {'range': [0, 25], 'color': 'rgba(82,214,138,0.15)'},
+                            {'range': [25, 50], 'color': 'rgba(255,215,0,0.15)'},
+                            {'range': [50, 75], 'color': 'rgba(255,150,50,0.15)'},
+                            {'range': [75, 100], 'color': 'rgba(255,107,107,0.15)'}
+                        ]
+                    }
+                ))
+                fig_gauge.update_layout(
+                    title=dict(text="Volatility Risk Gauge", font=dict(size=16, color="#E0E6F0")),
+                    paper_bgcolor = "rgba(0,0,0,0)",
+                    plot_bgcolor = "rgba(0,0,0,0)",
+                    font = {'color': "#CDD5E0"},
+                    height = 280,
+                    margin = dict(l=30, r=30, t=50, b=20)
+                )
+                st.plotly_chart(fig_gauge, use_container_width=True)
+                
+            with fig_col2:
+                # Sub-score Horizontal Bar Chart
+                sub_sc = risk_score_dict["sub_scores"]
+                sub_names = ["VIX Regime", "Put/Call Ratio", "Price Action", "Breadth", "Liquidity/Gamma", "Macro/Event"]
+                sub_vals = [
+                    sub_sc["vix_regime_score"],
+                    sub_sc["put_call_score"],
+                    sub_sc["price_action_score"],
+                    sub_sc["breadth_score"],
+                    sub_sc["liquidity_gamma_score"],
+                    sub_sc["macro_event_score"]
+                ]
+                
+                fig_bar = go.Figure(go.Bar(
+                    x=sub_vals,
+                    y=sub_names,
+                    orientation='h',
+                    marker=dict(
+                        color=['#52D68A' if v <= 25 else '#FFD700' if v <= 50 else '#FFB347' if v <= 75 else '#FF6B6B' for v in sub_vals],
+                        line=dict(color='rgba(255, 255, 255, 0.1)', width=1)
+                    )
+                ))
+                fig_bar.update_layout(
+                    title=dict(text="Sub-Component Score Breakdown", font=dict(size=16, color="#E0E6F0")),
+                    xaxis=dict(title="Score (0-100)", range=[0, 100], showgrid=True, gridcolor="rgba(255,255,255,0.05)", color="#8B9CB6"),
+                    yaxis=dict(showgrid=False, color="#8B9CB6"),
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    height=280,
+                    margin=dict(l=10, r=10, t=50, b=20)
+                )
+                st.plotly_chart(fig_bar, use_container_width=True)
+                
+            st.markdown("---")
+            
+            # Active Triggers
+            st.markdown('<p class="panel-title">Active Risk & Fragility Triggers</p>', unsafe_allow_html=True)
+            if risk_score_dict["triggers"]:
+                for t in risk_score_dict["triggers"]:
+                    st.markdown(f"🔴 **{t}**")
+            else:
+                st.success("🟢 No volatility or fragility triggers detected. Market conditions are stable.")
+                
+            st.markdown("---")
+            
+            # Historical Runs Table
+            st.markdown('<p class="panel-title">Historical Volatility Run Database</p>', unsafe_allow_html=True)
+            with st.spinner("Fetching run history..."):
+                history = get_run_history(display_ticker, limit=10)
+                if history:
+                    hist_rows = []
+                    for h in history:
+                        hist_rows.append({
+                            "Timestamp": h["run_datetime"],
+                            "Symbol": h["symbol"],
+                            "Risk Score": h["volatility_risk_score"],
+                            "Regime": h["risk_regime"],
+                            "Delta Action": h["delta_action"],
+                            "VIX Score": h["sub_scores"]["vix_regime_score"],
+                            "P/C Score": h["sub_scores"]["put_call_score"],
+                            "Price Score": h["sub_scores"]["price_action_score"],
+                            "Breadth Score": h["sub_scores"]["breadth_score"],
+                            "Liq/Gamma Score": h["sub_scores"]["liquidity_gamma_score"],
+                            "Macro Score": h["sub_scores"]["macro_event_score"]
+                        })
+                    df_hist = pd.DataFrame(hist_rows).iloc[::-1]  # Newest first
+                    st.dataframe(df_hist, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No historical runs found for this ticker. Runs will be saved as you fetch volatility data.")
+
+        # ════════════════════════════════════════════════════════════
+        # TAB 5: HISTORICAL DRAWDOWN STUDY
+        # ════════════════════════════════════════════════════════════
+        with tab5:
+            st.markdown(panel_intro(display_ticker, "Historical Fragility & Drawdown Study", "Analyzes option Put/Call ratios and VIX levels on the trading day BEFORE a significant market drop to detect fragility zone signatures."), unsafe_allow_html=True)
+            st.markdown('<p class="panel-title">Pre-Drawdown Historical Volatility & Ratio Study</p>', unsafe_allow_html=True)
+
+            # Interactive Controls
+            c_ctrl1, c_ctrl2, c_ctrl3 = st.columns(3)
+            with c_ctrl1:
+                dd_ticker = st.text_input("Benchmark Market Ticker", value="SPY", key="ve_dd_ticker").strip().upper()
+            with c_ctrl2:
+                dd_threshold = st.slider("Daily Drawdown Threshold (%)", min_value=-5.0, max_value=-0.5, value=-1.0, step=0.25, key="ve_dd_threshold")
+            with c_ctrl3:
+                dd_lookback = st.selectbox("Lookback Window", options=["1 Year", "2 Years", "3 Years", "5 Years", "Max"], index=1, key="ve_dd_lookback")
+
+            # Resolve lookback days
+            lookback_map = {"1 Year": 365, "2 Years": 730, "3 Years": 1095, "5 Years": 1825, "Max": 3650}
+            lookback_days = lookback_map.get(dd_lookback, 730)
+            start_date = datetime.today() - timedelta(days=lookback_days)
+            start_date_str = start_date.strftime("%Y-%m-%d")
+            end_date_str = datetime.today().strftime("%Y-%m-%d")
+
+            with st.spinner("Analyzing historical market drawdowns..."):
+                try:
+                    # 1. Fetch historical prices of the benchmark ticker (e.g. SPY) and VIX
+                    hist_market = yf.download(dd_ticker, start=start_date_str, end=end_date_str, auto_adjust=True, progress=False)
+                    hist_vix = yf.download("^VIX", start=start_date_str, end=end_date_str, auto_adjust=True, progress=False)
+
+                    if not hist_market.empty and not hist_vix.empty:
+                        # Normalize columns if yfinance returned MultiIndex
+                        if isinstance(hist_market.columns, pd.MultiIndex):
+                            hist_market.columns = [col[0] for col in hist_market.columns]
+                        if isinstance(hist_vix.columns, pd.MultiIndex):
+                            hist_vix.columns = [col[0] for col in hist_vix.columns]
+
+                        # Make indexes timezone-naive to avoid pandas merge conflicts
+                        hist_market.index = pd.to_datetime(hist_market.index).tz_localize(None)
+                        hist_vix.index = pd.to_datetime(hist_vix.index).tz_localize(None)
+
+                        # Create clean Close series
+                        m_close = hist_market["Close"].dropna()
+                        v_close = hist_vix["Close"].dropna()
+
+                        # 2. Fetch CBOE Put/Call Ratio from CNN Fear & Greed component
+                        from modules.tier1.market_breadth import fetch_market_component_series
+                        pc_df, pc_src = fetch_market_component_series(
+                            component_key_candidates=["put_call_options", "putCall", "options_index"],
+                            include_words=["put", "call"]
+                        )
+                        
+                        # Fallback / Extrapolate Option Put/Call ratio using VIX-derived proxy for older dates
+                        v_ma20 = v_close.rolling(20).mean()
+                        v_std20 = v_close.rolling(20).std()
+                        pc_proxy = 0.8 + (v_close - v_ma20) / v_std20.replace(0, np.nan) * 0.15
+                        pc_proxy = pc_proxy.fillna(0.8)
+
+                        # Create unified daily database index
+                        all_dates = m_close.index.union(v_close.index)
+                        study_df = pd.DataFrame(index=all_dates)
+                        study_df["Market_Close"] = m_close
+                        study_df["VIX_Close"] = v_close
+                        
+                        # Merge Put/Call ratio
+                        if pc_df is not None and not pc_df.empty:
+                            # Align timezone-naive datetime indexes
+                            pc_aligned = pc_df["Value"].copy()
+                            pc_aligned.index = pd.to_datetime(pc_aligned.index).tz_localize(None)
+                            study_df["PC_Ratio"] = pc_aligned
+                        else:
+                            study_df["PC_Ratio"] = np.nan
+                            
+                        # Fill older dates with VIX-derived proxy
+                        study_df["PC_Ratio"] = study_df["PC_Ratio"].fillna(pc_proxy)
+                        study_df = study_df.ffill().dropna()
+
+                        # 3. Calculate Daily Returns
+                        study_df["Market_Return"] = study_df["Market_Close"].pct_change() * 100
+
+                        # Filter for drawdown days (Day T)
+                        drawdown_mask = study_df["Market_Return"] <= dd_threshold
+                        drawdown_indices = np.where(drawdown_mask)[0]
+
+                        events = []
+                        for idx in drawdown_indices:
+                            if idx > 0:
+                                t_row = study_df.iloc[idx]
+                                t_minus_1_row = study_df.iloc[idx - 1]
+                                events.append({
+                                    "Drawdown Date (T)": study_df.index[idx].strftime("%Y-%m-%d"),
+                                    "Decline % (T)": round(float(t_row["Market_Return"]), 2),
+                                    "Previous Date (T-1)": study_df.index[idx - 1].strftime("%Y-%m-%d"),
+                                    "VIX Close (T-1)": round(float(t_minus_1_row["VIX_Close"]), 2),
+                                    "Put/Call Ratio (T-1)": round(float(t_minus_1_row["PC_Ratio"]), 2),
+                                    "Index Close (T-1)": round(float(t_minus_1_row["Market_Close"]), 2),
+                                })
+
+                        if events:
+                            df_events = pd.DataFrame(events)
+
+                            # Detect current year activity for scatter differentiation
+                            cur_yr = datetime.today().year
+                            df_events["Is_Current_Year"] = pd.to_datetime(df_events["Drawdown Date (T)"]).dt.year == cur_yr
+                            df_events["Marker_Symbol"] = ["diamond" if cy else "circle" for cy in df_events["Is_Current_Year"]]
+                            df_events["Marker_Line_Width"] = [2.5 if cy else 1.0 for cy in df_events["Is_Current_Year"]]
+                            df_events["Marker_Line_Color"] = ["#3ab54a" if cy else "rgba(255, 255, 255, 0.2)" for cy in df_events["Is_Current_Year"]]
+
+                            # Metrics Summary
+                            m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+                            m_col1.metric("Drawdown Events Found", f"{len(df_events)}")
+                            m_col2.metric("Avg Decline on T", f"{df_events['Decline % (T)'].mean():.2f}%")
+                            m_col3.metric("Avg VIX Close (T-1)", f"{df_events['VIX Close (T-1)'].mean():.2f}")
+                            m_col4.metric("Avg Put/Call (T-1)", f"{df_events['Put/Call Ratio (T-1)'].mean():.2f}")
+
+                            st.markdown("---")
+
+                            # Visualizations Column Layout
+                            fig_dd1, fig_dd2 = st.columns(2)
+                            
+                            with fig_dd1:
+                                # Scatter Plot VIX vs P/C Ratio on T-1
+                                scatter_fig = go.Figure()
+                                scatter_fig.add_trace(go.Scatter(
+                                    x=df_events["Put/Call Ratio (T-1)"],
+                                    y=df_events["VIX Close (T-1)"],
+                                    mode="markers",
+                                    marker=dict(
+                                        size=np.clip(np.abs(df_events["Decline % (T)"]) * 8, 8, 25),
+                                        color=df_events["Decline % (T)"],
+                                        colorscale="OrRd_r",
+                                        showscale=True,
+                                        colorbar=dict(title="Decline on T (%)"),
+                                        symbol=df_events["Marker_Symbol"],
+                                        line=dict(
+                                            width=df_events["Marker_Line_Width"],
+                                            color=df_events["Marker_Line_Color"]
+                                        )
+                                    ),
+                                    text=[
+                                        f"T-1 Date: {row['Previous Date (T-1)']}<br>"
+                                        f"T-1 VIX: {row['VIX Close (T-1)']}<br>"
+                                        f"T-1 P/C: {row['Put/Call Ratio (T-1)']}<br>"
+                                        f"T Drawdown: {row['Decline % (T)']}%"
+                                        for _, row in df_events.iterrows()
+                                    ],
+                                    hoverinfo="text"
+                                ))
+                                scatter_fig.update_layout(
+                                    title=dict(text=f"Fragility Zone Scatter (Day T-1 prior to {dd_threshold}% Drop)", font=dict(size=14, color="#E0E6F0")),
+                                    xaxis=dict(title="Put/Call Ratio (T-1)", gridcolor="rgba(255,255,255,0.05)", color="#8B9CB6"),
+                                    yaxis=dict(title="VIX Close (T-1)", gridcolor="rgba(255,255,255,0.05)", color="#8B9CB6"),
+                                    plot_bgcolor="rgba(0,0,0,0)",
+                                    paper_bgcolor="rgba(0,0,0,0)",
+                                    height=360,
+                                    margin=dict(l=10, r=10, t=50, b=20)
+                                )
+                                st.plotly_chart(scatter_fig, use_container_width=True)
+                                st.caption(f"🟢 **Diamonds with green borders** represent current calendar year ({cur_yr}) activity. **Circles** represent previous years.")
+
+                            with fig_dd2:
+                                # Price timeline chart highlighting drawdowns
+                                timeline_fig = go.Figure()
+                                timeline_fig.add_trace(go.Scatter(
+                                    x=study_df.index,
+                                    y=study_df["Market_Close"],
+                                    mode="lines",
+                                    name=f"{dd_ticker} Price",
+                                    line=dict(color="#00ADB5", width=1.5)
+                                ))
+                                
+                                # Highlight drawdown days
+                                dd_dates = pd.to_datetime(df_events["Drawdown Date (T)"])
+                                timeline_fig.add_trace(go.Scatter(
+                                    x=dd_dates,
+                                    y=study_df.loc[dd_dates, "Market_Close"],
+                                    mode="markers",
+                                    name="Drawdown Day (T)",
+                                    marker=dict(color="#FF6B6B", size=8, symbol="triangle-down")
+                                ))
+                                
+                                timeline_fig.update_layout(
+                                    title=dict(text=f"{dd_ticker} Price Timeline & Drawdown Hits", font=dict(size=14, color="#E0E6F0")),
+                                    xaxis=dict(gridcolor="rgba(255,255,255,0.05)", color="#8B9CB6"),
+                                    yaxis=dict(gridcolor="rgba(255,255,255,0.05)", color="#8B9CB6"),
+                                    plot_bgcolor="rgba(0,0,0,0)",
+                                    paper_bgcolor="rgba(0,0,0,0)",
+                                    height=360,
+                                    margin=dict(l=10, r=10, t=50, b=20)
+                                )
+                                st.plotly_chart(timeline_fig, use_container_width=True)
+
+                            st.markdown("---")
+
+                            # Dataframe View
+                            st.markdown("#### 📋 Drawdown Alignment Data Ledger")
+                            st.dataframe(df_events, use_container_width=True, hide_index=True)
+
+                            # Export CSV button
+                            csv_data = df_events.to_csv(index=False)
+                            st.download_button(
+                                label="📥 Export Historical Drawdown Data to CSV",
+                                data=csv_data,
+                                file_name=f"{dd_ticker}_historical_drawdown_analysis.csv",
+                                mime="text/csv",
+                                use_container_width=True,
+                                key="ve_export_dd_csv"
+                            )
+                        else:
+                            st.info(f"No daily drawdown events of {dd_threshold}% or worse found for {dd_ticker} in the selected {dd_lookback} window.")
+                    else:
+                        st.error(f"Error fetching historical price data for ticker {dd_ticker} or ^VIX.")
+                except Exception as study_err:
+                    st.error(f"An error occurred during drawdown analysis: {study_err}")
+                    import traceback
+                    st.code(traceback.format_exc())
+
+        # ════════════════════════════════════════════════════════════
+        # TAB 6: VIX SEASONAL ANALYSIS
+        # ════════════════════════════════════════════════════════════
+        with tab6:
             st.markdown(panel_intro("VIX", "VIX Seasonal & Regime Study", "Analyzes the CBOE Volatility Index (VIX) historical behavior, monthly seasonality, regime distributions, and volatility behavior around monthly option expiration (OpEx) weeks."), unsafe_allow_html=True)
             st.markdown('<p class="panel-title">VIX Seasonality & Regime Analysis</p>', unsafe_allow_html=True)
             
@@ -2246,7 +2728,7 @@ class VolatilityEngineModule(FazDaneModule):
                             unsafe_allow_html=True
                         )
 
-        with tab5:
+        with tab7:
             st.markdown('<div class="panel-card">', unsafe_allow_html=True)
             st.markdown('<p class="panel-title">Volatility Engine User Guide</p>', unsafe_allow_html=True)
 
