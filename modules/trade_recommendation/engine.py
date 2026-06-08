@@ -134,6 +134,75 @@ class TradeRecommendationEngineModule(FazDaneModule):
                 
             display_df = df_universe[cols_to_use]
             
+            # ── Watchlist Filtering ───────────────────────────────────────────
+            # Dynamically filter by column and value
+            def clear_filters():
+                st.session_state["re_filter_col"] = "-- Select Column --"
+                st.session_state["re_filter_val"] = "-- Select Value --"
+
+            filter_cols_to_use = [c for c in cols_to_use if c not in {"Ticker Price", "Net Change", "ATR", "40D Range", "Last Updated", "Company Name"}]
+            filter_options = ["-- Select Column --"] + filter_cols_to_use
+            
+            current_filter_col = st.session_state.get("re_filter_col", "-- Select Column --")
+            if current_filter_col not in filter_options:
+                st.session_state["re_filter_col"] = "-- Select Column --"
+                if "re_filter_val" in st.session_state:
+                    st.session_state["re_filter_val"] = "-- Select Value --"
+            
+            filt_col, filt_val, filt_clear = st.columns([1.5, 1.5, 1.0])
+            with filt_col:
+                selected_col = st.selectbox(
+                    "🔍 Filter by Column Name",
+                    options=filter_options,
+                    key="re_filter_col"
+                )
+                
+            if selected_col != "-- Select Column --":
+                # Get unique values of this column in the universe table and sort them
+                unique_vals = sorted(df_universe[selected_col].dropna().unique().astype(str).tolist())
+                val_options = ["-- Select Value --"] + unique_vals
+                
+                current_filter_val = st.session_state.get("re_filter_val", "-- Select Value --")
+                if current_filter_val not in val_options:
+                    st.session_state["re_filter_val"] = "-- Select Value --"
+                    
+                with filt_val:
+                    selected_val = st.selectbox(
+                        "🎯 Select Value",
+                        options=val_options,
+                        key="re_filter_val"
+                    )
+                with filt_clear:
+                    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                    st.button("❌ Clear Filter", use_container_width=True, on_click=clear_filters)
+                        
+                if selected_val != "-- Select Value --":
+                    display_df = display_df[display_df[selected_col].astype(str) == selected_val]
+            else:
+                with filt_val:
+                    st.selectbox(
+                        "🎯 Select Value",
+                        options=["-- Select a Column First --"],
+                        disabled=True,
+                        key="re_filter_val_disabled"
+                    )
+                with filt_clear:
+                    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                    st.button("❌ Clear Filter", disabled=True, use_container_width=True)
+            
+            if display_df.empty:
+                st.warning("⚠️ No tickers match the current filter criteria.")
+            else:
+                tickers_list = sorted(list(display_df["Ticker"].unique()))
+                tickers_str = ", ".join(tickers_list)
+                st.markdown(
+                    f"<div style='font-size:14px; font-weight:600; color:#94a3b8; margin-top:8px; margin-bottom:4px;'>"
+                    f"📋 Copy Filtered Tickers ({len(tickers_list)} symbols)</div>", 
+                    unsafe_allow_html=True
+                )
+                st.code(tickers_str, language="text")
+                st.write("")
+                
             # ── Single-row selection using native st.dataframe on_select ────────
             # This replaces the multi-select data_editor approach and gives clean
             # single-row click-to-select behaviour with a highlighted active row.

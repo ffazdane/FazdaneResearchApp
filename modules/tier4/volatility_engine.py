@@ -1348,6 +1348,166 @@ class VolatilityEngineModule(FazDaneModule):
             st.markdown(panel_intro("VIX", "VIX Seasonal & Regime Study", "Analyzes the CBOE Volatility Index (VIX) historical behavior, monthly seasonality, regime distributions, and volatility behavior around monthly option expiration (OpEx) weeks."), unsafe_allow_html=True)
             st.markdown('<p class="panel-title">VIX Seasonality & Regime Analysis</p>', unsafe_allow_html=True)
             
+            # VIX Ingestion and Refresh Button
+            import sqlite3
+            from utils.persistence import get_db_path
+            db_path = get_db_path("options_liquidity")
+            
+            # Show active VIX DB date range
+            vix_db_start = "N/A"
+            vix_db_end = "N/A"
+            vix_db_count = 0
+            if db_path.exists():
+                try:
+                    with sqlite3.connect(db_path) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='daily_prices'")
+                        if cursor.fetchone():
+                            vix_meta = pd.read_sql_query(
+                                "SELECT MIN(date) as min_d, MAX(date) as max_d, COUNT(*) as cnt FROM daily_prices WHERE symbol = 'VIX'",
+                                conn
+                            ).iloc[0]
+                            if vix_meta['cnt'] > 0:
+                                vix_db_start = vix_meta['min_d']
+                                vix_db_end = vix_meta['max_d']
+                                vix_db_count = int(vix_meta['cnt'])
+                except Exception:
+                    pass
+            
+            col_info, col_btn = st.columns([3, 1])
+            with col_info:
+                st.caption(f"💾 **Local Database Cache Status**: {vix_db_count:,} VIX records stored from **{vix_db_start}** to **{vix_db_end}**")
+            with col_btn:
+                if st.button("🔄 Refresh VIX Data", use_container_width=True, type="secondary"):
+                    with st.spinner("Downloading latest VIX data..."):
+                        try:
+                            # Use max date from DB to start downloading, fallback to 1990-01-01
+                            start_fetch = "1990-01-01"
+                            if vix_db_end != "N/A":
+                                # Start fetching from 1 day after the latest date in DB
+                                start_fetch = (datetime.strptime(vix_db_end, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+                            
+                            today_str = datetime.now().strftime("%Y-%m-%d")
+                            if start_fetch >= today_str:
+                                st.success("VIX database is already up to date!")
+                            else:
+                                vix_data = yf.download("^VIX", start=start_fetch, end=today_str, auto_adjust=True, progress=False)
+                                if not vix_data.empty:
+                                    if isinstance(vix_data.columns, pd.MultiIndex):
+                                        vix_data.columns = ["_".join(str(part) for part in col if part).strip() for col in vix_data.columns]
+                                    close_cols = [col for col in vix_data.columns if "Close" in str(col)]
+                                    open_cols = [col for col in vix_data.columns if "Open" in str(col)]
+                                    high_cols = [col for col in vix_data.columns if "High" in str(col)]
+                                    low_cols = [col for col in vix_data.columns if "Low" in str(col)]
+                                    vol_cols = [col for col in vix_data.columns if "Volume" in str(col)]
+                                    
+                                    if close_cols:
+                                        vix_data = vix_data.reset_index()
+                                        # Safely find the date column after reset_index
+                                        date_col = None
+                                        for col in vix_data.columns:
+                                            if str(col).lower() in ["date", "index", "datetime"]:
+                                                date_col = col
+                                                break
+                                        if date_col is None:
+                                            date_col = vix_data.columns[0]
+                                            
+                                        vix_data = vix_data.rename(columns={date_col: "date"})
+                                        vix_data["date"] = pd.to_datetime(vix_data["date"]).dt.strftime("%Y-%m-%d")
+                                        
+                                        records = []
+                                        for _, row_v in vix_data.iterrows():
+                                            records.append((
+                                                str(row_v['date'])[:10],
+                                                "VIX",
+                                                float(row_v[open_cols[0]]) if open_cols and pd.notna(row_v[open_cols[0]]) else None,
+                                                float(row_v[high_cols[0]]) if high_cols and pd.notna(row_v[high_cols[0]]) else None,
+                                                float(row_v[low_cols[0]]) if low_cols and pd.notna(row_v[low_cols[0]]) else None,
+                                                float(row_v[close_cols[0]]) if pd.notna(row_v[close_cols[0]]) else None,
+                                                float(row_v[vol_cols[0]]) if vol_cols and pd.notna(row_v[vol_cols[0]]) else 0.0,
+                                                0.0
+                                            ))
+                                            
+                                        with sqlite3.connect(db_path) as conn:
+                                            cursor = conn.cursor()
+                                            cursor.execute("""
+                                                CREATE TABLE IF NOT EXISTS daily_prices (
+                                                    date TEXT,
+                                                    symbol TEXT,
+                                                    open REAL,
+                                                    high REAL,
+                                                    low REAL,
+                                                    close REAL,
+                                                    volume REAL,
+                                                    open_interest REAL,
+                                                    PRIMARY KEY (date, symbol)
+                                                )
+                                            """)
+                                            cursor.executemany("""
+                                                INSERT OR REPLACE INTO daily_prices (date, symbol, open, high, low, close, volume, open_interest)
+                                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                            """, records)
+                                            conn.commit()
+                                            
+                                        # Recalculate options expiries for VIX using full daily VIX prices
+                                        with sqlite3.connect(db_path) as conn:
+                                            df_all_vix = pd.read_sql_query(
+                                                "SELECT date FROM daily_prices WHERE symbol = 'VIX' ORDER BY date",
+                                                conn
+                                            )
+                                        if not df_all_vix.empty:
+                                            all_trading_dates = set(df_all_vix['date'].astype(str))
+                                            df_temp = df_all_vix.copy()
+                                            df_temp['date_parsed'] = pd.to_datetime(df_temp['date'])
+                                            df_temp['year'] = df_temp['date_parsed'].dt.year
+                                            df_temp['month'] = df_temp['date_parsed'].dt.month
+                                            
+                                            years_months = df_temp[['year', 'month']].drop_duplicates().sort_values(['year', 'month']).values.tolist()
+                                            
+                                            expiry_records = []
+                                            for yr, mn in years_months:
+                                                # Calculate third Friday of month
+                                                third_friday = None
+                                                for day in range(15, 22):
+                                                    d = date(int(yr), int(mn), day)
+                                                    if d.weekday() == 4:
+                                                        third_friday = d
+                                                        break
+                                                if third_friday:
+                                                    curr_date = third_friday
+                                                    while curr_date.strftime("%Y-%m-%d") not in all_trading_dates:
+                                                        curr_date -= timedelta(days=1)
+                                                        if curr_date.month != mn:
+                                                            curr_date = third_friday
+                                                            break
+                                                    expiry_records.append(("VIX", int(yr), int(mn), curr_date.strftime("%Y-%m-%d")))
+                                                    
+                                            with sqlite3.connect(db_path) as conn:
+                                                cursor = conn.cursor()
+                                                cursor.execute("""
+                                                    CREATE TABLE IF NOT EXISTS option_expiries (
+                                                        symbol TEXT,
+                                                        year INTEGER,
+                                                        month INTEGER,
+                                                        expiry_date TEXT,
+                                                        PRIMARY KEY (symbol, year, month)
+                                                    )
+                                                """)
+                                                cursor.executemany("""
+                                                    INSERT OR REPLACE INTO option_expiries (symbol, year, month, expiry_date)
+                                                    VALUES (?, ?, ?, ?)
+                                                """, expiry_records)
+                                                conn.commit()
+                                                
+                                        st.success(f"Successfully appended {len(records)} new VIX data points to the database!")
+                                        st.rerun()
+                                    else:
+                                        st.error("No data found or parsed from yfinance download.")
+                                else:
+                                    st.info("VIX database is already up to date!")
+                        except Exception as e:
+                            st.error(f"Failed to refresh VIX data: {e}")
+            
             # Load VIX and OpEx data from SQLite
             vix_df = pd.DataFrame()
             exp_df = pd.DataFrame()
