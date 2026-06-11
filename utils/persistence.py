@@ -53,6 +53,10 @@ DATABASES = {
         "env_var": "VOLATILITY_ENGINE_DB_PATH",
         "default_path": REPO_ROOT / "data" / "volatility_engine" / "volatility_engine.sqlite",
     },
+    "correlation_analysis": {
+        "env_var": "CORRELATION_ANALYSIS_DB_PATH",
+        "default_path": REPO_ROOT / "data" / "correlation_analysis" / "correlation_analysis.sqlite",
+    },
 }
 
 BACKUP_DIR = REPO_ROOT / "data" / "backups"

@@ -14,7 +14,7 @@ DB_PATH = os.getenv("OPTION_SEARCH_DB_PATH", os.path.join(REPO_ROOT, "data", "op
 
 LEVERAGED_BLOCKLIST = {
     # 3x / 2x / Inverse Index ETFs
-    "TQQQ", "SQQQ", "UPRO", "SPXL", "SPXS", "TNA", "TZA", "FAS", "FAZ", "SDOW", "UDOW", "SRTY", "URTY",
+    "TQQQ", "SQQQ", "UPRO", "SPXL", "SPXS", "TNA", "TZA", "FAS", "FAZ", "SDOW", "UDOW", "SRTY", "URTY", "DPST",
     # Sector Leveraged
     "SOXL", "SOXS", "LABU", "LABD", "TECL", "TECS", "DRN", "DRV", "CURE", "SICK", "WANT", "PASS",
     # Commodities/Energy Leveraged

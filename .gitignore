@@ -68,4 +68,14 @@ data/trade_recommendation/*.sqlite-*
 data/trade_recommendation_test.sqlite
 data/trade_recommendation_test.sqlite-*
 
+# Local database files for volatility and correlation
+data/volatility_engine/*.sqlite
+data/volatility_engine/*.sqlite-*
+data/correlation_analysis/*.sqlite
+data/correlation_analysis/*.sqlite-*
+
+# Scratch directory
+scratch/
+
+
 

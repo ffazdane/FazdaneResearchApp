@@ -247,19 +247,25 @@ class TickerPullbackStrategyModule(FazDaneModule):
 
         # Standard liquid weekly lists
         liquid_weekly_tickers = [
-            "SPY", "QQQ", "IWM", "DIA", "GLD", "SLV", "TLT", "SMH", "EEM", "FXI", "GDX", "GDXJ",
-            "XLE", "XLF", "XLK", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE", "XOP", "KRE",
-            "ARKK", "USO", "UNG",
-            "AAPL", "MSFT", "NVDA", "AMZN", "TSLA", "GOOGL", "GOOG", "META", "NFLX", "AMD", "AVGO",
-            "COIN", "MSTR", "HOOD", "PLTR", "CRM", "ADBE", "ORCL", "CRWD", "PANW", "JPM", "GS",
-            "UNH", "LLY", "COST", "HD", "BA", "CAT", "DIS", "V", "MA", "BAC", "WFC", "C", "MS",
-            "SCHW", "XOM", "CVX", "COP", "FCX", "NEM", "ABBV", "MRK", "PFE", "JNJ", "GILD", "AMGN",
-            "NKE", "SBUX", "MCD", "WMT", "TGT", "PG", "KO", "PEP", "GE", "HON", "LMT", "RTX",
-            "FDX", "UPS", "CSX", "UNP", "IBKR", "AAL", "DAL", "UAL", "LUV", "MAR", "F", "GM",
-            "TM", "TSM", "ASML", "INTC", "QCOM", "TXN", "MU", "LRCX", "KLAC", "NXPI", "ADI",
-            "ON", "MRVL", "ANET", "ROKU", "DKNG", "PINS", "SNAP", "NET", "DDOG", "ZS",
-            "WDAY", "NOW", "SNOW", "TEAM", "MDB", "SOFI", "PYPL", "SQ", "BABA", "JD", "PDD",
-            "BIDU", "NIO", "LI", "XPEV", "FUTU", "RIVN"
+                                                "ARKK", "DIA", "EEM", "FXI", "GDX", "GDXJ", "GLD", "IWM", "KRE", "QQQ", "SLV", "SMH",
+            "SPMO", "SPY", "TLT", "UNG", "USO", "XOP",
+            "AAL", "AAOI", "AAP", "AAPL", "ABBV", "ADBE", "ADI", "ALAB", "AMAT", "AMD", "AMGN",
+            "AMZN", "ANET", "APD", "APP", "ARM", "ARQQ", "ASML", "ASTS", "AVGO", "AXP", "BA",
+            "BABA", "BAC", "BIDU", "BLDR", "BLK", "BX", "C", "CAH", "CAT", "CBRE", "CLS",
+            "COF", "COHR", "COIN", "COP", "COST", "CRDO", "CRM", "CRWD", "CSX", "CVX", "DAL",
+            "DASH", "DDOG", "DELL", "DIS", "DKNG", "DKS", "DOV", "ELF", "EOG", "F", "FCX",
+            "FDX", "FLUT", "FN", "FSLR", "FTAI", "FUTU", "GD", "GE", "GEV", "GILD", "GM",
+            "GNRC", "GOOG", "GOOGL", "GRAL", "GS", "H", "HD", "HON", "HOOD", "HSY", "IBKR",
+            "IBM", "INSM", "INTC", "JBHT", "JBL", "JD", "JNJ", "JPM", "KKR", "KLAC", "KO",
+            "LECO", "LEU", "LI", "LLY", "LMND", "LMT", "LRCX", "LUV", "LYV", "MA", "MAR",
+            "MCD", "MDB", "META", "MMM", "MOD", "MRK", "MRVL", "MS", "MSFT", "MSTR", "MTB",
+            "MTN", "MU", "NEM", "NET", "NFLX", "NIO", "NKE", "NNE", "NOW", "NTRS", "NUE",
+            "NVDA", "NXPI", "OLLI", "ON", "ORCL", "PANW", "PDD", "PEP", "PFE", "PG", "PINS",
+            "PLNT", "PLTR", "PNC", "PYPL", "QCOM", "RBLX", "RCL", "RDDT", "RIVN", "ROKU", "RTX",
+            "SBUX", "SCHW", "SE", "SEZL", "SHOP", "SN", "SNAP", "SNOW", "SOFI", "SPOT", "SQ",
+            "STX", "TEAM", "TEL", "TGT", "TKO", "TLN", "TM", "TOL", "TSLA", "TSM", "TTWO",
+            "TXN", "UAL", "UNH", "UNP", "UPS", "UPST", "V", "VRT", "VST", "WCC", "WDAY",
+            "WELL", "WFC", "WMT", "XOM", "XPEV", "XPO", "ZS"
         ]
 
         sp500_preset = [
