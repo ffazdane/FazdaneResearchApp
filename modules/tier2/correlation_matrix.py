@@ -948,41 +948,40 @@ class CorrelationMatrixModule(FazDaneModule):
                 if col not in seg_df.columns:
                     seg_df[col] = "—"
             
-            st.markdown("### 📋 Regime Playbook Overview")
-            
-            playbook_grid = [
-                {"b": "1 - High-Beta Leaders", "bull": "PRIMARY - Call calendars (ride trend)", "bear": "AVOID / Put calendars - fall hardest", "chop": "ATM calendars - high theta"},
-                {"b": "2 - Core Trend", "bull": "Core - Call calendars ATM to slightly OTM", "bear": "Reduce / Put calendars", "chop": "ATM calendars"},
-                {"b": "3 - Low-Beta Followers", "bull": "Secondary - milder participation", "bear": "Hold - smaller drawdowns than leaders", "chop": "Good ATM candidates (lower whipsaw)"},
-                {"b": "4 - Decoupled / Neutral", "bull": "Neutral - stock-specific, size down", "bear": "Neutral - relative safe harbor", "chop": "PRIMARY - delta-neutral ATM calendars"},
-                {"b": "5 - Uncorrelated Hedge", "bull": "Diversifier - low trend capture", "bear": "Defensive ballast", "chop": "Neutral calendars / portfolio ballast"},
-                {"b": "6 - Inverse (Sell-off Winners)", "bull": "AVOID / Put calendars - drop on index rise", "bear": "PRIMARY - Call calendars (rise in risk-off)", "chop": "Tactical hedge overlay"}
-            ]
-            
-            cols = st.columns(3)
-            for idx, item in enumerate(playbook_grid):
-                with cols[idx % 3]:
-                    st.markdown(
-                        f"""
-                        <div style='
-                            background-color: #0e1e38; 
-                            border: 1px solid #1f3d6b; 
-                            border-radius: 8px; 
-                            padding: 15px; 
-                            margin-bottom: 15px;
-                            height: 220px;
-                        '>
-                            <span style='font-size: 15px; font-weight: bold; color: #facc15;'>{item["b"]}</span>
-                            <hr style='margin: 8px 0; border-color: #1f3d6b;'/>
-                            <div style='font-size: 12px; line-height: 1.5;'>
-                                🟢 <b>Bull:</b> {item["bull"]}<br/>
-                                🔴 <b>Sell-off:</b> {item["bear"]}<br/>
-                                🟡 <b>Chop:</b> {item["chop"]}
+            with st.expander("📋 View Regime Playbook Overview", expanded=False):
+                playbook_grid = [
+                    {"b": "1 - High-Beta Leaders", "bull": "PRIMARY - Call calendars (ride trend)", "bear": "AVOID / Put calendars - fall hardest", "chop": "ATM calendars - high theta"},
+                    {"b": "2 - Core Trend", "bull": "Core - Call calendars ATM to slightly OTM", "bear": "Reduce / Put calendars", "chop": "ATM calendars"},
+                    {"b": "3 - Low-Beta Followers", "bull": "Secondary - milder participation", "bear": "Hold - smaller drawdowns than leaders", "chop": "Good ATM candidates (lower whipsaw)"},
+                    {"b": "4 - Decoupled / Neutral", "bull": "Neutral - stock-specific, size down", "bear": "Neutral - relative safe harbor", "chop": "PRIMARY - delta-neutral ATM calendars"},
+                    {"b": "5 - Uncorrelated Hedge", "bull": "Diversifier - low trend capture", "bear": "Defensive ballast", "chop": "Neutral calendars / portfolio ballast"},
+                    {"b": "6 - Inverse (Sell-off Winners)", "bull": "AVOID / Put calendars - drop on index rise", "bear": "PRIMARY - Call calendars (rise in risk-off)", "chop": "Tactical hedge overlay"}
+                ]
+                
+                cols = st.columns(3)
+                for idx, item in enumerate(playbook_grid):
+                    with cols[idx % 3]:
+                        st.markdown(
+                            f"""
+                            <div style='
+                                background-color: #0e1e38; 
+                                border: 1px solid #1f3d6b; 
+                                border-radius: 8px; 
+                                padding: 15px; 
+                                margin-bottom: 15px;
+                                height: 220px;
+                            '>
+                                <span style='font-size: 15px; font-weight: bold; color: #facc15;'>{item["b"]}</span>
+                                <hr style='margin: 8px 0; border-color: #1f3d6b;'/>
+                                <div style='font-size: 12px; line-height: 1.5;'>
+                                    🟢 <b>Bull:</b> {item["bull"]}<br/>
+                                    🔴 <b>Sell-off:</b> {item["bear"]}<br/>
+                                    🟡 <b>Chop:</b> {item["chop"]}
+                                </div>
                             </div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
+                            """,
+                            unsafe_allow_html=True
+                        )
 
             st.markdown("### 🏆 Priority Candidate Lists")
             sub1, sub2, sub3 = st.tabs([
