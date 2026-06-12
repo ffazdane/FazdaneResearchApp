@@ -141,7 +141,7 @@ class MarketStructureModule(FazDaneModule):
         self.segment_mode = st.selectbox("Segment:", options=["Weekday", "Week of Month"], index=0)
         self.view = st.selectbox("View:", options=VIEW_OPTIONS, index=0)
         
-        if st.button("🔄 Generate Report", use_container_width=True, type="primary"):
+        if st.button("🔄 Generate Report", width="stretch", type="primary"):
             st.rerun()
 
     def render_main(self):
@@ -248,7 +248,7 @@ class MarketStructureModule(FazDaneModule):
         fig.add_hline(y=len(pivot) - 1.5, line_width=2, line_color="#cbd5e1")
         fig.add_vline(x=len(seg_order) - 0.5, line_width=2, line_color="#cbd5e1")
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         st.markdown("### Monthly Drill Down")
         available_months = [month for month in MONTH_ORDER if month in df["MonthName"].unique()]
@@ -344,7 +344,7 @@ class MarketStructureModule(FazDaneModule):
         drilldown_fig.add_hline(y=len(daily_matrix.index) - 1.5, line_width=4, line_color="#000000")
         drilldown_fig.add_vline(x=len(DOW_ORDER) - 0.5, line_width=4, line_color="#000000")
 
-        st.plotly_chart(drilldown_fig, use_container_width=True)
+        st.plotly_chart(drilldown_fig, width="stretch")
 
         month_total_value = m_total.reindex([selected_month]).iloc[0]
         best_day = drilldown.loc[drilldown["ReturnPct"].idxmax()]

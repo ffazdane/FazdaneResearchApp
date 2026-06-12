@@ -288,7 +288,7 @@ class SocialStockStoriesModule(FazDaneModule):
         self.scan_limit = int(st.slider("Ticker Scan Limit", 3, 50, min(20, max(len(self.tickers), 3)), 1, key="social_ticker_limit"))
         self.reddit_limit = int(st.slider("Reddit Posts/Subreddit", 10, 100, 50, 5, key="social_reddit_limit"))
         self.stocktwits_limit = int(st.slider("Stocktwits Posts/Ticker", 10, 30, 20, 5, key="social_stocktwits_limit"))
-        self.run_scan = st.button("Scan Social Stories", type="primary", use_container_width=True, key="social_scan")
+        self.run_scan = st.button("Scan Social Stories", type="primary", width="stretch", key="social_scan")
 
     def render_main(self):
         self.render_section_header(
@@ -355,7 +355,7 @@ class SocialStockStoriesModule(FazDaneModule):
         )
         st.dataframe(
             styled_top,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Published": st.column_config.DatetimeColumn("Published", format="YYYY-MM-DD HH:mm"),
@@ -406,7 +406,7 @@ class SocialStockStoriesModule(FazDaneModule):
             margin=dict(l=0, r=0, t=20, b=0),
             height=360,
         )
-        st.plotly_chart(fig, use_container_width=True, key="social_sentiment_by_ticker")
+        st.plotly_chart(fig, width="stretch", key="social_sentiment_by_ticker")
 
         scatter_df = stories.head(250).copy()
         fig2 = px.scatter(
@@ -434,7 +434,7 @@ class SocialStockStoriesModule(FazDaneModule):
             margin=dict(l=0, r=0, t=20, b=0),
             height=360,
         )
-        st.plotly_chart(fig2, use_container_width=True, key="social_sentiment_score_scatter")
+        st.plotly_chart(fig2, width="stretch", key="social_sentiment_score_scatter")
 
     def _tab_ticker_momentum(self, stories: pd.DataFrame):
         summary = (
@@ -466,14 +466,14 @@ class SocialStockStoriesModule(FazDaneModule):
             margin=dict(l=0, r=0, t=20, b=0),
             height=420,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         styled_summary = (
             summary.round(2)
             .style
             .background_gradient(subset=["AvgSentiment"], cmap="RdYlGn", vmin=-1, vmax=1)
             .background_gradient(subset=["SocialScore"], cmap="Greens")
         )
-        st.dataframe(styled_summary, use_container_width=True, hide_index=True)
+        st.dataframe(styled_summary, width="stretch", hide_index=True)
 
     def _tab_source_mix(self, stories: pd.DataFrame):
         source = stories.groupby(["Source", "Sentiment Label"], as_index=False).size()
@@ -495,7 +495,7 @@ class SocialStockStoriesModule(FazDaneModule):
             margin=dict(l=0, r=0, t=20, b=0),
             height=360,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     def _tab_raw_feed(self, stories: pd.DataFrame):
         styled_feed = (
@@ -506,7 +506,7 @@ class SocialStockStoriesModule(FazDaneModule):
         )
         st.dataframe(
             styled_feed,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Url": st.column_config.LinkColumn("Url"),

@@ -285,7 +285,7 @@ class BradleySiderographModule(FazDaneModule):
         if self.end_date > today:
             st.caption(f"SPX data is available only through the latest Yahoo Finance session; future Bradley dates remain plotted.")
 
-        if st.button("Refresh Bradley Model", use_container_width=True, type="primary", key="bradley_refresh"):
+        if st.button("Refresh Bradley Model", width="stretch", type="primary", key="bradley_refresh"):
             calculate_bradley_siderograph.clear()
             fetch_spx_data.clear()
             st.rerun()
@@ -341,7 +341,7 @@ class BradleySiderographModule(FazDaneModule):
         c3.metric("Direct Corr", f"{direct_corr:.2f}" if not pd.isna(direct_corr) else "N/A")
         c4.metric("Inverse Corr", f"{inv_corr:.2f}" if not pd.isna(inv_corr) else "N/A")
 
-        st.plotly_chart(build_bradley_chart(merged, self.show_raw, self.show_inverse), use_container_width=True)
+        st.plotly_chart(build_bradley_chart(merged, self.show_raw, self.show_inverse), width="stretch")
 
         turns = turning_points(merged, self.turn_prominence)
         tab_turns, tab_data, tab_notes = st.tabs(["Turning Points", "Data", "Method"])
@@ -355,28 +355,28 @@ class BradleySiderographModule(FazDaneModule):
                 if upcoming.empty:
                     st.info("No future turning windows remain in the selected range.")
                 else:
-                    st.dataframe(upcoming.assign(Date=upcoming["Date"].dt.strftime("%Y-%m-%d")).round(2), use_container_width=True, hide_index=True)
+                    st.dataframe(upcoming.assign(Date=upcoming["Date"].dt.strftime("%Y-%m-%d")).round(2), width="stretch", hide_index=True)
                 st.markdown("### All Detected Turning Windows")
-                st.dataframe(turns.assign(Date=turns["Date"].dt.strftime("%Y-%m-%d")).round(2), use_container_width=True, hide_index=True)
+                st.dataframe(turns.assign(Date=turns["Date"].dt.strftime("%Y-%m-%d")).round(2), width="stretch", hide_index=True)
 
         with tab_data:
             display_cols = ["Date", "Bradley_Norm", "Bradley_Inverse", "SPX_Norm", "Close"]
             table = merged[display_cols].copy()
             table["Date"] = table["Date"].dt.strftime("%Y-%m-%d")
-            st.dataframe(table.round(2), use_container_width=True, hide_index=True)
+            st.dataframe(table.round(2), width="stretch", hide_index=True)
             st.download_button(
                 "Download Bradley vs SPX CSV",
                 data=merged.to_csv(index=False),
                 file_name=f"bradley_siderograph_spx_{self.start_date}_{self.end_date}.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )
             if self.show_components:
                 component_cols = ["Date", "Bradley_Raw", "Bradley_Score", "Midterm_Aspects", "Longterm_Aspects", "Declination"]
                 components = merged[component_cols].copy()
                 components["Date"] = components["Date"].dt.strftime("%Y-%m-%d")
                 st.markdown("### Bradley Components")
-                st.dataframe(components.round(4), use_container_width=True, hide_index=True)
+                st.dataframe(components.round(4), width="stretch", hide_index=True)
 
         with tab_notes:
             st.markdown(

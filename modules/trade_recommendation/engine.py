@@ -104,7 +104,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
         
         col_gen, col_mode, col_spacing = st.columns([1.2, 1.5, 1.8])
         with col_gen:
-            if st.button("🔄 Generate / Update Watchlist Data", use_container_width=True):
+            if st.button("🔄 Generate / Update Watchlist Data", width="stretch"):
                 self._generate_watchlist_data(tickers)
         with col_mode:
             view_mode = st.selectbox(
@@ -204,7 +204,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
                     is_val_selected = (selected_val != "-- Select Value --")
                     st.button(
                         "➕ Add Filter", 
-                        use_container_width=True, 
+                        width="stretch", 
                         on_click=add_filter,
                         disabled=not is_val_selected,
                         type="primary"
@@ -219,7 +219,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
                     )
                 with filt_btn:
                     st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-                    st.button("➕ Add Filter", disabled=True, use_container_width=True)
+                    st.button("➕ Add Filter", disabled=True, width="stretch")
             
             # Apply all active filters to the dataframe (AND between columns, OR within same column)
             for filter_col, filter_vals in st.session_state["re_active_filters"].items():
@@ -254,10 +254,10 @@ class TradeRecommendationEngineModule(FazDaneModule):
                             f"❌ {f_col}: {f_val}",
                             key=f"rm_filt_{f_col}_{f_val}",
                             on_click=make_delete_callback(f_col, f_val),
-                            use_container_width=True
+                            width="stretch"
                         )
                 with tag_cols[-1]:
-                    st.button("❌ Clear All", on_click=clear_filters, use_container_width=True, type="secondary")
+                    st.button("❌ Clear All", on_click=clear_filters, width="stretch", type="secondary")
                 st.write("")
             
             if display_df.empty:
@@ -279,7 +279,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
             styled_df = display_df.style.apply(self._apply_watchlist_styles, axis=None)
             event = st.dataframe(
                 styled_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 on_select="rerun",
                 selection_mode="single-row",
@@ -301,7 +301,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
         if not data:
             st.warning(f"⚠️ No cached analysis found for ticker {active_ticker}.")
             # Provide button to scan it now
-            if st.button(f"🔍 Generate / Scan {active_ticker} Data Now", type="primary", use_container_width=True):
+            if st.button(f"🔍 Generate / Scan {active_ticker} Data Now", type="primary", width="stretch"):
                 with st.spinner(f"Scanning {active_ticker}..."):
                     import time
                     data = self._get_ticker_analysis_data(active_ticker, refresh_token=time.time())
@@ -323,7 +323,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
                 source_lbl = "Database Cache" if is_cached else "Live Scan"
                 st.caption(f"📅 **Data Version**: {gen_time} ({source_lbl})")
         with col_ref:
-            if st.button(f"🔄 Regenerate {active_ticker} Data", use_container_width=True, type="secondary"):
+            if st.button(f"🔄 Regenerate {active_ticker} Data", width="stretch", type="secondary"):
                 with st.spinner(f"Scanning {active_ticker}..."):
                     import time
                     self._get_ticker_analysis_data(active_ticker, refresh_token=time.time())
@@ -787,7 +787,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
 
             progress_bar.progress((i + 1) / total, text=f"Progress: {i + 1}/{total} tickers processed")
             # Update the live log table after every ticker
-            log_placeholder.dataframe(pd.DataFrame(log_rows), use_container_width=True, hide_index=True)
+            log_placeholder.dataframe(pd.DataFrame(log_rows), width="stretch", hide_index=True)
 
         # Final summary
         summary_parts = [f"✅ **{success}/{total} tickers saved to database**"]
@@ -1187,7 +1187,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
             st.metric("Suggested Strategy", data.get("strategy") or "N/A")
             
             # Log button
-            if st.button("🚀 Log & Deploy Trade Setup", use_container_width=True, type="primary"):
+            if st.button("🚀 Log & Deploy Trade Setup", width="stretch", type="primary"):
                 self._save_active_snapshot(data)
                 st.success("Trade setup logged to database successfully!")
                 
@@ -1241,7 +1241,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
             {"Component": "Event Risk",            "Weight %": 5,  "Score": scores.get("event_risk_score", "N/A")},
         ])
         
-        st.dataframe(df_scores, use_container_width=True, hide_index=True)
+        st.dataframe(df_scores, width="stretch", hide_index=True)
         
         st.markdown("#### Strategy Decision Logic")
         st.info(f"**Strategy Selected**: {data.get('strategy', 'N/A')}\n\n**Reasoning**: {data.get('strategy_reason', 'N/A')}")
@@ -1509,7 +1509,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
 
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         # ── Probability Cone Range Table ──────────────────────────────────────
         st.markdown("#### 📊 Probability Cone Ranges")
@@ -1541,7 +1541,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
 
         st.dataframe(
             df_ranges.style.apply(_style_ranges, axis=None),
-            use_container_width=True, hide_index=True
+            width="stretch", hide_index=True
         )
 
     def _render_signal_matrix(self, data: dict):
@@ -1590,7 +1590,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
             }
         ])
         
-        st.dataframe(df_matrix, use_container_width=True, hide_index=True)
+        st.dataframe(df_matrix, width="stretch", hide_index=True)
         
         # Verify agreement — safe against None
         d_macd = daily.get("macd_signal")
@@ -1621,10 +1621,10 @@ class TradeRecommendationEngineModule(FazDaneModule):
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("#### Front Leg Options Chain")
-            st.dataframe(options["short_calls"][["strike", "bid", "ask", "impliedVolatility", "volume", "openInterest"]].head(10), use_container_width=True, hide_index=True)
+            st.dataframe(options["short_calls"][["strike", "bid", "ask", "impliedVolatility", "volume", "openInterest"]].head(10), width="stretch", hide_index=True)
         with col2:
             st.markdown("#### Back Leg Options Chain")
-            st.dataframe(options["long_calls"][["strike", "bid", "ask", "impliedVolatility", "volume", "openInterest"]].head(10), use_container_width=True, hide_index=True)
+            st.dataframe(options["long_calls"][["strike", "bid", "ask", "impliedVolatility", "volume", "openInterest"]].head(10), width="stretch", hide_index=True)
 
     def _render_portfolio_monitor(self):
         st.markdown("### Deployed Portfolio Positions Monitor")
@@ -1635,7 +1635,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
             return
             
         df_plans = pd.DataFrame(active_plans)
-        st.dataframe(df_plans[["trade_plan_id", "ticker", "strategy", "option_structure", "entry_trigger", "created_datetime"]], use_container_width=True, hide_index=True)
+        st.dataframe(df_plans[["trade_plan_id", "ticker", "strategy", "option_structure", "entry_trigger", "created_datetime"]], width="stretch", hide_index=True)
         
         # Real-time position check
         st.markdown("#### Live Status Evaluations")
@@ -1665,7 +1665,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
         st.markdown("### Trade Performance & Backtest Logs")
         
         # Outcome update trigger button
-        if st.button("🔄 Execute Outcomes Review & Logging Update", use_container_width=True, type="secondary"):
+        if st.button("🔄 Execute Outcomes Review & Logging Update", width="stretch", type="secondary"):
             self._update_all_outcomes()
             
         outcomes = fetch_trade_outcomes()
@@ -1674,7 +1674,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
             return
             
         df_outcomes = pd.DataFrame(outcomes)
-        st.dataframe(df_outcomes, use_container_width=True, hide_index=True)
+        st.dataframe(df_outcomes, width="stretch", hide_index=True)
 
     def _render_rejected_log(self):
         st.markdown("### Rejected Trades Audit Log")
@@ -1687,7 +1687,7 @@ class TradeRecommendationEngineModule(FazDaneModule):
             return
             
         df_rej = pd.DataFrame(rejections)
-        st.dataframe(df_rej[["snapshot_datetime", "ticker", "price", "trade_score", "recommended_strategy", "notes"]], use_container_width=True, hide_index=True)
+        st.dataframe(df_rej[["snapshot_datetime", "ticker", "price", "trade_score", "recommended_strategy", "notes"]], width="stretch", hide_index=True)
 
     def _update_all_outcomes(self):
         active_plans = fetch_active_trade_plans()

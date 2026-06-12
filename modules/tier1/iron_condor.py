@@ -211,7 +211,7 @@ class IronCondorModule(FazDaneModule):
             xaxis=dict(gridcolor="#1e3a5f", tickfont=dict(color="#94a3b8")),
             legend=dict(font=dict(color="#e2e8f0"))
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     def _render_calculator(self, DATA, ticker, state):
         d = DATA.get(ticker)
@@ -256,7 +256,7 @@ class IronCondorModule(FazDaneModule):
             {"Leg": "Long Put (buy)", "Strike": lp, "OTM": f"{(lp_raw/price-1)*100:+.1f}%"},
         ])
         
-        st.dataframe(legs_df, use_container_width=True, hide_index=True)
+        st.dataframe(legs_df, width="stretch", hide_index=True)
 
         st.info(f"⚠️ Credit estimate scaled to VIX {vix_v:.1f}. Verify bid/ask in your broker before entry. Not financial advice.")
 
@@ -302,7 +302,7 @@ class IronCondorModule(FazDaneModule):
             xaxis=dict(title=dict(text="Underlying Price", font=dict(color="#e2e8f0")), gridcolor="#1e3a5f", tickfont=dict(color="#94a3b8")),
             legend=dict(font=dict(color="#e2e8f0"))
         )
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width="stretch")
 
         # Volatility
         closes = d["close"]
@@ -325,4 +325,4 @@ class IronCondorModule(FazDaneModule):
                 xaxis=dict(gridcolor="#1e3a5f", tickfont=dict(color="#94a3b8")),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color="#e2e8f0"))
             )
-            st.plotly_chart(fig3, use_container_width=True)
+            st.plotly_chart(fig3, width="stretch")

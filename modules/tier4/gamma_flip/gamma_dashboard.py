@@ -52,7 +52,7 @@ class GammaFlipLineModule(FazDaneModule):
         ticker = custom_ticker or selected_ticker or "SPY"
         st.session_state["gex_ticker"] = ticker.strip().upper()
 
-        if st.button("Refresh Gamma Data", use_container_width=True, key="gex_refresh"):
+        if st.button("Refresh Gamma Data", width="stretch", key="gex_refresh"):
             st.cache_data.clear()
             st.rerun()
 
@@ -134,23 +134,23 @@ class GammaFlipLineModule(FazDaneModule):
                         summary["Call Wall"],
                         summary["Put Wall"],
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with col2:
                 st.plotly_chart(
                     simulated_gex_chart(analysis["simulation"], summary["Spot Price"], summary["Gamma Flip Line"]),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with st.expander("Strike x Expiration GEX Heatmap", expanded=False):
-                st.plotly_chart(expiration_heatmap(analysis["gex_rows"], summary["Spot Price"]), use_container_width=True)
+                st.plotly_chart(expiration_heatmap(analysis["gex_rows"], summary["Spot Price"]), width="stretch")
 
         with tab2:
             st.markdown("### Summary Table")
-            st.dataframe(self._format_numeric_table(analysis["summary"]), use_container_width=True, hide_index=True)
+            st.dataframe(self._format_numeric_table(analysis["summary"]), width="stretch", hide_index=True)
             st.markdown("### GEX by Strike")
-            st.dataframe(self._format_numeric_table(analysis["by_strike"]), use_container_width=True, hide_index=True)
+            st.dataframe(self._format_numeric_table(analysis["by_strike"]), width="stretch", hide_index=True)
             st.markdown("### GEX by Expiration")
-            st.dataframe(self._format_numeric_table(analysis["by_expiration"]), use_container_width=True, hide_index=True)
+            st.dataframe(self._format_numeric_table(analysis["by_expiration"]), width="stretch", hide_index=True)
 
         with tab3:
             excel_bytes = analysis_to_excel(analysis)
@@ -159,7 +159,7 @@ class GammaFlipLineModule(FazDaneModule):
                 data=excel_bytes,
                 file_name=f"FazDane_GEX_{ticker}_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+                width="stretch",
             )
 
     def _select_expirations(self, expirations: list[str]) -> list[str]:

@@ -1150,7 +1150,7 @@ class ElliottWaveAnalysisModule(FazDaneModule):
         self.show_minor = st.checkbox("Show all swing pivots", value=False, key="ew_show_minor")
         self.show_fib = st.checkbox("Show Fibonacci levels", value=True, key="ew_show_fib")
 
-        if st.button("Clear Cache & Refresh", use_container_width=True, type="primary"):
+        if st.button("Clear Cache & Refresh", width="stretch", type="primary"):
             fetch_ohlc.clear()
             st.rerun()
 
@@ -1189,7 +1189,7 @@ class ElliottWaveAnalysisModule(FazDaneModule):
             st.markdown("### 🏆 Options Universe Setup Rankings")
             st.caption("Rank tickers in the active universe by setup quality and options strategy bias.")
 
-            if st.button("Run Universe Scan", type="primary", use_container_width=True):
+            if st.button("Run Universe Scan", type="primary", width="stretch"):
                 progress = st.progress(0.0)
                 ranked_rows = []
                 scanned_plots = []
@@ -1235,7 +1235,7 @@ class ElliottWaveAnalysisModule(FazDaneModule):
                 ranked_df = pd.DataFrame(ranked_rows)
                 if not ranked_df.empty:
                     ranked_df = ranked_df.sort_values(by="_score", ascending=False).drop(columns=["_score"])
-                    st.dataframe(ranked_df, use_container_width=True, hide_index=True)
+                    st.dataframe(ranked_df, width="stretch", hide_index=True)
 
                     # Sort plots by score descending
                     scanned_plots.sort(key=lambda x: x[3].quality_score, reverse=True)
@@ -1244,7 +1244,7 @@ class ElliottWaveAnalysisModule(FazDaneModule):
                     for tsym, tdf, tswings, prim in scanned_plots:
                         with st.expander(f"📊 Chart for {tsym} — {prim.phase.value} ({prim.direction}) | Confidence: {prim.quality_score:.1f}%", expanded=False):
                             fig = build_chart(tdf, tswings, prim, tsym, self.show_minor, self.show_fib, self.plot_last_n)
-                            st.plotly_chart(fig, use_container_width=True, key=f"universe_chart_{tsym}")
+                            st.plotly_chart(fig, width="stretch", key=f"universe_chart_{tsym}")
                 else:
                     st.info("No tickers scanned successfully.")
             else:
@@ -1304,7 +1304,7 @@ class ElliottWaveAnalysisModule(FazDaneModule):
 
             # Chart plot
             fig = build_chart(df, swings, active_analysis, symbol, self.show_minor, self.show_fib, self.plot_last_n)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             # Recommend options trade
             if active_analysis:
@@ -1357,7 +1357,7 @@ class ElliottWaveAnalysisModule(FazDaneModule):
                     if active_analysis.wave_ratios:
                         st.markdown("#### Calculated Wave Ratios")
                         ratio_rows = [{"Wave Ratio": k, "Measured": f"{v:.4f}"} for k, v in active_analysis.wave_ratios.items()]
-                        st.dataframe(pd.DataFrame(ratio_rows), use_container_width=True, hide_index=True)
+                        st.dataframe(pd.DataFrame(ratio_rows), width="stretch", hide_index=True)
             else:
                 st.info("No active wave analysis selected. Choose a candidate in the Wave Chart tab.")
 
@@ -1420,7 +1420,7 @@ class ElliottWaveAnalysisModule(FazDaneModule):
                                 "Regime": "N/A"
                             })
 
-                    st.dataframe(pd.DataFrame(mtf_results), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(mtf_results), width="stretch", hide_index=True)
             else:
                 st.info("Click 'Perform MTF Alignment Scan' to align structures.")
 
@@ -1441,7 +1441,7 @@ class ElliottWaveAnalysisModule(FazDaneModule):
                             "Points ($)": round(pts[i + 1].price - pts[i].price, 2),
                             "Abs Length ($)": round(_abs_wave_length(pts[i], pts[i + 1]), 2),
                         })
-                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
                 else:
                     st.info("No wave segments available.")
 
@@ -1453,7 +1453,7 @@ class ElliottWaveAnalysisModule(FazDaneModule):
                     "Type": "High" if sw.kind == "H" else "Low",
                     "ATR": round(sw.atr_at_pivot, 2),
                 } for i, sw in enumerate(swings)]
-                st.dataframe(pd.DataFrame(pivot_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(pivot_rows), width="stretch", hide_index=True)
 
             with tab_export:
                 log_text = self._build_log(symbol, df, swings, active_analysis)
@@ -1466,14 +1466,14 @@ class ElliottWaveAnalysisModule(FazDaneModule):
                     } for sw in swings]).to_csv(index=False),
                     file_name=f"ew_pivots_{symbol.replace('^', '').lower()}.csv",
                     mime="text/csv",
-                    use_container_width=True,
+                    width="stretch",
                 )
                 c_dl2.download_button(
                     "Download Analysis Log",
                     data=log_text,
                     file_name=f"ew_log_{symbol.replace('^', '').lower()}.txt",
                     mime="text/plain",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
     def _init_defaults(self):

@@ -517,7 +517,7 @@ class EquityIncomeStatementModule(FazDaneModule):
         self.show_raw = st.checkbox("Show raw income statement rows", value=False, key="income_stmt_raw")
         st.caption(f"{len(self.tickers)} tickers selected from {self.universe_name}.")
 
-        if st.button("Refresh Income Statement", use_container_width=True, type="primary", key="income_stmt_refresh"):
+        if st.button("Refresh Income Statement", width="stretch", type="primary", key="income_stmt_refresh"):
             fetch_income_statement_payload.clear()
             st.rerun()
 
@@ -545,9 +545,9 @@ class EquityIncomeStatementModule(FazDaneModule):
         col4.metric("Net Income", f"${payload['net']:.1f}B")
 
         fig = render_income_figure(payload)
-        st.pyplot(fig, use_container_width=True)
+        st.pyplot(fig, width="stretch")
         plt.close(fig)
 
         if self.show_raw:
             st.markdown("### Raw Annual Income Statement")
-            st.dataframe(payload["raw_rows"], use_container_width=True)
+            st.dataframe(payload["raw_rows"], width="stretch")

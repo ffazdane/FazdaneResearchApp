@@ -119,7 +119,7 @@ class MoneyFlowModule(FazDaneModule):
         else:
             self.range_limits = None
             
-        if st.button("🔄 Refresh Data", use_container_width=True):
+        if st.button("🔄 Refresh Data", width="stretch"):
             fetch_money_flow_data.clear()
             st.rerun()
 

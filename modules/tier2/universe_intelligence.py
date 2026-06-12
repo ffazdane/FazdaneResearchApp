@@ -281,7 +281,7 @@ class UniverseIntelligenceModule(FazDaneModule):
         st.markdown("**Beta Calculations**")
         self.beta_index = st.selectbox("Beta Reference Index:", ["SPY", "QQQ"], index=0, key="ui_beta_index")
 
-        if st.button("🔄 Refresh Market Data", use_container_width=True, type="primary"):
+        if st.button("🔄 Refresh Market Data", width="stretch", type="primary"):
             fetch_historical_prices.clear()
             st.rerun()
 
@@ -605,7 +605,7 @@ class UniverseIntelligenceModule(FazDaneModule):
                 height=580,
                 font=dict(color="#e2e8f0", family="Inter")
             )
-            st.plotly_chart(fig_quad, use_container_width=True, key="universe_rot_map")
+            st.plotly_chart(fig_quad, width="stretch", key="universe_rot_map")
 
             st.divider()
             
@@ -635,7 +635,7 @@ class UniverseIntelligenceModule(FazDaneModule):
             if trans_rows:
                 st.dataframe(
                     pd.DataFrame(trans_rows),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     column_config={
                         "FDTS Signal": st.column_config.TextColumn("FDTS Signal", width="small")
@@ -688,10 +688,19 @@ class UniverseIntelligenceModule(FazDaneModule):
 
             # Compute performance metrics for all tickers
             perf_rows = []
+            skipped_tickers = []
             for ticker in ticker_list:
                 price_series = close_df[ticker].dropna()
                 n = len(price_series)
-                
+
+                # Guard: a ticker with no usable price data (failed download or
+                # delisted symbol) yields an empty series after dropna(), and
+                # price_series.index[-1] below would raise
+                # "index -1 is out of bounds for axis 0 with size 0".
+                if n == 0:
+                    skipped_tickers.append(ticker)
+                    continue
+
                 ret_1d = (price_series.iloc[-1] / price_series.iloc[-2] - 1) * 100 if n >= 2 else 0.0
                 ret_1w = (price_series.iloc[-1] / price_series.iloc[-6] - 1) * 100 if n >= 6 else 0.0
                 ret_1m = (price_series.iloc[-1] / price_series.iloc[-22] - 1) * 100 if n >= 22 else 0.0
@@ -738,8 +747,20 @@ class UniverseIntelligenceModule(FazDaneModule):
                     "Custom %": round(ret_custom, 2)
                 })
             
-            perf_df = pd.DataFrame(perf_rows)
-            
+            if skipped_tickers:
+                st.caption(f"⚠️ Skipped (no price data available): {', '.join(skipped_tickers)}")
+
+            # Explicit columns so sorting/charting below stays safe even if
+            # every ticker was skipped (perf_rows empty).
+            perf_df = pd.DataFrame(
+                perf_rows,
+                columns=[
+                    "Ticker", "Name", "FDTS Signal",
+                    "Daily (1D) %", "Weekly (1W) %", "Monthly (1M) %",
+                    "Yearly (1Y) %", "YTD %", "Custom %",
+                ],
+            )
+
             tf_col = "Custom %" if tf_choice == "Custom Period 🎯" else {
                 "Daily (1D)": "Daily (1D) %",
                 "Weekly (1W)": "Weekly (1W) %",
@@ -794,13 +815,13 @@ class UniverseIntelligenceModule(FazDaneModule):
             )
             fig_bar.add_hline(y=0.0, line_width=1.5, line_color="#475569")
             
-            st.plotly_chart(fig_bar, use_container_width=True, key=f"perf_plotly_{tf_col.lower().replace(' ', '_').replace('%', '').strip()}")
+            st.plotly_chart(fig_bar, width="stretch", key=f"perf_plotly_{tf_col.lower().replace(' ', '_').replace('%', '').strip()}")
             
             # Full table
             st.markdown("### 📋 Universe Performance Leaderboard")
             st.dataframe(
                 perf_df.sort_values(by=tf_col, ascending=False),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "Ticker": st.column_config.TextColumn("Ticker", width="small"),
@@ -868,7 +889,7 @@ class UniverseIntelligenceModule(FazDaneModule):
                         "Actual Portfolio %": f"{actual_alloc[stage]:.1f}%",
                         "Variance %": f"{actual_alloc[stage] - rec_alloc[stage]:+.1f}%"
                     })
-                st.dataframe(pd.DataFrame(alloc_rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(alloc_rows), width="stretch", hide_index=True)
                 st.caption("💡 Recommended weights are adjusted dynamically by the system according to macro regime shifts.")
                 
             with ac2:
@@ -905,7 +926,7 @@ class UniverseIntelligenceModule(FazDaneModule):
                     height=280,
                     font=dict(color="#e2e8f0")
                 )
-                st.plotly_chart(fig_alloc, use_container_width=True, key="alloc_comparison_pie")
+                st.plotly_chart(fig_alloc, width="stretch", key="alloc_comparison_pie")
 
         # --- TAB 3: INTERNALS & LEADERSHIP ---
         with tab_internals:
@@ -937,7 +958,7 @@ class UniverseIntelligenceModule(FazDaneModule):
                 
                 st.dataframe(
                     lead_df.sort_values("RS-Ratio", ascending=False).round(2),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     column_config={
                         "RS Rank": st.column_config.ProgressColumn("RS Rank", format="%d", min_value=0, max_value=100),
@@ -983,7 +1004,9 @@ class UniverseIntelligenceModule(FazDaneModule):
             st.markdown("### Multi-Timeframe Alignment Conviction Matrix")
             align_rows = []
             for ticker in ticker_list:
-                prices = close_df[ticker]
+                prices = close_df[ticker].dropna()
+                if prices.empty:
+                    continue  # no usable price data for this ticker
                 d_trend = "Bull" if prices.iloc[-1] > prices.rolling(20).mean().iloc[-1] else "Weak"
                 w_trend = "Bull" if prices.iloc[-1] > prices.rolling(50).mean().iloc[-1] else "Neutral" if prices.iloc[-1] > prices.rolling(100).mean().iloc[-1] else "Weak"
                 m_trend = "Bull" if prices.iloc[-1] > prices.rolling(200).mean().iloc[-1] else "Weak"
@@ -1005,7 +1028,7 @@ class UniverseIntelligenceModule(FazDaneModule):
                     "Quarterly (SMA Cross)": q_trend,
                     "Conviction Status": conv_label
                 })
-            st.dataframe(pd.DataFrame(align_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(align_rows), width="stretch", hide_index=True)
 
         # --- TAB 4: RISK & VOLATILITY STRUCTURE ---
         with tab_risk:
@@ -1030,7 +1053,7 @@ class UniverseIntelligenceModule(FazDaneModule):
                     margin=dict(l=10, r=10, t=10, b=10),
                     height=240
                 )
-                st.plotly_chart(fig_sec, use_container_width=True, key="sector_exposure_bar")
+                st.plotly_chart(fig_sec, width="stretch", key="sector_exposure_bar")
 
             with rc2:
                 st.markdown("**Option Portfolio Risk (Greeks)**")
@@ -1114,7 +1137,7 @@ class UniverseIntelligenceModule(FazDaneModule):
                 if show_vals:
                     fig_heat.update_annotations(font=dict(size=val_size))
 
-                st.plotly_chart(fig_heat, use_container_width=True, key="hier_corr_heat")
+                st.plotly_chart(fig_heat, width="stretch", key="hier_corr_heat")
             else:
                 st.caption("Not enough return history to calculate correlation clustering.")
 
@@ -1130,7 +1153,7 @@ class UniverseIntelligenceModule(FazDaneModule):
             vol_df["Expected 5D Move %"] = (vol_df["Beta"] * 2.5).round(2)
             st.dataframe(
                 vol_df.sort_values("IV Rank (Sim)", ascending=False),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "FDTS Signal": st.column_config.TextColumn("FDTS Signal", width="small"),
@@ -1445,10 +1468,10 @@ class UniverseIntelligenceModule(FazDaneModule):
                     plot_col1, plot_col2 = st.columns(2)
                     with plot_col1:
                         st.markdown("<h5 style='text-align: left; margin-bottom: 0px;'>📍 PCA Asset Quadrant Projection</h5>", unsafe_allow_html=True)
-                        st.plotly_chart(fig_pca, use_container_width=True, key="cluster_pca_chart")
+                        st.plotly_chart(fig_pca, width="stretch", key="cluster_pca_chart")
                     with plot_col2:
                         st.markdown(f"<h5 style='text-align: left; margin-bottom: 0px;'>🕸️ Similarity Network Graph (Correlation > {threshold_val:.2f})</h5>", unsafe_allow_html=True)
-                        st.plotly_chart(fig_net, use_container_width=True, key="cluster_network_chart")
+                        st.plotly_chart(fig_net, width="stretch", key="cluster_network_chart")
 
                     # 7. Thematic Breakdown Grid
                     st.markdown("### 📊 Thematic Breakdown & Dynamic Insights")
@@ -1554,7 +1577,7 @@ class UniverseIntelligenceModule(FazDaneModule):
                                 })
                             st.dataframe(
                                 pd.DataFrame(c_data),
-                                use_container_width=True,
+                                width="stretch",
                                 hide_index=True,
                                 column_config={
                                     "Beta": st.column_config.NumberColumn(f"Beta vs {self.beta_index}", format="%.2f")
@@ -1661,7 +1684,7 @@ class UniverseIntelligenceModule(FazDaneModule):
                                     })
                                 st.dataframe(
                                     pd.DataFrame(c_data),
-                                    use_container_width=True,
+                                    width="stretch",
                                     hide_index=True,
                                     column_config={
                                         "Beta": st.column_config.NumberColumn(f"Beta vs {self.beta_index}", format="%.2f")
@@ -1727,7 +1750,7 @@ class UniverseIntelligenceModule(FazDaneModule):
                             margin=dict(l=20, r=20, t=10, b=20),
                             height=250
                         )
-                        st.plotly_chart(fig_price, use_container_width=True, key="drill_price_chart")
+                        st.plotly_chart(fig_price, width="stretch", key="drill_price_chart")
 
                     st.markdown("###### Technical Momentum & Risk Metrics")
                     tc1, tc2, tc3 = st.columns(3)
@@ -1769,7 +1792,7 @@ class UniverseIntelligenceModule(FazDaneModule):
                     margin=dict(l=20, r=20, t=40, b=20),
                     height=300
                 )
-                st.plotly_chart(fig_sec_rot, use_container_width=True, key="sector_rot_chart")
+                st.plotly_chart(fig_sec_rot, width="stretch", key="sector_rot_chart")
 
             with drill_tabs[2]:
                 st.markdown("#### Drilldown Level 3 — Portfolio Impact Simulator")

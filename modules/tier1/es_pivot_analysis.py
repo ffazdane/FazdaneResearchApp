@@ -144,7 +144,7 @@ class ESPivotAnalysisModule(FazDaneModule):
 
     def render_sidebar(self):
         st.markdown("**Module Controls**")
-        if st.button("🔄 Refresh Data", use_container_width=True):
+        if st.button("🔄 Refresh Data", width="stretch"):
             fetch_es_data.clear()
             st.rerun()
 
@@ -176,7 +176,7 @@ class ESPivotAnalysisModule(FazDaneModule):
             axis=1
         ).format({c: "{:.2f}" for c in ["R3","R2","R1","Pivot","S1","S2","S3","Pivot_Deviation"]})
         
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        st.dataframe(styled_df, width="stretch", hide_index=True)
 
         st.divider()
 
@@ -205,7 +205,7 @@ class ESPivotAnalysisModule(FazDaneModule):
                 yaxis=dict(title="Price", gridcolor="#1e3a5f", tickfont=dict(color="#94a3b8"), title_font=dict(color="#e2e8f0")),
                 showlegend=False, margin=dict(l=0, r=40, t=20, b=0)
             )
-            st.plotly_chart(fig_vp, use_container_width=True)
+            st.plotly_chart(fig_vp, width="stretch")
             
         st.divider()
 
@@ -231,7 +231,7 @@ class ESPivotAnalysisModule(FazDaneModule):
                 yaxis=dict(title="Price", gridcolor="#1e3a5f", tickfont=dict(color="#94a3b8"), title_font=dict(color="#e2e8f0")),
                 margin=dict(l=0, r=0, t=20, b=0)
             )
-            st.plotly_chart(fig_dev, use_container_width=True)
+            st.plotly_chart(fig_dev, width="stretch")
 
             # Excel Download
             excel_buffer = BytesIO()

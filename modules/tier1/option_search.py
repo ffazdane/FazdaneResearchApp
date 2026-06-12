@@ -387,7 +387,7 @@ class OptionSearchModule(FazDaneModule):
         prefer_tastytrade = st.checkbox("Prefer Tastytrade rows", value=True, key="os_prefer_tt")
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        scan_clicked = st.button("Search & Update Universe", use_container_width=True, type="primary", key="os_scan")
+        scan_clicked = st.button("Search & Update Universe", width="stretch", type="primary", key="os_scan")
 
         if scan_clicked:
             if not symbols:
@@ -622,7 +622,7 @@ class OptionSearchModule(FazDaneModule):
                 high_df = pd.DataFrame(db_stats["highest_scoring"])
                 st.dataframe(
                     high_df,
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     column_config={
                         "ticker": st.column_config.TextColumn("Ticker"),
@@ -640,7 +640,7 @@ class OptionSearchModule(FazDaneModule):
                 freq_df = pd.DataFrame(db_stats["most_frequent"])
                 st.dataframe(
                     freq_df,
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     column_config={
                         "ticker": st.column_config.TextColumn("Ticker"),
@@ -694,7 +694,7 @@ class OptionSearchModule(FazDaneModule):
                 height=350
             )
             fig_score.update_layout(paper_bgcolor="#0d1b2e", plot_bgcolor="rgba(21,40,71,0.15)", font=dict(color="#e2e8f0"))
-            st.plotly_chart(fig_score, use_container_width=True)
+            st.plotly_chart(fig_score, width="stretch")
 
         with col2:
             st.markdown("##### 📈 Top 20 Options Volume")
@@ -709,7 +709,7 @@ class OptionSearchModule(FazDaneModule):
                 height=350
             )
             fig_vol.update_layout(paper_bgcolor="#0d1b2e", plot_bgcolor="rgba(21,40,71,0.15)", font=dict(color="#e2e8f0"))
-            st.plotly_chart(fig_vol, use_container_width=True)
+            st.plotly_chart(fig_vol, width="stretch")
 
         col3, col4 = st.columns(2)
         with col3:
@@ -726,7 +726,7 @@ class OptionSearchModule(FazDaneModule):
                 height=320
             )
             fig_pie.update_layout(paper_bgcolor="#0d1b2e", font=dict(color="#e2e8f0"))
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie, width="stretch")
 
         with col4:
             st.markdown("##### 📅 Weekly Option Availability")
@@ -742,7 +742,7 @@ class OptionSearchModule(FazDaneModule):
                 height=320
             )
             fig_week.update_layout(paper_bgcolor="#0d1b2e", font=dict(color="#e2e8f0"))
-            st.plotly_chart(fig_week, use_container_width=True)
+            st.plotly_chart(fig_week, width="stretch")
 
     def _render_ticker_ranking_tab(self, summary_df: pd.DataFrame):
         st.markdown("### Options Trade Scoring Rankings")
@@ -761,7 +761,7 @@ class OptionSearchModule(FazDaneModule):
             height=400
         )
         fig_scatter.update_layout(paper_bgcolor="#0d1b2e", plot_bgcolor="rgba(21,40,71,0.15)", font=dict(color="#e2e8f0"))
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        st.plotly_chart(fig_scatter, width="stretch")
 
         # Rankings Table
         st.markdown("##### Ranked Option Trading Tickers")
@@ -769,7 +769,7 @@ class OptionSearchModule(FazDaneModule):
         # Display with conditional formatting or neat mapping
         st.dataframe(
             summary_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Rank": st.column_config.NumberColumn("Rank", width="small"),
@@ -923,7 +923,7 @@ class OptionSearchModule(FazDaneModule):
 
         st.dataframe(
             display_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config=col_config
         )
@@ -988,7 +988,7 @@ class OptionSearchModule(FazDaneModule):
         weekly_df = weekly_df.sort_values("Option Trade Score", ascending=False).reset_index(drop=True)
         st.dataframe(
             weekly_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Option Trade Score": st.column_config.ProgressColumn("Composite Score", format="%.1f", min_value=0, max_value=100),
@@ -1014,7 +1014,7 @@ class OptionSearchModule(FazDaneModule):
                 height=350
             )
             fig_w_score.update_layout(paper_bgcolor="#0d1b2e", plot_bgcolor="rgba(21,40,71,0.15)", font=dict(color="#e2e8f0"))
-            st.plotly_chart(fig_w_score, use_container_width=True)
+            st.plotly_chart(fig_w_score, width="stretch")
 
         with c2:
             st.markdown("##### 📅 DTE Bucket Expirations Comparison")
@@ -1030,7 +1030,7 @@ class OptionSearchModule(FazDaneModule):
                 height=350
             )
             fig_bucket.update_layout(paper_bgcolor="#0d1b2e", font=dict(color="#e2e8f0"))
-            st.plotly_chart(fig_bucket, use_container_width=True)
+            st.plotly_chart(fig_bucket, width="stretch")
 
     def _render_flow_tab(self, summary_df: pd.DataFrame):
         st.markdown("### Call/Put Volume Flow & Sentiment Bias")
@@ -1056,7 +1056,7 @@ class OptionSearchModule(FazDaneModule):
             height=500
         )
         fig_flow.update_layout(paper_bgcolor="#0d1b2e", plot_bgcolor="rgba(21,40,71,0.15)", font=dict(color="#e2e8f0"))
-        st.plotly_chart(fig_flow, use_container_width=True)
+        st.plotly_chart(fig_flow, width="stretch")
 
         st.divider()
 
@@ -1081,7 +1081,7 @@ class OptionSearchModule(FazDaneModule):
                 height=300
             )
             fig_bias.update_layout(paper_bgcolor="#0d1b2e", font=dict(color="#e2e8f0"))
-            st.plotly_chart(fig_bias, use_container_width=True)
+            st.plotly_chart(fig_bias, width="stretch")
 
         with c2:
             st.markdown("##### 📋 Ticker Lists by Sentiment Heavyweights")
@@ -1089,15 +1089,15 @@ class OptionSearchModule(FazDaneModule):
             with sc1:
                 st.markdown("**🟢 Call Heavy (>=65% Call)**")
                 ch_df = summary_df[summary_df["Call/Put Bias"] == "Call Heavy"][["Ticker", "Call %"]].head(10)
-                st.dataframe(ch_df, use_container_width=True, hide_index=True, column_config={"Call %": st.column_config.NumberColumn(format="%.0%")})
+                st.dataframe(ch_df, width="stretch", hide_index=True, column_config={"Call %": st.column_config.NumberColumn(format="%.0%")})
             with sc2:
                 st.markdown("**🔴 Put Heavy (>=65% Put)**")
                 ph_df = summary_df[summary_df["Call/Put Bias"] == "Put Heavy"][["Ticker", "Put %"]].head(10)
-                st.dataframe(ph_df, use_container_width=True, hide_index=True, column_config={"Put %": st.column_config.NumberColumn(format="%.0%")})
+                st.dataframe(ph_df, width="stretch", hide_index=True, column_config={"Put %": st.column_config.NumberColumn(format="%.0%")})
             with sc3:
                 st.markdown("**⚪ Neutral (45-55% split)**")
                 nt_df = summary_df[summary_df["Call/Put Bias"] == "Neutral"][["Ticker", "Call %"]].head(10)
-                st.dataframe(nt_df, use_container_width=True, hide_index=True, column_config={"Call %": st.column_config.NumberColumn(format="%.0%")})
+                st.dataframe(nt_df, width="stretch", hide_index=True, column_config={"Call %": st.column_config.NumberColumn(format="%.0%")})
 
     def _render_volume_map_tab(self, filtered_df: pd.DataFrame):
         st.markdown("### Options Chain Strike-Volume Heatmap")
@@ -1129,7 +1129,7 @@ class OptionSearchModule(FazDaneModule):
         )
         fig_vol_map.update_traces(marker=dict(line=dict(width=1, color="#0d1b2e"), opacity=0.85))
         fig_vol_map.update_layout(paper_bgcolor="#0d1b2e", plot_bgcolor="rgba(21,40,71,0.15)", font=dict(color="#e2e8f0"))
-        st.plotly_chart(fig_vol_map, use_container_width=True)
+        st.plotly_chart(fig_vol_map, width="stretch")
 
     def _render_persistent_universe_tab(self):
         st.markdown("### Database Persistent Ticker Universe")
@@ -1156,7 +1156,7 @@ class OptionSearchModule(FazDaneModule):
                 
                 st.dataframe(
                     universe_df,
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     column_config={
                         "ticker": st.column_config.TextColumn("Ticker"),
@@ -1219,7 +1219,7 @@ class OptionSearchModule(FazDaneModule):
                 data=current_comma,
                 file_name="current_scan_tickers.txt",
                 mime="text/plain",
-                use_container_width=True
+                width="stretch"
             )
         with dl_col2:
             st.download_button(
@@ -1227,7 +1227,7 @@ class OptionSearchModule(FazDaneModule):
                 data=database_comma,
                 file_name="active_database_tickers.txt",
                 mime="text/plain",
-                use_container_width=True
+                width="stretch"
             )
         with dl_col3:
             st.download_button(
@@ -1235,7 +1235,7 @@ class OptionSearchModule(FazDaneModule):
                 data=final_comma,
                 file_name="final_deduped_universe.txt",
                 mime="text/plain",
-                use_container_width=True
+                width="stretch"
             )
 
         csv_col1, csv_col2 = st.columns(2)
@@ -1245,7 +1245,7 @@ class OptionSearchModule(FazDaneModule):
                 data=summary_df.to_csv(index=False),
                 file_name="options_ticker_summary.csv",
                 mime="text/csv",
-                use_container_width=True
+                width="stretch"
             )
         with csv_col2:
             # Get filtered_df from session
@@ -1255,5 +1255,5 @@ class OptionSearchModule(FazDaneModule):
                 data=filtered_df.to_csv(index=False),
                 file_name="options_contracts_results.csv",
                 mime="text/csv",
-                use_container_width=True
+                width="stretch"
             )

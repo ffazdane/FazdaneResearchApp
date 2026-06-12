@@ -305,7 +305,7 @@ class TickerPullbackStrategyModule(FazDaneModule):
         save_db = st.checkbox("Save Scan to Master Universe", value=True, key="tps_save_db")
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        scan_clicked = st.button("Run Pullback Scan", use_container_width=True, type="primary", key="tps_scan")
+        scan_clicked = st.button("Run Pullback Scan", width="stretch", type="primary", key="tps_scan")
 
         if scan_clicked:
             if not tickers:
@@ -402,7 +402,7 @@ class TickerPullbackStrategyModule(FazDaneModule):
             ]
             st.dataframe(
                 results_df[display_cols].sort_values("pullback_score", ascending=False),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "ticker": "Ticker",
@@ -430,12 +430,12 @@ class TickerPullbackStrategyModule(FazDaneModule):
                 title="Risk vs Setup Score Matrix",
                 height=400
             )
-            st.plotly_chart(fig_matrix, use_container_width=True)
+            st.plotly_chart(fig_matrix, width="stretch")
 
             # Details
             st.dataframe(
                 results_df.sort_values("pullback_score", ascending=False),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "ticker": "Ticker",
@@ -464,7 +464,7 @@ class TickerPullbackStrategyModule(FazDaneModule):
             else:
                 st.dataframe(
                     triggered_df.sort_values("pullback_score", ascending=False),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
 
@@ -477,7 +477,7 @@ class TickerPullbackStrategyModule(FazDaneModule):
             else:
                 st.dataframe(
                     watch_df.sort_values("pullback_score", ascending=False),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
 
@@ -492,7 +492,7 @@ class TickerPullbackStrategyModule(FazDaneModule):
             
             st.dataframe(
                 db_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "ticker": "Ticker",

@@ -1075,7 +1075,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
         self.load_latest_saved = st.checkbox("Use latest saved snapshot", value=True, key="prm_use_latest")
         self.auto_save = st.checkbox("Save parsed upload", value=True, key="prm_auto_save")
 
-        if st.button("🔄 Sync 'FazDane Portfolio'", key="prm_sync_universe_btn", use_container_width=True):
+        if st.button("🔄 Sync 'FazDane Portfolio'", key="prm_sync_universe_btn", width="stretch"):
             pos, det, meta, label = self._load_active_snapshot()
             if not pos.empty:
                 raw_tickers = pos["ticker"].apply(clean_ticker_for_lookup).unique().tolist()
@@ -1091,7 +1091,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
         self.include_live_regime = st.checkbox("Fetch market regime", value=True, key="prm_live_regime")
         st.selectbox("Beta Benchmark", ["SPY", "QQQ"], key="prm_beta_benchmark", help="Benchmark index used for portfolio beta regression")
 
-        if st.button("Refresh Risk Engine", use_container_width=True, type="primary", key="prm_refresh"):
+        if st.button("Refresh Risk Engine", width="stretch", type="primary", key="prm_refresh"):
             fetch_regime_snapshot.clear()
             fetch_position_correlations.clear()
             st.session_state.pop("prm_last_saved_hash", None)
@@ -1467,7 +1467,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
         log_images.extend(db_images)
         
         for img in log_images:
-            st.image(img, use_container_width=True)
+            st.image(img, width="stretch")
             st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
             
         # Check if there is snippet data and render it
@@ -1603,7 +1603,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 )
             )
             style_figure(fig, height=470)
-            st.plotly_chart(fig, use_container_width=True, theme=None)
+            st.plotly_chart(fig, width="stretch", theme=None)
 
         with right:
             st.markdown("### AI Summary")
@@ -1623,7 +1623,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 },
             ))
             style_figure(gauge, height=280)
-            st.plotly_chart(gauge, use_container_width=True, theme=None)
+            st.plotly_chart(gauge, width="stretch", theme=None)
 
         st.markdown("### Recommendation Mix")
         self._render_recommendation_kpis(df)
@@ -1692,7 +1692,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             ),
             margin=dict(l=24, r=24, t=56, b=85),
         )
-        st.plotly_chart(fig, use_container_width=True, theme=None)
+        st.plotly_chart(fig, width="stretch", theme=None)
 
         position_view["Source"] = position_view["ticker"].apply(get_broker_dot)
         position_view["ticker"] = position_view["ticker"].apply(clean_ticker_for_lookup)
@@ -1751,7 +1751,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
 
         st.dataframe(
             styled_display,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             height=min(820, max(460, 36 * (len(display) + 1))),
             column_config={
@@ -1839,7 +1839,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
         ]
         st.dataframe(
             self._style_position_sizing_table(board[display_cols]),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             height=min(620, max(360, 36 * (len(board) + 1))),
             column_config={
@@ -1935,7 +1935,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 ),
                 margin=dict(l=24, r=24, t=56, b=85),
             )
-            st.plotly_chart(fig, use_container_width=True, theme=None)
+            st.plotly_chart(fig, width="stretch", theme=None)
 
         with right:
             compare = visual.melt(
@@ -1961,7 +1961,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             fig.update_traces(hovertemplate="<b>%{x}</b><br>%{fullData.name}: %{y:.2f}%<extra></extra>")
             fig.update_yaxes(ticksuffix="%")
             style_figure(fig, height=max(360, 30 * len(visual) + 90))
-            st.plotly_chart(fig, use_container_width=True, theme=None)
+            st.plotly_chart(fig, width="stretch", theme=None)
 
     def _render_greeks(self, df: pd.DataFrame, totals: dict[str, float], regime: dict[str, float | str], heat: float):
         st.markdown("### Portfolio Risk Intelligence Engine")
@@ -2054,7 +2054,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                             position=0.0,
                         )
                     )
-                    st.plotly_chart(fig, use_container_width=True, theme=None)
+                    st.plotly_chart(fig, width="stretch", theme=None)
 
     def _render_theta_contribution_chart(
         self,
@@ -2113,7 +2113,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             ),
             margin=dict(l=24, r=24, t=56, b=85),
         )
-        st.plotly_chart(fig, use_container_width=True, theme=None)
+        st.plotly_chart(fig, width="stretch", theme=None)
 
     def _render_greek_bubble_map(self, df: pd.DataFrame):
         risk = df.copy()
@@ -2147,7 +2147,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
         fig.update_yaxes(range=[-max_y, max_y])
         fig.update_traces(marker=dict(opacity=0.82, line=dict(width=1, color="#e2e8f0")), textposition="top center")
         style_figure(fig, height=520)
-        st.plotly_chart(fig, use_container_width=True, theme=None)
+        st.plotly_chart(fig, width="stretch", theme=None)
 
     def _fetch_latest_price_action_info(self, tickers: list[str]) -> dict[str, dict]:
         """Fetch the latest and previous Stage & FDTS signals for given tickers from price_action_story DB."""
@@ -2331,7 +2331,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 xaxis=dict(title="Exposure Percentage (%)", ticksuffix="%", showgrid=True, gridcolor="#1e3a5f", range=[0, max_x + 6.0]),
                 yaxis=dict(anchor="free", position=0.0),
             )
-            st.plotly_chart(fig_exp, use_container_width=True, theme=None)
+            st.plotly_chart(fig_exp, width="stretch", theme=None)
             
             # Companion concentration & lifecycle details table
             st.markdown("<br><b>Concentration & Lifecycle Detail Table</b>", unsafe_allow_html=True)
@@ -2380,7 +2380,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
 
             st.dataframe(
                 style_stage_and_fdts(df_display.style),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "Ticker": st.column_config.TextColumn("Ticker", width="medium"),
@@ -2432,7 +2432,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             hovertemplate="<b>%{y}</b><br>%{x}: %{text}<extra></extra>",
         ))
         style_figure(fig, height=max(320, 30 * len(heat) + 90))
-        st.plotly_chart(fig, use_container_width=True, theme=None)
+        st.plotly_chart(fig, width="stretch", theme=None)
 
     def _render_greek_brain(self, df: pd.DataFrame, totals: dict[str, float], regime: dict[str, float | str], heat: float):
         st.markdown("### Portfolio Brain")
@@ -2459,7 +2459,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             ]
         )
         scenarios["Impact"] = scenarios["Portfolio Impact"].map(lambda value: _fmt_pct(value, signed=True))
-        st.dataframe(scenarios[["Scenario", "Impact"]], use_container_width=True, hide_index=True)
+        st.dataframe(scenarios[["Scenario", "Impact"]], width="stretch", hide_index=True)
         st.markdown("<p style='font-size:11.5px;color:#94a3b8;margin-top:-4px;'>For dynamic shocks, interactive curve simulations, and proactive hedging playbooks, visit the dedicated <b>What-If Simulator</b> tab.</p>", unsafe_allow_html=True)
 
     def _render_what_if_tab(
@@ -2577,7 +2577,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                     yaxis=dict(anchor="free", position=0.0),
                     title=dict(text=f"Per-Position Beta vs {beta_benchmark}", font=dict(size=13)),
                 )
-                st.plotly_chart(fig_beta, use_container_width=True, theme=None)
+                st.plotly_chart(fig_beta, width="stretch", theme=None)
             else:
                 st.info("Beta data is loading. Ensure \"Fetch market regime\" is enabled and positions are loaded.")
 
@@ -2630,7 +2630,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             )
             st.dataframe(
                 pd.DataFrame([auto_vix_row], index=["VIX Shock"]),
-                use_container_width=True,
+                width="stretch",
                 hide_index=False,
             )
 
@@ -2851,7 +2851,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 yaxis=dict(title="Estimated Portfolio P/L ($)", tickprefix="$", showgrid=True, gridcolor="#1e3a5f"),
                 showlegend=False,
             )
-            st.plotly_chart(fig_scen, use_container_width=True, theme=None)
+            st.plotly_chart(fig_scen, width="stretch", theme=None)
             st.markdown(
                 f"<p style='font-size:11px;color:#94a3b8;margin-top:-8px;'>"  
                 f"Delta &amp; Gamma impact scaled by per-ticker beta. VIX shock auto-correlated to SPY move when toggle is ON. "
@@ -2933,7 +2933,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             fmt_dict = {c: "${:+,.2f}" for c in pnl_cols}
             fmt_dict["Beta"] = "{:.2f}"
             styled = pivot.style.map(_color_pnl, subset=pnl_cols).apply(_bold_total_row, axis=1).format(fmt_dict)
-            st.dataframe(styled, use_container_width=True, hide_index=True)
+            st.dataframe(styled, width="stretch", hide_index=True)
         else:
             st.info("Scenario matrix not available.")
 
@@ -2972,7 +2972,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 xaxis=dict(title="SPY Scenario"),
                 yaxis=dict(title="", automargin=True),
             )
-            st.plotly_chart(fig_heat, use_container_width=True, theme=None)
+            st.plotly_chart(fig_heat, width="stretch", theme=None)
 
         st.markdown("---")
 
@@ -3015,7 +3015,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                     xaxis=dict(tickprefix="$", showgrid=True, gridcolor="#1e3a5f"),
                     yaxis=dict(anchor="free", position=0.0),
                 )
-                st.plotly_chart(fig_tc, use_container_width=True, theme=None)
+                st.plotly_chart(fig_tc, width="stretch", theme=None)
 
             with cc2:
                 strat_contrib = (
@@ -3045,7 +3045,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                     xaxis=dict(tickprefix="$", showgrid=True, gridcolor="#1e3a5f"),
                     yaxis=dict(anchor="free", position=0.0),
                 )
-                st.plotly_chart(fig_sc, use_container_width=True, theme=None)
+                st.plotly_chart(fig_sc, width="stretch", theme=None)
 
         st.markdown("---")
 
@@ -3079,7 +3079,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 cal_rows.append(row_dict)
 
             cal_table = pd.DataFrame(cal_rows)
-            st.dataframe(cal_table, use_container_width=True, hide_index=True)
+            st.dataframe(cal_table, width="stretch", hide_index=True)
 
             danger_count = sum(
                 1 for r in cal_rows
@@ -3184,7 +3184,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
                 {"Metric": "Overexposed Positions", "Value": str(overexposed)},
             ]
         )
-        st.dataframe(data, use_container_width=True, hide_index=True)
+        st.dataframe(data, width="stretch", hide_index=True)
 
     def _render_correlation(self, df: pd.DataFrame):
         st.markdown("### Correlation Risk")
@@ -3207,7 +3207,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             ))
             style_figure(fig, height=max(440, 32 * len(corr)))
             fig.update_layout(yaxis=dict(autorange="reversed"))
-            st.plotly_chart(fig, use_container_width=True, theme=None)
+            st.plotly_chart(fig, width="stretch", theme=None)
 
         sector = df.groupby("sector", as_index=False).agg(weight_pct=("weight_pct", "sum"), net_delta=("delta_exposure", "sum"), tickers=("ticker", "nunique"))
         sector["weight_label"] = sector["weight_pct"].map(_fmt_pct)
@@ -3233,7 +3233,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
         fig.update_traces(textposition="outside", cliponaxis=False)
         fig.update_xaxes(ticksuffix="%")
         style_figure(fig, height=360)
-        st.plotly_chart(fig, use_container_width=True, theme=None)
+        st.plotly_chart(fig, width="stretch", theme=None)
 
     def _render_theta(self, df: pd.DataFrame):
         st.markdown("### Theta Decay Engine")
@@ -3244,7 +3244,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
         st.markdown("### Expiration Danger")
         st.dataframe(
             traps[["Source", "ticker", "dte", "theta", "entry_value", "current_value", "profit_value", "pl_day", "risk_score", "recommendation"]],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Source": st.column_config.TextColumn("Source", width="small"),
@@ -3277,12 +3277,12 @@ class PortfolioRiskManagementModule(FazDaneModule):
             },
         )
         style_figure(fig, height=430)
-        st.plotly_chart(fig, use_container_width=True, theme=None)
+        st.plotly_chart(fig, width="stretch", theme=None)
         winners["Source"] = winners["ticker"].apply(get_broker_dot)
         winners["ticker"] = winners["ticker"].apply(clean_ticker_for_lookup)
         st.dataframe(
             winners[["Source", "ticker", "entry_value", "current_value", "gross_exposure", "profit_value", "profit_pct_label", "pl_day", "gamma_exposure", "weight_pct_label", "risk_score", "recommendation"]],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Source": st.column_config.TextColumn("Source", width="small"),
@@ -3310,7 +3310,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             st.markdown("#### Weak Capital Efficiency")
             st.dataframe(
                 redeploy[["Source", "ticker", "sector", "gross_contracts", "entry_value", "current_value", "gross_exposure", "profit_value", "theta", "risk_score", "recommendation"]],
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "Source": st.column_config.TextColumn("Source", width="small"),
@@ -3320,7 +3320,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             st.markdown("#### Better Current Setups")
             st.dataframe(
                 preserved[["Source", "ticker", "sector", "gross_contracts", "entry_value", "current_value", "gross_exposure", "profit_value", "theta", "risk_score", "recommendation"]],
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "Source": st.column_config.TextColumn("Source", width="small"),
@@ -3344,7 +3344,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
         st.markdown("### Executive Commentary")
         st.text_area("Commentary", value=commentary, height=180, key="prm_commentary")
         report = self._build_pdf_report(df, totals, regime, heat, commentary, metadata)
-        st.download_button("Export PDF Executive Report", data=report, file_name=f"portfolio_risk_report_{metadata.get('snapshot_date', datetime.now().date())}.pdf", mime="application/pdf", use_container_width=True)
+        st.download_button("Export PDF Executive Report", data=report, file_name=f"portfolio_risk_report_{metadata.get('snapshot_date', datetime.now().date())}.pdf", mime="application/pdf", width="stretch")
 
     def _answer_question(self, question: str, df: pd.DataFrame, totals: dict[str, float], regime: dict[str, float | str], heat: float) -> str:
         if "hidden risk" in question:
@@ -3404,7 +3404,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
         fig.add_trace(go.Scatter(x=history["snapshot_ts"], y=history["total_theta"], name="Theta", mode="lines+markers", line=dict(color=BRAND["yellow"]), yaxis="y2"))
         fig.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False))
         style_figure(fig, height=360)
-        st.plotly_chart(fig, use_container_width=True, theme=None)
+        st.plotly_chart(fig, width="stretch", theme=None)
 
     def _render_database_status(self):
         status = get_database_status()
@@ -3415,7 +3415,7 @@ class PortfolioRiskManagementModule(FazDaneModule):
             c2.metric("Saved Positions", f"{status['position_count']:,}")
             recent = get_recent_portfolio_snapshots(limit=5)
             if not recent.empty:
-                st.dataframe(recent, use_container_width=True, hide_index=True)
+                st.dataframe(recent, width="stretch", hide_index=True)
 
     def _render_welcome(self):
         st.markdown(

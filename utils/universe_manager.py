@@ -410,7 +410,7 @@ def _render_editor(
                 key=f"{key_prefix}_{edit_key}_edit_desc",
             )
 
-            if st.button("Save Changes", key=f"{key_prefix}_save_edit", use_container_width=True):
+            if st.button("Save Changes", key=f"{key_prefix}_save_edit", width="stretch"):
                 parsed, parsed_names = _parse_ticker_entries(edit_tickers_str)
                 if not parsed:
                     st.error("Please enter at least one valid ticker.")
@@ -440,7 +440,7 @@ def _render_editor(
                 new_bench = "SPY"
             new_desc = st.text_input("Description:", key=f"{key_prefix}_new_desc", placeholder="Optional description")
 
-            if st.button("Create Universe", key=f"{key_prefix}_create", use_container_width=True, type="primary"):
+            if st.button("Create Universe", key=f"{key_prefix}_create", width="stretch", type="primary"):
                 clean_name = new_name.strip()
                 if not clean_name:
                     st.error("Please enter a universe name.")
@@ -470,7 +470,7 @@ def _render_editor(
                 key=f"{key_prefix}_delete_name",
             )
             st.warning(f"You are about to permanently delete '{delete_name}'.")
-            if st.button("Delete This Universe", key=f"{key_prefix}_delete", use_container_width=True):
+            if st.button("Delete This Universe", key=f"{key_prefix}_delete", width="stretch"):
                 if delete_name in universes:
                     delete_universe(delete_name)
                     st.success(f"'{delete_name}' deleted.")

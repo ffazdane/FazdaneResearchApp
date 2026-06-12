@@ -553,7 +553,7 @@ class MarketBreadthModule(FazDaneModule):
         self.chart_months = int(st.slider("Chart History (Months):", 3, 36, 18, step=3, key="mb_chart_months"))
         self.show_raw = st.checkbox("Show data tables", value=True, key="mb_show_tables")
 
-        if st.button("Calculate Breadth", use_container_width=True, type="primary", key="mb_calc"):
+        if st.button("Calculate Breadth", width="stretch", type="primary", key="mb_calc"):
             download_market_data.clear()
             fetch_component_json.clear()
             st.rerun()
@@ -592,9 +592,9 @@ class MarketBreadthModule(FazDaneModule):
 
         left, right = st.columns([1, 1])
         with left:
-            st.plotly_chart(gauge(composite_score, composite_label), use_container_width=True)
+            st.plotly_chart(gauge(composite_score, composite_label), width="stretch")
         with right:
-            st.plotly_chart(component_bar(component_scores), use_container_width=True)
+            st.plotly_chart(component_bar(component_scores), width="stretch")
 
         tabs = st.tabs(["Breadth Dashboard", "Risk Profiles", "Sectors", "Data"])
 
@@ -609,7 +609,7 @@ class MarketBreadthModule(FazDaneModule):
                         },
                         "1. S&P 500 vs 125-Day Moving Average",
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with c2:
                 st.plotly_chart(
@@ -617,7 +617,7 @@ class MarketBreadthModule(FazDaneModule):
                         dashboard["net_new_highs_lows"].loc[dashboard["net_new_highs_lows"].index >= cutoff],
                         "2. Net New 52-Week Highs vs Lows",
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             c3, c4 = st.columns(2)
@@ -628,7 +628,7 @@ class MarketBreadthModule(FazDaneModule):
                         "3. McClellan Volume Summation Index",
                         hline=0,
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with c4:
                 st.plotly_chart(
@@ -636,7 +636,7 @@ class MarketBreadthModule(FazDaneModule):
                         {"Price Strength": dashboard["stock_price_strength_component"].loc[dashboard["stock_price_strength_component"].index >= cutoff]},
                         "4. Stock Price Strength Oscillator",
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             c5, c6 = st.columns(2)
@@ -650,7 +650,7 @@ class MarketBreadthModule(FazDaneModule):
                         "5. Stock Price Breadth Profiles",
                         hline=50,
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with c6:
                 st.plotly_chart(
@@ -658,7 +658,7 @@ class MarketBreadthModule(FazDaneModule):
                         dashboard["mcclellan_osc"].loc[dashboard["mcclellan_osc"].index >= cutoff],
                         "Advance / Decline McClellan Oscillator",
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
         with tabs[1]:
@@ -669,7 +669,7 @@ class MarketBreadthModule(FazDaneModule):
                         {"Put/Call Momentum": dashboard["put_call_ma"].loc[dashboard["put_call_ma"].index >= cutoff]},
                         "6. Options Allocation Momentum",
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with c2:
                 st.plotly_chart(
@@ -677,7 +677,7 @@ class MarketBreadthModule(FazDaneModule):
                         {"VIX": dashboard["vix"].loc[dashboard["vix"].index >= cutoff]},
                         "7. Market Volatility Profiles",
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             c3, c4 = st.columns(2)
@@ -688,7 +688,7 @@ class MarketBreadthModule(FazDaneModule):
                         "8. Safe Haven Multi-Asset Spreads",
                         hline=0,
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
             with c4:
                 st.plotly_chart(
@@ -697,7 +697,7 @@ class MarketBreadthModule(FazDaneModule):
                         "9. High Yield Risk Appetite Spreads",
                         hline=0,
                     ),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             st.info(
@@ -709,7 +709,7 @@ class MarketBreadthModule(FazDaneModule):
             if sector_df.empty:
                 st.info("Sector ETF data was not available.")
             else:
-                st.dataframe(sector_df.round(2), use_container_width=True, hide_index=True)
+                st.dataframe(sector_df.round(2), width="stretch", hide_index=True)
 
         with tabs[3]:
             component_table = pd.DataFrame(
@@ -719,7 +719,7 @@ class MarketBreadthModule(FazDaneModule):
                     "Assigned Condition": [score_label(value) for value in component_scores.values],
                 }
             ).sort_values("Calculated Score", ascending=False)
-            st.dataframe(component_table.round(2), use_container_width=True, hide_index=True)
+            st.dataframe(component_table.round(2), width="stretch", hide_index=True)
 
             if self.show_raw:
                 daily_frame = pd.DataFrame(
@@ -737,13 +737,13 @@ class MarketBreadthModule(FazDaneModule):
                         "Junk_Bond_Spread": dashboard["junk_spread"],
                     }
                 ).dropna(how="all")
-                st.dataframe(daily_frame.tail(500).round(3), use_container_width=True)
+                st.dataframe(daily_frame.tail(500).round(3), width="stretch")
                 st.download_button(
                     "Download Market Breadth Data CSV",
                     data=daily_frame.to_csv(index=True),
                     file_name="fazdane_market_breadth_data.csv",
                     mime="text/csv",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
     def _default_universe(self):

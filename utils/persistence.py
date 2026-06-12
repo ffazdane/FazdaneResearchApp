@@ -542,7 +542,7 @@ def render_db_control_panel():
         st.divider()
 
         # Pre-Release Diagnostics Check
-        if st.button("🚀 Run Pre-Release Checks", key="db_manual_checks", use_container_width=True, type="primary"):
+        if st.button("🚀 Run Pre-Release Checks", key="db_manual_checks", width="stretch", type="primary"):
             with st.spinner("Running automated release checks..."):
                 import io
                 import contextlib
@@ -578,7 +578,7 @@ def render_db_control_panel():
                 st.error("❌ Pre-Release Checks: FAILED")
             if diag_logs:
                 st.text_area("Diagnostics Log", value=diag_logs, height=250, key="db_diag_logs_view")
-            if st.button("Clear Check Results", key="db_clear_diag", use_container_width=True):
+            if st.button("Clear Check Results", key="db_clear_diag", width="stretch"):
                 st.session_state.pop("db_diag_status", None)
                 st.session_state.pop("db_diag_logs", None)
                 st.rerun()
@@ -588,7 +588,7 @@ def render_db_control_panel():
         # Manual actions
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Backup DBs", key="db_manual_backup", use_container_width=True):
+            if st.button("Backup DBs", key="db_manual_backup", width="stretch"):
                 with st.spinner("Backing up..."):
                     success_dbs = []
                     failed_dbs = []
@@ -606,7 +606,7 @@ def render_db_control_panel():
                 st.rerun()
                 
         with col2:
-            if st.button("Restore DBs", key="db_manual_restore", use_container_width=True):
+            if st.button("Restore DBs", key="db_manual_restore", width="stretch"):
                 with st.spinner("Restoring..."):
                     restored, failed = restore_all_databases(force=True)
                     if restored:
@@ -624,7 +624,7 @@ def render_db_control_panel():
             st.error(error)
 
         st.divider()
-        if st.button("Rebuild/Patch DB from Online", key="db_manual_ingest", use_container_width=True, help="Download historical price data from Yahoo Finance and calculate option expiries directly in production to rebuild the SQLite database from scratch."):
+        if st.button("Rebuild/Patch DB from Online", key="db_manual_ingest", width="stretch", help="Download historical price data from Yahoo Finance and calculate option expiries directly in production to rebuild the SQLite database from scratch."):
             with st.spinner("Downloading historical data and rebuilding database..."):
                 try:
                     from scripts.ingest_and_patch import main as run_ingestion
@@ -692,7 +692,7 @@ def render_db_control_panel():
                             # Format columns
                             cache_df["Price"] = cache_df["Price"].apply(lambda x: f"${x:,.2f}" if x else "N/A")
                             cache_df["ATM IV"] = cache_df["ATM IV"].apply(lambda x: f"{x:.1f}%" if x else "N/A")
-                            st.dataframe(cache_df, use_container_width=True, hide_index=True)
+                            st.dataframe(cache_df, width="stretch", hide_index=True)
 
                         # Show chain cache counts
                         if "options_chains_cache" in tables:

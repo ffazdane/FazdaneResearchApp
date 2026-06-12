@@ -443,7 +443,7 @@ class StockSentimentModule(FazDaneModule):
         self.scan_limit = int(st.slider("Universe Scan Limit:", 3, 30, min(12, max(len(self.tickers), 3)), key="sentiment_scan_limit"))
         self.show_urls = st.checkbox("Show headline URLs", value=False, key="sentiment_urls")
 
-        if st.button("Refresh Sentiment", use_container_width=True, type="primary", key="sentiment_refresh"):
+        if st.button("Refresh Sentiment", width="stretch", type="primary", key="sentiment_refresh"):
             fetch_finviz_news.clear()
             fetch_yahoo_news.clear()
             fetch_stock_news.clear()
@@ -487,7 +487,7 @@ class StockSentimentModule(FazDaneModule):
         with tab_overview:
             st.plotly_chart(
                 plot_daily_sentiment(daily, self.ticker),
-                use_container_width=True,
+                width="stretch",
                 key=f"sentiment_daily_{self.ticker}_{self.days}",
             )
             fig_impact = plot_sentiment_vs_price(merged, self.ticker)
@@ -496,7 +496,7 @@ class StockSentimentModule(FazDaneModule):
             else:
                 st.plotly_chart(
                     fig_impact,
-                    use_container_width=True,
+                    width="stretch",
                     key=f"sentiment_bubble_overview_{self.ticker}_{self.days}",
                 )
             left, right = st.columns([1, 1])
@@ -513,12 +513,12 @@ class StockSentimentModule(FazDaneModule):
                 fig_mix.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=360)
                 st.plotly_chart(
                     fig_mix,
-                    use_container_width=True,
+                    width="stretch",
                     key=f"sentiment_mix_{self.ticker}_{self.days}",
                 )
             with right:
                 label_daily = daily[["Date", "Avg_Sentiment", "News_Count", "Positive", "Negative", "Neutral"]].copy()
-                st.dataframe(label_daily.round(3), use_container_width=True, hide_index=True)
+                st.dataframe(label_daily.round(3), width="stretch", hide_index=True)
 
         with tab_impact:
             fig_impact = plot_sentiment_vs_price(merged, self.ticker)
@@ -527,34 +527,34 @@ class StockSentimentModule(FazDaneModule):
             else:
                 st.plotly_chart(
                     fig_impact,
-                    use_container_width=True,
+                    width="stretch",
                     key=f"sentiment_bubble_impact_{self.ticker}_{self.days}",
                 )
-            st.dataframe(daily.round(3), use_container_width=True, hide_index=True)
+            st.dataframe(daily.round(3), width="stretch", hide_index=True)
             impact_summary = merged.groupby(["Impact", "Label"], as_index=False).agg(
                 Headlines=("Headline", "count"),
                 Avg_Sentiment=("Sentiment", "mean"),
                 Avg_Price_Move=("Pct_Change", "mean"),
             )
-            st.dataframe(impact_summary.round(3), use_container_width=True, hide_index=True)
+            st.dataframe(impact_summary.round(3), width="stretch", hide_index=True)
 
         with tab_headlines:
             display_cols = ["Date", "Time", "Ticker", "Headline", "Sentiment", "Label", "Impact", "Feed", "PriceDate", "PriceMatch", "Pct_Change", "DirectionMatch", "Source"]
             if self.show_urls:
                 display_cols.append("Url")
             table = merged[display_cols].sort_values(["Date", "Time"], ascending=[False, False])
-            st.dataframe(table.round({"Sentiment": 3, "Pct_Change": 2}), use_container_width=True, hide_index=True)
+            st.dataframe(table.round({"Sentiment": 3, "Pct_Change": 2}), width="stretch", hide_index=True)
             st.download_button(
                 "Download Headlines CSV",
                 data=table.to_csv(index=False),
                 file_name=f"sentiment_{self.ticker.lower()}_{self.days}d.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )
 
         with tab_universe:
             scan_tickers = self.tickers[: self.scan_limit]
-            if st.button("Run Universe Sentiment Scan", use_container_width=True, key="sentiment_scan_button"):
+            if st.button("Run Universe Sentiment Scan", width="stretch", key="sentiment_scan_button"):
                 with st.spinner(f"Scanning {len(scan_tickers)} tickers from {self.universe_name}..."):
                     scan = scan_universe(scan_tickers, self.days, min(self.max_headlines, 30))
                 fig_scan = px.bar(
@@ -570,9 +570,9 @@ class StockSentimentModule(FazDaneModule):
                 fig_scan.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=460)
                 st.plotly_chart(
                     fig_scan,
-                    use_container_width=True,
+                    width="stretch",
                     key=f"sentiment_scan_{self.universe_name}_{self.days}_{self.scan_limit}",
                 )
-                st.dataframe(scan.round(2), use_container_width=True, hide_index=True)
+                st.dataframe(scan.round(2), width="stretch", hide_index=True)
             else:
                 st.info("Click the scan button to rank selected universe tickers by recent news sentiment.")

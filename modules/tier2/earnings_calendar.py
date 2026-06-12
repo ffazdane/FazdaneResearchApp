@@ -797,21 +797,21 @@ def render_database_status():
             if saved_tickers.empty:
                 st.info("No saved earnings tickers yet.")
             else:
-                st.dataframe(saved_tickers, use_container_width=True, hide_index=True)
+                st.dataframe(saved_tickers, width="stretch", hide_index=True)
 
         with tab_events:
             recent_events = get_recent_events(limit=100)
             if recent_events.empty:
                 st.info("No saved earnings events yet.")
             else:
-                st.dataframe(recent_events, use_container_width=True, hide_index=True)
+                st.dataframe(recent_events, width="stretch", hide_index=True)
 
         with tab_coverage:
             coverage = get_coverage_sample(limit=100)
             if coverage.empty:
                 st.info("No ticker coverage rows yet.")
             else:
-                st.dataframe(coverage, use_container_width=True, hide_index=True)
+                st.dataframe(coverage, width="stretch", hide_index=True)
 
 
 class EarningsCalendarModule(FazDaneModule):
@@ -852,7 +852,7 @@ class EarningsCalendarModule(FazDaneModule):
             )
         )
 
-        if st.button("Refresh Earnings", use_container_width=True, type="primary", key="earnings_refresh"):
+        if st.button("Refresh Earnings", width="stretch", type="primary", key="earnings_refresh"):
             st.cache_data.clear()
             st.rerun()
 
@@ -922,13 +922,13 @@ class EarningsCalendarModule(FazDaneModule):
             portfolio_display = portfolio_display[
                 ["Portfolio", "Date", "Ticker", "Time", "EPS Estimate", "Reported EPS", "Surprise %"]
             ]
-            st.dataframe(portfolio_display, use_container_width=True, hide_index=True)
+            st.dataframe(portfolio_display, width="stretch", hide_index=True)
             st.download_button(
                 "Download FazDane Portfolio Earnings CSV",
                 data=portfolio_display.to_csv(index=False),
                 file_name="fazdane_portfolio_earnings_rolling_window.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )
 
         if portfolio_failures:
@@ -937,11 +937,11 @@ class EarningsCalendarModule(FazDaneModule):
 
         if self.show_table and not records.empty:
             st.markdown("### Earnings Detail")
-            st.dataframe(records, use_container_width=True, hide_index=True)
+            st.dataframe(records, width="stretch", hide_index=True)
             st.download_button(
                 "Download Earnings CSV",
                 data=records.to_csv(index=False),
                 file_name=f"earnings_{self.universe_name.replace(' ', '_').lower()}_rolling_window.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )

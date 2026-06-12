@@ -1,24 +1,29 @@
-streamlit
-bcrypt
-pandas
-numpy
-scipy
-yfinance
-tastytrade>=12.0.0
-python-dotenv>=1.0.0
-requests
-skyfield
-jplephem
-tzdata
-fredapi
-lxml
-beautifulsoup4
-nltk
-plotly
-matplotlib
-seaborn
-openpyxl
-fpdf2
+# Pinned to the versions installed in the bundled runtime (.python/Python312)
+# on 2026-06-12. Pinning streamlit is critical: sidebar behavior and the
+# width="stretch" API are version-dependent.
+streamlit==1.55.0
+bcrypt==5.0.0
+pandas==2.3.3
+numpy==2.2.6
+scipy==1.17.1
+yfinance==1.2.0
+tastytrade==12.3.2
+python-dotenv==1.2.2
+requests==2.33.0
+skyfield==1.54
+jplephem==2.24
+tzdata==2025.3
+fredapi==0.5.2
+lxml==6.1.0
+beautifulsoup4==4.14.3
+nltk==3.9.4
+plotly==6.6.0
+matplotlib==3.10.9
+seaborn==0.13.2
+openpyxl==3.1.5
+fpdf2==2.8.7
 kaleido==0.2.1
+# NOTE: the two packages below are referenced in some modules but are NOT
+# currently installed in the bundled runtime - left unpinned intentionally.
 scikit-learn
 st-img-pastebutton

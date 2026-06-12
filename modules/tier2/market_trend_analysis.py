@@ -952,7 +952,7 @@ class MarketTrendAnalysisModule(FazDaneModule):
         st.checkbox("Current Price Line", value=True, key="mta_show_price_line")
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        if st.button("📊 Run Universe Scanner", use_container_width=True, type="primary", key="mta_scan_btn"):
+        if st.button("📊 Run Universe Scanner", width="stretch", type="primary", key="mta_scan_btn"):
             st.session_state["mta_trigger_scan"] = True
 
     # ── Main ──────────────────────────────────────────────────────────
@@ -1111,7 +1111,7 @@ class MarketTrendAnalysisModule(FazDaneModule):
             ticker=ticker,
             company_name=company_name,
         )
-        st.plotly_chart(fig, use_container_width=True, key="mta_main_chart")
+        st.plotly_chart(fig, width="stretch", key="mta_main_chart")
 
         # Trend stack + interpretation banner
         stack = kpis.get("trend_stack", {})
@@ -1378,7 +1378,7 @@ class MarketTrendAnalysisModule(FazDaneModule):
         except Exception:
             styled = scanner_df
 
-        st.dataframe(styled, use_container_width=True, hide_index=True)
+        st.dataframe(styled, width="stretch", hide_index=True)
 
         # ── Summary metrics row ───────────────────────────────────────
         n_above   = len(scanner_df[scanner_df["Cloud Status"] == "Above Cloud"])
@@ -1755,7 +1755,7 @@ class MarketTrendAnalysisModule(FazDaneModule):
             c for c in df.columns
             if c not in ("chikou",)  # exclude raw chikou from default view
         ]
-        st.dataframe(df[indicator_cols].tail(50), use_container_width=True)
+        st.dataframe(df[indicator_cols].tail(50), width="stretch")
 
         # Download buttons
         d1, d2 = st.columns(2)

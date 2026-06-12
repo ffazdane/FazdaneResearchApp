@@ -20,6 +20,8 @@ build/
 # Virtual Environment
 venv/
 .venv/
+.venv-1/
+.venv-*/
 .venv-test/
 .python/
 env/

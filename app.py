@@ -132,12 +132,27 @@ theme_colors = THEMES[st.session_state["app_theme_selection"]]
 st.session_state["theme_colors"] = theme_colors
 
 #
-# PLOTLY THEME MONKEY-PATCHING
-# Originals are stored as class attributes so they survive Streamlit reruns
-# and never accidentally point to the already-patched version (causing recursion).
+# PLOTLY THEMING
+# 1) A custom "fazdane" template carries the active theme's colors, so any
+#    figure that doesn't set explicit colors is themed automatically
+#    (pio.templates.default).
+# 2) A small monkey-patch swaps the legacy hard-coded #0d1b2e backgrounds that
+#    some modules still set explicitly. Remove it once no module hard-codes
+#    that color. Originals are stored as class attributes so they survive
+#    Streamlit reruns and never point at the patched version (recursion).
 #
 try:
+    import copy as _copy
+    import plotly.io as pio
     import plotly.graph_objects as go
+
+    _base_template = theme_colors.get("plotly_template", "plotly_dark")
+    _tpl = _copy.deepcopy(pio.templates[_base_template])
+    _tpl.layout.paper_bgcolor = theme_colors["bg_color"]
+    _tpl.layout.plot_bgcolor = theme_colors["bg_color"]
+    _tpl.layout.font.color = theme_colors["text_color"]
+    pio.templates["fazdane"] = _tpl
+    pio.templates.default = "fazdane"
 
     if not hasattr(go.Figure, "_true_original_init"):
         # First time only: stash the real originals on the class itself
@@ -151,41 +166,45 @@ try:
                 theme = st.session_state.get("theme_colors")
                 if theme and hasattr(self, "layout") and self.layout is not None:
                     bg_color = theme.get("bg_color")
-                    template = theme.get("plotly_template", "plotly_dark")
-                    self.layout.template = template
+                    self.layout.template = "fazdane"
                     if self.layout.paper_bgcolor == "#0d1b2e":
                         self.layout.paper_bgcolor = bg_color
                     if self.layout.plot_bgcolor == "#0d1b2e":
                         self.layout.plot_bgcolor = bg_color
             except Exception:
-                pass
+                logging.getLogger("FazDaneApp").debug(
+                    "Plotly figure theming skipped", exc_info=True
+                )
 
         def custom_update_layout(self, *args, **kwargs):
             try:
                 theme = st.session_state.get("theme_colors")
                 if theme:
                     bg_color = theme.get("bg_color")
-                    template = theme.get("plotly_template", "plotly_dark")
                     if "template" in kwargs:
-                        kwargs["template"] = template
+                        kwargs["template"] = "fazdane"
                     for key in ["paper_bgcolor", "plot_bgcolor"]:
                         if key in kwargs and kwargs[key] == "#0d1b2e":
                             kwargs[key] = bg_color
                     for arg in args:
                         if isinstance(arg, dict):
                             if arg.get("template") is not None:
-                                arg["template"] = template
+                                arg["template"] = "fazdane"
                             for key in ["paper_bgcolor", "plot_bgcolor"]:
                                 if arg.get(key) == "#0d1b2e":
                                     arg[key] = bg_color
             except Exception:
-                pass
+                logging.getLogger("FazDaneApp").debug(
+                    "Plotly update_layout theming skipped", exc_info=True
+                )
             return go.Figure._true_original_update_layout(self, *args, **kwargs)
 
         go.Figure.__init__ = custom_init
         go.Figure.update_layout = custom_update_layout
 except Exception:
-    pass
+    logging.getLogger("FazDaneApp").warning(
+        "Plotly theming setup failed", exc_info=True
+    )
 
 
 #
@@ -207,6 +226,64 @@ TIER1_DEFAULT = "Select Live Trading Module..."
 TIER2_DEFAULT = "Select Analysis Module..."
 TIER3_DEFAULT = "Select Forecasting Module..."
 TIER4_DEFAULT = "Select Volatility Module..."
+
+#
+# MODULE REGISTRY  single source of truth for every module:
+# display name -> (import path, class name, tier).
+# Sidebar radios, tier menus, and the home dashboard tabs are all generated
+# from this dict, and the dispatcher imports lazily from it.
+#
+MODULE_REGISTRY = {
+    # Tier 1  Live Trading
+    "Search Module": ("modules.tier1.search_module", "SearchModule", 1),
+    "Market Breadth Dashboard": ("modules.tier1.market_breadth", "MarketBreadthModule", 1),
+    "Trade Intelligence Engine": ("modules.trade_recommendation.engine", "TradeRecommendationEngineModule", 1),
+    "Calendar Strategy Matrix": ("modules.tier1.calendar_rotation", "CalendarRotationModule", 1),
+    "Iron Condor Analyzer": ("modules.tier1.iron_condor", "IronCondorModule", 1),
+    "ES Pivot Analysis": ("modules.tier1.es_pivot_analysis", "ESPivotAnalysisModule", 1),
+    "Sector Rotation Monitor": ("modules.tier1.sector_rotation", "SectorRotationModule", 1),
+    # Tier 2  Analysis & Intelligence
+    "Universe Intelligence System": ("modules.tier2.universe_intelligence", "UniverseIntelligenceModule", 2),
+    "Portfolio Module": ("modules.tier2.portfolio_module", "PortfolioModule", 2),
+    "Multi-Timeframe Money Flow": ("modules.tier2.money_flow", "MoneyFlowModule", 2),
+    "Market Trend Analysis": ("modules.tier2.market_trend_analysis", "MarketTrendAnalysisModule", 2),
+    "Market Structure Heatmap": ("modules.tier2.market_structure", "MarketStructureModule", 2),
+    "Correlation Matrix": ("modules.tier2.correlation_matrix", "CorrelationMatrixModule", 2),
+    "Earnings Calendar": ("modules.tier2.earnings_calendar", "EarningsCalendarModule", 2),
+    "Equity Income Statement": ("modules.tier2.equity_income_statement", "EquityIncomeStatementModule", 2),
+    "Equity / Index Seasonality": ("modules.tier2.seasonality_analysis", "SeasonalityAnalysisModule", 2),
+    "Stock Sentiment Analysis": ("modules.tier2.stock_sentiment", "StockSentimentModule", 2),
+    "Social Stock Stories": ("modules.tier2.social_stock_stories", "SocialStockStoriesModule", 2),
+    "Calendar Opportunity Scoring Engine": ("modules.calendar_scoring.dashboard", "CalendarOpportunityScoringModule", 2),
+    "Price Action Story Engine": ("modules.tier2.price_action_story", "PriceActionStoryModule", 2),
+    "Regime Intelligence Dashboard": ("modules.tier2.markov_regime_engine", "MarkovRegimeEngineModule", 2),
+    # Tier 3  Forecasting & Cycles
+    "Bradley Siderograph": ("modules.tier3.bradley_siderograph", "BradleySiderographModule", 3),
+    "Elliott Wave Analysis": ("modules.tier3.elliott_wave_analysis", "ElliottWaveAnalysisModule", 3),
+    # Tier 4  Volatility
+    "Volatility Strategy Engine": ("modules.tier4.volatility_engine", "VolatilityEngineModule", 4),
+    "Gamma Flip Line Module": ("modules.tier4.gamma_flip.gamma_dashboard", "GammaFlipLineModule", 4),
+}
+
+
+def modules_for_tier(tier: int) -> list:
+    """Ordered module names for a tier (order = registry insertion order)."""
+    return [name for name, (_, _, t) in MODULE_REGISTRY.items() if t == tier]
+
+
+def run_module(name: str) -> None:
+    """Lazily import and run a registered module with uniform error handling."""
+    import importlib
+    import traceback
+
+    module_path, class_name, _tier = MODULE_REGISTRY[name]
+    try:
+        module_cls = getattr(importlib.import_module(module_path), class_name)
+        module_cls().run()
+        logger.info(f"Module opened: {name}")
+    except Exception as exc:
+        st.error(f"Failed to load {name}: {exc}")
+        st.code(traceback.format_exc())
 
 
 def launch_module(module_name: str, tier: int) -> None:
@@ -240,7 +317,7 @@ def select_sidebar_tier(tier: int) -> None:
 
 
 def render_home_module_button(label: str, module_name: str, tier: int, key: str) -> None:
-    if st.button(label, key=key, use_container_width=True):
+    if st.button(label, key=key, width="stretch"):
         launch_module(module_name, tier)
 
 
@@ -277,10 +354,13 @@ def back_to_current_menu() -> None:
 #
 # GLOBAL CSS  Research & Trading Intelligence Platform Brand
 # Colors: navy #0d1b2e, blue #1a3a8f, green #3ab54a
+# Built once per theme and cached across reruns (st.cache_data).
 #
 
-st.markdown(
-    f"""
+@st.cache_data(show_spinner=False)
+def build_css(theme_name: str) -> str:
+    theme_colors = THEMES[theme_name]
+    return f"""
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
     <style>
         :root {{
@@ -653,9 +733,10 @@ st.markdown(
         }}
 
     </style>
-    """,
-    unsafe_allow_html=True,
-)
+    """
+
+
+st.markdown(build_css(st.session_state["app_theme_selection"]), unsafe_allow_html=True)
 
 #
 # SIDEBAR AUTO-EXPAND WATCHDOG
@@ -714,7 +795,7 @@ _components.html(
 # AUTHENTICATION CHECK
 #
 
-from pages.auth import FazDaneAuthenticator, logout, get_current_user
+from views.auth import FazDaneAuthenticator, logout, get_current_user
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -724,7 +805,7 @@ if not st.session_state.authenticated:
     with st.sidebar:
         # Logo
         try:
-            st.image("assets/logo.png", use_container_width=True)
+            st.image("assets/logo.png", width="stretch")
         except Exception:
             st.markdown(
                 "<h2 style='color:#3ab54a;text-align:center;'>Research & Trading Intelligence Platform</h2>",
@@ -763,8 +844,11 @@ if "db_initialized" not in st.session_state:
     try:
         from utils.persistence import restore_all_databases, initialize_volatility_cache_tables
 
-        with st.spinner("Restoring databases from cloud..."):
-            restored, failed = restore_all_databases(force=True)
+        # force=False: databases already present on disk are used as-is, so the
+        # blocking cloud download is skipped on startup. Use the sidebar's
+        # database control panel for a forced restore from cloud.
+        with st.spinner("Checking local databases..."):
+            restored, failed = restore_all_databases(force=False)
             if restored:
                 st.session_state["db_restore_msg"] = f"Restored: {', '.join(restored)}"
             if failed:
@@ -843,7 +927,7 @@ if pending_nav:
 with st.sidebar:
     # Logo
     try:
-        st.image("assets/logo.png", use_container_width=True)
+        st.image("assets/logo.png", width="stretch")
     except Exception:
         st.markdown(
             "<h2 style='color:#3ab54a;text-align:center;'>Research & Trading Intelligence Platform</h2>",
@@ -862,14 +946,14 @@ with st.sidebar:
     )
     top_nav_col1, top_nav_col2, top_nav_col3 = st.columns(3)
     with top_nav_col1:
-        if st.button("Home", use_container_width=True, key="home_dashboard_top_nav"):
+        if st.button("Home", width="stretch", key="home_dashboard_top_nav"):
             st.session_state["pending_nav"] = {"action": "home"}
             st.rerun()
     with top_nav_col2:
-        if st.button("Menu", use_container_width=True, key="back_to_menu_top_nav"):
+        if st.button("Menu", width="stretch", key="back_to_menu_top_nav"):
             back_to_current_menu()
     with top_nav_col3:
-        if st.button("Refresh", use_container_width=True, key="refresh_data_nav"):
+        if st.button("Refresh", width="stretch", key="refresh_data_nav"):
             refresh_live_data()
 
     # Theme Selector Widget
@@ -944,16 +1028,7 @@ with st.sidebar:
         unsafe_allow_html=True,
         )
 
-        tier1_options = [
-            TIER1_DEFAULT,
-            "Search Module",
-            "Market Breadth Dashboard",
-            "Trade Intelligence Engine",
-            "Calendar Strategy Matrix",
-            "Iron Condor Analyzer",
-            "ES Pivot Analysis",
-            "Sector Rotation Monitor",
-        ]
+        tier1_options = [TIER1_DEFAULT] + modules_for_tier(1)
 
         tier1_sel = st.radio(
             "tier1",
@@ -968,23 +1043,7 @@ with st.sidebar:
 
     #  Tier 2: Analysis
     with st.expander("Analysis & Intelligence", expanded=False):
-        tier2_options = [
-            TIER2_DEFAULT,
-            "Universe Intelligence System",
-            "Portfolio Module",
-            "Multi-Timeframe Money Flow",
-            "Market Trend Analysis",
-            "Market Structure Heatmap",
-            "Correlation Matrix",
-            "Earnings Calendar",
-            "Equity Income Statement",
-            "Equity / Index Seasonality",
-            "Stock Sentiment Analysis",
-            "Social Stock Stories",
-            "Calendar Opportunity Scoring Engine",
-            "Price Action Story Engine",
-            "Regime Intelligence Dashboard",
-        ]
+        tier2_options = [TIER2_DEFAULT] + modules_for_tier(2)
         tier2_sel = st.radio(
             "tier2",
             tier2_options,
@@ -996,11 +1055,7 @@ with st.sidebar:
 
     #  Tier 3: Forecasting
     with st.expander("Forecasting & Cycles", expanded=False):
-        tier3_options = [
-            TIER3_DEFAULT,
-            "Bradley Siderograph",
-            "Elliott Wave Analysis",
-        ]
+        tier3_options = [TIER3_DEFAULT] + modules_for_tier(3)
         tier3_sel = st.radio(
             "tier3",
             tier3_options,
@@ -1012,11 +1067,7 @@ with st.sidebar:
 
     #  Tier 4: Volatility
     with st.expander("Volatility", expanded=False):
-        tier4_options = [
-            TIER4_DEFAULT,
-            "Volatility Strategy Engine",
-            "Gamma Flip Line Module",
-        ]
+        tier4_options = [TIER4_DEFAULT] + modules_for_tier(4)
         tier4_sel = st.radio(
             "tier4",
             tier4_options,
@@ -1029,7 +1080,7 @@ with st.sidebar:
     st.divider()
 
     #  Logout
-    if st.button("Logout", use_container_width=True, type="secondary"):
+    if st.button("Logout", width="stretch", type="secondary"):
         logger.info(f"User {user['username']} logged out")
         logout()
 
@@ -1056,22 +1107,9 @@ elif st.session_state.get("active_menu_tier"):
 else:
     active_module = "Home Dashboard"
 
-# Detect module transitions to clear previous visualizations immediately
-if "last_active_module" not in st.session_state:
-    st.session_state["last_active_module"] = active_module
-
-if active_module != st.session_state["last_active_module"]:
-    st.session_state["last_active_module"] = active_module
-    st.markdown(
-        """
-        <div style="text-align:center; padding:100px 20px;">
-            <h2 style='color:#3ab54a; font-family:Inter,sans-serif;'>Loading module...</h2>
-            <div style='color:#64748b; font-size:14px; margin-top:10px;'>Initializing components and clearing resources</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-    st.rerun()
+# NOTE: the old "Loading module..." intermediate rerun was removed  it added
+# a full extra script execution to every navigation click. Streamlit already
+# clears the previous frame on rerun.
 
 #  Route to module
 
@@ -1111,7 +1149,7 @@ if active_module.startswith("__MENU_TIER_"):
     for tier_id, (switch_label, _, _) in menu_config.items():
         with switch_cols[tier_id - 1]:
             button_type = "primary" if menu_tier == tier_id else "secondary"
-            if st.button(switch_label, key=f"module_menu_switch_{tier_id}", use_container_width=True, type=button_type):
+            if st.button(switch_label, key=f"module_menu_switch_{tier_id}", width="stretch", type=button_type):
                 st.session_state["active_menu_tier"] = tier_id
                 st.rerun()
 
@@ -1120,188 +1158,11 @@ if active_module.startswith("__MENU_TIER_"):
     cols = st.columns(2)
     for index, option in enumerate(options):
         with cols[index % 2]:
-            if st.button(option, key=f"back_menu_{menu_tier}_{index}", use_container_width=True):
+            if st.button(option, key=f"back_menu_{menu_tier}_{index}", width="stretch"):
                 launch_module(option, menu_tier)
 
-elif active_module == "Search Module":
-    from modules.tier1.search_module import SearchModule
-    module = SearchModule()
-    module.run()
-    logger.info(f"User {user['username']} -> Search Module")
-
-elif active_module == "Market Breadth Dashboard":
-    from modules.tier1.market_breadth import MarketBreadthModule
-    module = MarketBreadthModule()
-    module.run()
-    logger.info(f"Market Breadth Dashboard")
-
-elif active_module == "ES Pivot Analysis":
-    from modules.tier1.es_pivot_analysis import ESPivotAnalysisModule
-    module = ESPivotAnalysisModule()
-    module.run()
-    logger.info(f"ES Pivot Analysis")
-
-elif active_module == "Sector Rotation Monitor":
-    from modules.tier1.sector_rotation import SectorRotationModule
-    module = SectorRotationModule()
-    module.run()
-    logger.info(f"Sector Rotation Monitor")
-
-elif active_module == "Calendar Strategy Matrix":
-    from modules.tier1.calendar_rotation import CalendarRotationModule
-    module = CalendarRotationModule()
-    module.run()
-    logger.info(f"Calendar Strategy Matrix")
-
-elif active_module == "Iron Condor Analyzer":
-    from modules.tier1.iron_condor import IronCondorModule
-    module = IronCondorModule()
-    module.run()
-    logger.info(f"Iron Condor Analyzer")
-
-elif active_module == "Multi-Timeframe Money Flow":
-    from modules.tier2.money_flow import MoneyFlowModule
-    module = MoneyFlowModule()
-    module.run()
-    logger.info(f"User {user['username']}  Money Flow")
-
-elif active_module == "Portfolio Module":
-    from modules.tier2.portfolio_module import PortfolioModule
-    module = PortfolioModule()
-    module.run()
-    logger.info(f"User {user['username']} -> Portfolio Module")
-
-elif active_module == "Market Structure Heatmap":
-    from modules.tier2.market_structure import MarketStructureModule
-    module = MarketStructureModule()
-    module.run()
-    logger.info(f"User {user['username']}  Market Structure")
-
-elif active_module == "Correlation Matrix":
-    from modules.tier2.correlation_matrix import CorrelationMatrixModule
-    module = CorrelationMatrixModule()
-    module.run()
-    logger.info(f"Correlation Matrix")
-
-elif active_module == "Earnings Calendar":
-    from modules.tier2.earnings_calendar import EarningsCalendarModule
-    module = EarningsCalendarModule()
-    module.run()
-    logger.info(f"Earnings Calendar")
-
-elif active_module == "Equity Income Statement":
-    from modules.tier2.equity_income_statement import EquityIncomeStatementModule
-    module = EquityIncomeStatementModule()
-    module.run()
-    logger.info(f"Equity Income Statement")
-
-elif active_module == "Equity / Index Seasonality":
-    from modules.tier2.seasonality_analysis import SeasonalityAnalysisModule
-    module = SeasonalityAnalysisModule()
-    module.run()
-    logger.info(f"Equity / Index Seasonality")
-
-elif active_module == "Stock Sentiment Analysis":
-    from modules.tier2.stock_sentiment import StockSentimentModule
-    module = StockSentimentModule()
-    module.run()
-    logger.info(f"Stock Sentiment Analysis")
-
-elif active_module == "Social Stock Stories":
-    from modules.tier2.social_stock_stories import SocialStockStoriesModule
-    module = SocialStockStoriesModule()
-    module.run()
-    logger.info("Social Stock Stories")
-
-elif active_module == "Universe Intelligence System":
-    try:
-        from modules.tier2.universe_intelligence import UniverseIntelligenceModule
-        module = UniverseIntelligenceModule()
-        module.run()
-        logger.info("Universe Intelligence System")
-    except Exception as e:
-        import traceback
-        st.error(f"Failed to load Universe Intelligence System: {e}")
-        st.code(traceback.format_exc())
-
-elif active_module == "Calendar Opportunity Scoring Engine":
-    try:
-        from modules.calendar_scoring.dashboard import CalendarOpportunityScoringModule
-        module = CalendarOpportunityScoringModule()
-        module.run()
-        logger.info("Calendar Opportunity Scoring Engine")
-    except Exception as e:
-        import traceback
-        st.error(f"Failed to load Calendar Opportunity Scoring Engine: {e}")
-        st.code(traceback.format_exc())
-
-elif active_module == "Trade Intelligence Engine":
-    try:
-        from modules.trade_recommendation.engine import TradeRecommendationEngineModule
-        module = TradeRecommendationEngineModule()
-        module.run()
-        logger.info("Trade Intelligence Engine")
-    except Exception as e:
-        import traceback
-        st.error(f"Failed to load Trade Intelligence Engine: {e}")
-        st.code(traceback.format_exc())
-
-elif active_module == "Market Trend Analysis":
-    try:
-        from modules.tier2.market_trend_analysis import MarketTrendAnalysisModule
-        module = MarketTrendAnalysisModule()
-        module.run()
-        logger.info("Market Trend Analysis")
-    except Exception as e:
-        import traceback
-        st.error(f"Failed to load Market Trend Analysis: {e}")
-        st.code(traceback.format_exc())
-
-elif active_module == "Price Action Story Engine":
-    try:
-        from modules.tier2.price_action_story import PriceActionStoryModule
-        module = PriceActionStoryModule()
-        module.run()
-        logger.info("Price Action Story Engine")
-    except Exception as e:
-        import traceback
-        st.error(f"Failed to load Price Action Story Engine: {e}")
-        st.code(traceback.format_exc())
-
-elif active_module == "Regime Intelligence Dashboard":
-    try:
-        from modules.tier2.markov_regime_engine import MarkovRegimeEngineModule
-        module = MarkovRegimeEngineModule()
-        module.run()
-        logger.info("Regime Intelligence Dashboard")
-    except Exception as e:
-        import traceback
-        st.error(f"Failed to load Regime Intelligence Dashboard: {e}")
-        st.code(traceback.format_exc())
-
-elif "Bradley Siderograph" in active_module:
-    from modules.tier3.bradley_siderograph import BradleySiderographModule
-    module = BradleySiderographModule()
-    module.run()
-    logger.info(f"Bradley Siderograph")
-
-elif "Elliott Wave Analysis" in active_module:
-    from modules.tier3.elliott_wave_analysis import ElliottWaveAnalysisModule
-    module = ElliottWaveAnalysisModule()
-    module.run()
-    logger.info(f"Elliott Wave Analysis")
-
-elif active_module == "Volatility Strategy Engine":
-    from modules.tier4.volatility_engine import VolatilityEngineModule
-    module = VolatilityEngineModule()
-    module.run()
-    logger.info("Volatility Strategy Engine")
-
-elif active_module == "Gamma Flip Line Module":
-    from modules.tier4.gamma_flip.gamma_dashboard import GammaFlipLineModule
-    module = GammaFlipLineModule()
-    module.run()
-    logger.info("Gamma Flip Line Module")
+elif active_module in MODULE_REGISTRY:
+    run_module(active_module)
 
 elif active_module in tier2_options:
     st.info(f"{active_module}  Analysis module coming in Weeks 34")
@@ -1350,52 +1211,27 @@ else:
         unsafe_allow_html=True,
     )
 
+    # Home-dashboard tabs are generated from MODULE_REGISTRY (single source
+    # of truth) instead of a duplicated hand-maintained list.
+    import re as _re
+
+    def _macro_key(name: str) -> str:
+        return "macro_" + _re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
     macro_module_tabs = [
         {
-            "label": "Live Trading",
+            "label": tab_label,
             "items": [
-                {"label": "Search Module", "module": "Search Module", "tier": 1, "key": "macro_search_module"},
-                {"label": "Market Breadth Dashboard", "module": "Market Breadth Dashboard", "tier": 1, "key": "macro_market_breadth"},
-                {"label": "Sector Rotation Monitor", "module": "Sector Rotation Monitor", "tier": 1, "key": "macro_sector_rotation"},
-                {"label": "Trade Intelligence Engine", "module": "Trade Intelligence Engine", "tier": 1, "key": "macro_trade_recommendation"},
-                {"label": "Calendar Strategy Matrix", "module": "Calendar Strategy Matrix", "tier": 1, "key": "macro_calendar_strategy"},
-                {"label": "Iron Condor Analyzer", "module": "Iron Condor Analyzer", "tier": 1, "key": "macro_iron_condor"},
-                {"label": "ES Pivot Analysis", "module": "ES Pivot Analysis", "tier": 1, "key": "macro_es_pivot"},
+                {"label": m, "module": m, "tier": tier_id, "key": _macro_key(m)}
+                for m in modules_for_tier(tier_id)
             ],
-        },
-        {
-            "label": "Analysis & Intelligence",
-            "items": [
-                {"label": "Universe Intelligence System", "module": "Universe Intelligence System", "tier": 2, "key": "macro_universe_intelligence"},
-                {"label": "Portfolio Module", "module": "Portfolio Module", "tier": 2, "key": "macro_portfolio_module"},
-                {"label": "Multi-Timeframe Money Flow", "module": "Multi-Timeframe Money Flow", "tier": 2, "key": "macro_money_flow"},
-                {"label": "Market Trend Analysis", "module": "Market Trend Analysis", "tier": 2, "key": "macro_market_trend_analysis"},
-                {"label": "Market Structure Heatmap", "module": "Market Structure Heatmap", "tier": 2, "key": "macro_market_structure"},
-                {"label": "Correlation Matrix", "module": "Correlation Matrix", "tier": 2, "key": "macro_correlation"},
-                {"label": "Earnings Calendar", "module": "Earnings Calendar", "tier": 2, "key": "macro_earnings"},
-                {"label": "Equity Income Statement", "module": "Equity Income Statement", "tier": 2, "key": "macro_income_statement"},
-                {"label": "Equity / Index Seasonality", "module": "Equity / Index Seasonality", "tier": 2, "key": "macro_seasonality"},
-                {"label": "Stock Sentiment Analysis", "module": "Stock Sentiment Analysis", "tier": 2, "key": "macro_sentiment"},
-                {"label": "Social Stock Stories", "module": "Social Stock Stories", "tier": 2, "key": "macro_social_stories"},
-                {"label": "Calendar Opportunity Scoring Engine", "module": "Calendar Opportunity Scoring Engine", "tier": 2, "key": "macro_calendar_scoring"},
-                {"label": "Price Action Story Engine", "module": "Price Action Story Engine", "tier": 2, "key": "macro_price_action_story"},
-                {"label": "Regime Intelligence Dashboard", "module": "Regime Intelligence Dashboard", "tier": 2, "key": "macro_regime_intelligence"},
-            ],
-        },
-        {
-            "label": "Forecasting",
-            "items": [
-                {"label": "Bradley Siderograph", "module": "Bradley Siderograph", "tier": 3, "key": "macro_bradley"},
-                {"label": "Elliott Wave Analysis", "module": "Elliott Wave Analysis", "tier": 3, "key": "macro_elliott"},
-            ],
-        },
-        {
-            "label": "Volatility",
-            "items": [
-                {"label": "Volatility Strategy Engine", "module": "Volatility Strategy Engine", "tier": 4, "key": "macro_volatility_engine"},
-                {"label": "Gamma Flip Line Module", "module": "Gamma Flip Line Module", "tier": 4, "key": "macro_gamma_flip"},
-            ],
-        },
+        }
+        for tier_id, tab_label in [
+            (1, "Live Trading"),
+            (2, "Analysis & Intelligence"),
+            (3, "Forecasting"),
+            (4, "Volatility"),
+        ]
     ]
 
     from modules.tier2.macro_intelligence import render_macro_dashboard

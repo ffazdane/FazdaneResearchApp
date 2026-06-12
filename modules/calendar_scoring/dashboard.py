@@ -505,7 +505,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             help="Generate Black-Scholes synthetic options chain if live chain downloads are throttled or closed."
         )
         
-        if st.button("Run Scoring Engine", key="btn_run_cal_scoring", type="primary", use_container_width=True):
+        if st.button("Run Scoring Engine", key="btn_run_cal_scoring", type="primary", width="stretch"):
             self.execute_engine_scan()
             
     def render_main(self):
@@ -719,7 +719,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             .map(color_cluster_label, subset=["Cluster Label"])
             .map(color_intraday_signal, subset=["Intraday Signal"])
         )
-        st.dataframe(styled_df, use_container_width=True)
+        st.dataframe(styled_df, width="stretch")
 
         # Select ticker for Prompt Generator
         st.markdown("#### 💬 AI Analyst ChatGPT Prompt Copyable")
@@ -812,7 +812,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 template="plotly_dark"
             )
             
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             
             # Export and provide download option
             try:
@@ -822,7 +822,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                     data=img_bytes,
                     file_name=f"{ticker}_fib_chart.png",
                     mime="image/png",
-                    use_container_width=True
+                    width="stretch"
                 )
             except Exception as ex:
                 logger.warning(f"Could not generate download image bytes: {ex}")
@@ -903,7 +903,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 return ""
             
         styled_df = df.style.map(color_recommendation, subset=["Recommendation"]).map(color_earnings_date, subset=["Earnings Date"])
-        st.dataframe(styled_df, use_container_width=True)
+        st.dataframe(styled_df, width="stretch")
 
     # ══════════════════════════════════════════════════════════════════════
     # SCREEN 3: TICKER DETAIL VIEW
@@ -969,7 +969,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 marker=dict(color='#3ab54a')
             ))
             fig.update_layout(height=300, margin=dict(l=20, r=20, t=10, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             
         st.divider()
         st.markdown("### 🧠 Phase 2 Advanced Intelligence Models")
@@ -1039,7 +1039,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                     margin=dict(l=20, r=20, t=30, b=10),
                     template="plotly_dark"
                 )
-                st.plotly_chart(fig_surv, use_container_width=True)
+                st.plotly_chart(fig_surv, width="stretch")
             else:
                 st.warning("Could not calculate survival curve.")
 
@@ -1115,7 +1115,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             fig.add_vline(x=spot_start, line_dash="dash", line_color="#ffb800", annotation_text="Current Price")
             fig.add_hline(y=0.0, line_color="#64748b")
             fig.update_layout(xaxis_title="Stock Price", yaxis_title="Profit / Loss ($)", height=320, margin=dict(l=20, r=20, t=10, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
     # ══════════════════════════════════════════════════════════════════════
     # SCREEN 5: DECISION HISTORY LOG
@@ -1152,7 +1152,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             st.info("No historical decisions match the selected recommendation filter.")
             return
             
-        st.dataframe(filtered_df, use_container_width=True)
+        st.dataframe(filtered_df, width="stretch")
 
     # ══════════════════════════════════════════════════════════════════════
     # SCREEN 6: OUTCOME TRACKING
@@ -1182,7 +1182,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             st.info("No outcomes tracked yet. Execute scoring scans, wait, or press 'Run Outcomes Engine' to simulate.")
             return
             
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, width="stretch")
 
     # ══════════════════════════════════════════════════════════════════════
     # SCREEN 7: BACKTEST PERFORMANCE
@@ -1199,29 +1199,29 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         with col1:
             st.write("#### Deploy vs Watch Return Performance")
             fig = px.bar(stats["deploy_vs_watch"], x="recommendation", y="avg_pnl", text_auto=True, title="Average PnL % by Recommendation")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             
         with col2:
             st.write("#### FDTS Buy vs Others Performance")
             fig = px.bar(stats["fdts_perf"], x="fdts_signal", y="win_rate", text_auto=True, title="Win Rate % by FDTS Trend Signal")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             
         col3, col4 = st.columns(2)
         with col3:
             st.write("#### Cluster performance")
             fig = px.bar(stats["cluster_perf"], x="cluster_label", y="avg_pnl", text_auto=True, title="Average PnL % by Cluster State")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             
         with col4:
             st.write("#### Market Regime edge")
             fig = px.bar(stats["regime_perf"], x="market_regime", y="avg_pnl", text_auto=True, title="Average PnL % by Market Regime")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             
         col5, col6 = st.columns(2)
         with col5:
             st.write("#### Predictiveness Score Correlation")
             fig = px.bar(stats["predictive_df"], x="score_type", y="correlation", text_auto=True, title="Correlation of Scores to Future PnL")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             
         with col6:
             st.write("#### Setup Comparisons")
@@ -1290,7 +1290,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             with st.spinner("Executing grid search over weight spaces..."):
                 opt_res = run_weights_optimization()
                 st.write("##### Grid Search Top 10 Configurations")
-                st.dataframe(opt_res["results_df"], use_container_width=True)
+                st.dataframe(opt_res["results_df"], width="stretch")
                 
                 # Option to load best weights
                 best = opt_res["best_weights"]
@@ -1335,7 +1335,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                     marker=dict(color='#00ff88')
                 ))
                 fig_imp.update_layout(height=280, margin=dict(l=20, r=20, t=10, b=10), template="plotly_dark")
-                st.plotly_chart(fig_imp, use_container_width=True)
+                st.plotly_chart(fig_imp, width="stretch")
             elif res["status"] == "cold_start":
                 st.warning(f"⚠️ **Cold Start Warning**: {res['message']}")
             else:
@@ -1359,12 +1359,12 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         df_hmm = pd.DataFrame([
             {"Future Regime": k, "Transition Probability": f"{v * 100.0:.1f}%"} for k, v in hmm_trans.items()
         ])
-        st.dataframe(df_hmm, use_container_width=True)
+        st.dataframe(df_hmm, width="stretch")
         
         # Plotly chart
         fig = go.Figure(data=[go.Pie(labels=list(hmm_trans.keys()), values=list(hmm_trans.values()), hole=.3)])
         fig.update_layout(height=280, margin=dict(l=20, r=20, t=10, b=10), template="plotly_dark")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         
         # Daily Transition Matrix Heatmap
         matrices = get_transition_matrices()
@@ -1374,7 +1374,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
             P_daily, states = matrices["daily"]
             df_p = pd.DataFrame(P_daily, index=states, columns=states)
             df_p_pct = df_p.map(lambda x: f"{x * 100.0:.1f}%")
-            st.dataframe(df_p_pct, use_container_width=True)
+            st.dataframe(df_p_pct, width="stretch")
             
             fig_hm = px.imshow(
                 P_daily * 100.0,
@@ -1385,7 +1385,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
                 text_auto=".1f"
             )
             fig_hm.update_layout(height=260, margin=dict(l=20, r=20, t=10, b=10), template="plotly_dark")
-            st.plotly_chart(fig_hm, use_container_width=True)
+            st.plotly_chart(fig_hm, width="stretch")
 
     # ══════════════════════════════════════════════════════════════════════
     # SCREEN 10: PAPER TRADE TRACKER
@@ -1415,7 +1415,7 @@ class CalendarOpportunityScoringModule(FazDaneModule):
         df["Target Strike Exit"] = df["selected_strike"]
         
         # Format table
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, width="stretch")
 
     # ══════════════════════════════════════════════════════════════════════
     # ENGINE SCAN FUNCTION

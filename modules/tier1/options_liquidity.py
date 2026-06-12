@@ -720,9 +720,9 @@ class OptionsLiquidityModule(FazDaneModule):
         st.info(f"Active Source: {active_source}")
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        scan_clicked = st.button("Scan Options", use_container_width=True,
+        scan_clicked = st.button("Scan Options", width="stretch",
                                  type="primary", key="ol_scan")
-        export_clicked = st.button("Export CSV", use_container_width=True,
+        export_clicked = st.button("Export CSV", width="stretch",
                                    key="ol_export")
 
         if scan_clicked:
@@ -1053,7 +1053,7 @@ class OptionsLiquidityModule(FazDaneModule):
                     styled_df = display_df
                 st.dataframe(
                     styled_df,
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     column_config={
                         "Ticker": st.column_config.TextColumn("Ticker"),
@@ -1175,7 +1175,7 @@ class OptionsLiquidityModule(FazDaneModule):
             margin=dict(l=10, r=10, t=10, b=20),
             height=max(320, min(720, 120 + 28 * len(plot_df))),
         )
-        st.plotly_chart(fig, use_container_width=True, key="ol_trade_signal_rotation")
+        st.plotly_chart(fig, width="stretch", key="ol_trade_signal_rotation")
 
     def _tab_heatmap(self, df: pd.DataFrame):
         st.markdown("### Volume Heatmap by Symbol & Option Type")
@@ -1326,7 +1326,7 @@ class OptionsLiquidityModule(FazDaneModule):
         try:
             heatmap_event = st.plotly_chart(
                 fig,
-                use_container_width=True,
+                width="stretch",
                 key="ol_volume_heatmap",
                 on_select="rerun",
                 selection_mode="points",
@@ -1342,7 +1342,7 @@ class OptionsLiquidityModule(FazDaneModule):
                     st.session_state[focus_state_key] = clicked_symbol
                     st.rerun()
         except TypeError:
-            st.plotly_chart(fig, use_container_width=True, key="ol_volume_heatmap_static")
+            st.plotly_chart(fig, width="stretch", key="ol_volume_heatmap_static")
 
         signal_symbols = sorted(df["symbol"].dropna().astype(str).str.upper().unique())
         self._render_trade_signal_buckets(signal_symbols, focus_symbol=focus_symbol, put_hedging_symbols=put_hedging_symbols)
@@ -1434,7 +1434,7 @@ class OptionsLiquidityModule(FazDaneModule):
             margin=dict(l=0, r=0, t=30, b=0),
             height=440,
         )
-        st.plotly_chart(fig, use_container_width=True, key=f"ol_drill_scatter_{selected_symbol}")
+        st.plotly_chart(fig, width="stretch", key=f"ol_drill_scatter_{selected_symbol}")
 
         st.markdown("#### Expiration Summary")
         expiry_summary = (
@@ -1460,7 +1460,7 @@ class OptionsLiquidityModule(FazDaneModule):
             margin=dict(l=0, r=0, t=30, b=0),
             height=300,
         )
-        st.plotly_chart(fig2, use_container_width=True, key=f"ol_drill_expiry_{selected_symbol}")
+        st.plotly_chart(fig2, width="stretch", key=f"ol_drill_expiry_{selected_symbol}")
 
         st.markdown("#### Top Contracts Feeding Volume")
         top_contracts = drill.nlargest(30, "volume")
@@ -1471,7 +1471,7 @@ class OptionsLiquidityModule(FazDaneModule):
             ]
             if c in top_contracts.columns
         ]
-        st.dataframe(top_contracts[display_cols], use_container_width=True, hide_index=True)
+        st.dataframe(top_contracts[display_cols], width="stretch", hide_index=True)
 
     def _tab_chain(self, df: pd.DataFrame):
         st.markdown("### Options Chain Results")
@@ -1528,7 +1528,7 @@ class OptionsLiquidityModule(FazDaneModule):
 
         st.dataframe(
             display,
-            use_container_width=True,
+            width="stretch",
             height=500,
             column_config=col_cfg,
         )
@@ -1554,7 +1554,7 @@ class OptionsLiquidityModule(FazDaneModule):
                     yaxis=dict(gridcolor="#1e3a5f"),
                     margin=dict(l=0, r=0, t=40, b=0), height=300,
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
         with col2:
             if "iv_%" in df.columns:
@@ -1570,7 +1570,7 @@ class OptionsLiquidityModule(FazDaneModule):
                     yaxis=dict(gridcolor="#1e3a5f"),
                     margin=dict(l=0, r=0, t=40, b=0), height=300,
                 )
-                st.plotly_chart(fig2, use_container_width=True)
+                st.plotly_chart(fig2, width="stretch")
 
         if {"symbol", "volume", "iv_%", "option_type"}.issubset(df.columns):
             st.markdown("### Volume Source by Ticker")
@@ -1612,14 +1612,14 @@ class OptionsLiquidityModule(FazDaneModule):
                 margin=dict(l=0, r=0, t=30, b=0),
                 height=420,
             )
-            st.plotly_chart(fig3, use_container_width=True, key="ol_analytics_ticker_source")
+            st.plotly_chart(fig3, width="stretch", key="ol_analytics_ticker_source")
 
         # Top opportunities table
         st.markdown("###  Top Opportunities by Volume")
         top = df.nlargest(15, "volume") if "volume" in df.columns else df.head(15)
         display_cols = [c for c in ["symbol", "option_type", "strike", "expiration",
                                      "dte", "volume", "open_interest", "iv_%", "bid", "ask"] if c in top.columns]
-        st.dataframe(top[display_cols], use_container_width=True, hide_index=True)
+        st.dataframe(top[display_cols], width="stretch", hide_index=True)
 
     #  Tab 4: IV Landscape
 
@@ -1653,7 +1653,7 @@ class OptionsLiquidityModule(FazDaneModule):
                 yaxis=dict(gridcolor="#1e3a5f", range=[0, 105], title="IV Rank", tickfont=dict(color="#e2e8f0")),
                 margin=dict(l=0, r=0, t=50, b=0), height=380,
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.info("IV Rank is unavailable. Production needs Yahoo/yfinance historical price access for this chart.")
 
@@ -1687,7 +1687,7 @@ class OptionsLiquidityModule(FazDaneModule):
                 margin=dict(l=0, r=0, t=30, b=0),
                 height=360,
             )
-            st.plotly_chart(fig3, use_container_width=True, key="ol_iv_volume_scatter")
+            st.plotly_chart(fig3, width="stretch", key="ol_iv_volume_scatter")
         else:
             st.info(
                 "Volume vs IV is unavailable because the active provider did not return implied volatility values."
@@ -1718,7 +1718,7 @@ class OptionsLiquidityModule(FazDaneModule):
                 ),
                 margin=dict(l=0, r=0, t=50, b=0), height=320,
             )
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, width="stretch")
 
     #  Welcome state
 
@@ -1737,7 +1737,7 @@ class OptionsLiquidityModule(FazDaneModule):
 
         st.dataframe(
             recent,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "run_id": st.column_config.TextColumn("Run ID"),

@@ -1029,7 +1029,7 @@ def _render_detail_panel(row: pd.Series) -> None:
                     xaxis=dict(gridcolor="#1e3a5f", showgrid=True),
                     yaxis=dict(gridcolor="#1e3a5f", showgrid=True)
                 )
-                st.plotly_chart(fig, use_container_width=True, theme=None)
+                st.plotly_chart(fig, width="stretch", theme=None)
                 
             with col_plan:
                 st.markdown("##### 📋 Copyable Trade Plan")
@@ -1061,7 +1061,7 @@ Rules:
             # Action button for deployment
             deploy_btn_col, _ = st.columns([2, 3])
             with deploy_btn_col:
-                if st.button("🚀 Log & Deploy Calendar Spread Setup", use_container_width=True, type="primary"):
+                if st.button("🚀 Log & Deploy Calendar Spread Setup", width="stretch", type="primary"):
                     try:
                         # Log decision & option setup to paper database
                         now = datetime.now()
@@ -1176,7 +1176,7 @@ def render_matrix_native(filtered_df: pd.DataFrame) -> None:
 
     event = st.dataframe(
         styled,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         height=table_height,
         on_select="rerun",
@@ -1263,7 +1263,7 @@ class CalendarRotationModule(FazDaneModule):
         
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         st.markdown("**Triple-Engine Execution**")
-        run_all_scans = st.button("🚀 Run Quad-Engine Scan", use_container_width=True, type="primary")
+        run_all_scans = st.button("🚀 Run Quad-Engine Scan", width="stretch", type="primary")
         
         if run_all_scans:
             st.session_state["run_all_scans_triggered"] = True
@@ -1297,7 +1297,7 @@ class CalendarRotationModule(FazDaneModule):
             
             if not has_data:
                 st.warning("⚠️ No processed engine results found in database for the selected universe. You must run a fresh triple scan.")
-                if st.button("🚀 Execute Triple-Engine Scan Now", key="cal_strategy_first_run_btn", use_container_width=True, type="primary"):
+                if st.button("🚀 Execute Triple-Engine Scan Now", key="cal_strategy_first_run_btn", width="stretch", type="primary"):
                     st.session_state["run_all_scans_triggered"] = True
                     st.rerun()
                 return
@@ -1652,7 +1652,7 @@ class CalendarRotationModule(FazDaneModule):
         for annotation in fig['layout']['annotations']:
             annotation['font'] = dict(size=14, color="#e2e8f0")
 
-        st.plotly_chart(fig, use_container_width=True, theme=None)
+        st.plotly_chart(fig, width="stretch", theme=None)
 
     def _render_top_candidates(self, combined_scores):
         st.markdown("### 🏆 Top Rotation Candidates")
@@ -1676,7 +1676,7 @@ class CalendarRotationModule(FazDaneModule):
             
         st.dataframe(
             display_df[display_cols].style.map(highlight_strength, subset=["Strength"]),
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "fdts_signal": st.column_config.TextColumn("FDTS Signal", width="small"),
                 "Strength": st.column_config.TextColumn("Strength", width="small"),
@@ -1713,7 +1713,7 @@ class CalendarRotationModule(FazDaneModule):
         summary_df = pd.DataFrame(summary_rows).set_index("Universe")
         st.dataframe(
             summary_df,
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "Avg Score": st.column_config.NumberColumn(format="%.1f"),
                 "Top Score": st.column_config.NumberColumn(format="%.1f"),

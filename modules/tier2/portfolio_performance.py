@@ -273,7 +273,7 @@ class PortfolioPerformanceModule(FazDaneModule):
             key="pp_auto_save",
         )
 
-        if st.button("🔄 Sync 'FazDane Portfolio'", key="pp_sync_universe_btn", use_container_width=True):
+        if st.button("🔄 Sync 'FazDane Portfolio'", key="pp_sync_universe_btn", width="stretch"):
             pos, det, meta, label = self._load_active_snapshot()
             if not pos.empty:
                 raw_tickers = pos["ticker"].apply(clean_ticker_for_lookup).unique().tolist()
@@ -300,11 +300,11 @@ class PortfolioPerformanceModule(FazDaneModule):
             key="pp_daily_change_source",
         )
 
-        if st.button("Refresh Current Pricing", use_container_width=True, type="primary", key="pp_refresh_prices"):
+        if st.button("Refresh Current Pricing", width="stretch", type="primary", key="pp_refresh_prices"):
             fetch_daily_net_change.clear()
             st.rerun()
 
-        if st.button("Refresh Portfolio View", use_container_width=True, key="pp_refresh"):
+        if st.button("Refresh Portfolio View", width="stretch", key="pp_refresh"):
             st.session_state.pop("pp_last_saved_hash", None)
             fetch_daily_net_change.clear()
             st.rerun()
@@ -643,7 +643,7 @@ class PortfolioPerformanceModule(FazDaneModule):
         log_images.extend(db_images)
         
         for img in log_images:
-            st.image(img, use_container_width=True)
+            st.image(img, width="stretch")
             st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
             
         # Check if there is snippet data and render it
@@ -789,7 +789,7 @@ class PortfolioPerformanceModule(FazDaneModule):
                 ),
                 margin=dict(l=24, r=24, t=56, b=85),
             )
-            st.plotly_chart(fig, use_container_width=True, theme=None)
+            st.plotly_chart(fig, width="stretch", theme=None)
             self._render_daily_net_change_chart(positions)
 
         with right:
@@ -809,7 +809,7 @@ class PortfolioPerformanceModule(FazDaneModule):
                 title="Theta Generators",
             )
             style_figure(fig, height=330)
-            st.plotly_chart(fig, use_container_width=True, theme=None)
+            st.plotly_chart(fig, width="stretch", theme=None)
 
         with c2:
             delta_df = positions.reindex(positions["delta"].abs().sort_values(ascending=False).index).head(self.top_n)
@@ -824,7 +824,7 @@ class PortfolioPerformanceModule(FazDaneModule):
             )
             fig.add_hline(y=self.delta_caution, line_dash="dash", line_color=BRAND["yellow"])
             style_figure(fig, height=330)
-            st.plotly_chart(fig, use_container_width=True, theme=None)
+            st.plotly_chart(fig, width="stretch", theme=None)
 
     def _render_daily_net_change_chart(self, positions: pd.DataFrame):
         st.markdown("### Daily Net Change by Portfolio Ticker")
@@ -893,7 +893,7 @@ class PortfolioPerformanceModule(FazDaneModule):
             ),
             margin=dict(l=24, r=24, t=56, b=85),
         )
-        st.plotly_chart(fig, use_container_width=True, theme=None)
+        st.plotly_chart(fig, width="stretch", theme=None)
 
         total_estimate = daily["estimated_dollar_change"].sum()
         source_mix = ", ".join(sorted(daily["market_source"].dropna().unique()))
@@ -901,7 +901,7 @@ class PortfolioPerformanceModule(FazDaneModule):
             f"Estimated net dollar move from displayed quantities: {fmt_money(total_estimate)}. "
             f"Source: {source_mix}."
         )
-        if st.button("Refresh Current Pricing", key="pp_inline_refresh_prices", use_container_width=True):
+        if st.button("Refresh Current Pricing", key="pp_inline_refresh_prices", width="stretch"):
             fetch_daily_net_change.clear()
             st.rerun()
 
@@ -987,7 +987,7 @@ class PortfolioPerformanceModule(FazDaneModule):
         fig.add_vline(x=self.delta_caution, line_dash="dash", line_color=BRAND["yellow"])
         fig.update_traces(textposition="top center", marker=dict(opacity=0.78, line=dict(width=1, color="#e2e8f0")))
         style_figure(fig, height=520)
-        st.plotly_chart(fig, use_container_width=True, theme=None)
+        st.plotly_chart(fig, width="stretch", theme=None)
 
         st.markdown("### Caution Candidates")
         caution = positions.loc[positions["ticker"].isin(self._build_watchlist(positions))].copy()
@@ -1048,13 +1048,13 @@ class PortfolioPerformanceModule(FazDaneModule):
             barmode="overlay",
         )
         style_figure(fig, height=420)
-        st.plotly_chart(fig, use_container_width=True, theme=None)
+        st.plotly_chart(fig, width="stretch", theme=None)
 
         if not recent.empty:
             st.markdown("### Recent Saved Snapshots")
             st.dataframe(
                 recent,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 height=460,
                 column_config={
@@ -1169,7 +1169,7 @@ class PortfolioPerformanceModule(FazDaneModule):
             yaxis=dict(title="Portfolio Value ($)", gridcolor=BRAND["grid"], tickformat="$,.2f"),
         )
         style_figure(fig_val, height=400)
-        st.plotly_chart(fig_val, use_container_width=True, theme=None)
+        st.plotly_chart(fig_val, width="stretch", theme=None)
 
         # --- Chart 2: Daily Delta (Bar Chart) ---
         fig_delta = go.Figure()
@@ -1206,7 +1206,7 @@ class PortfolioPerformanceModule(FazDaneModule):
         )
         fig_delta.add_hline(y=0, line_width=1, line_color=BRAND["muted"])
         style_figure(fig_delta, height=350)
-        st.plotly_chart(fig_delta, use_container_width=True, theme=None)
+        st.plotly_chart(fig_delta, width="stretch", theme=None)
 
     def _render_database_status(self):
         status = get_database_status()
@@ -1238,7 +1238,7 @@ class PortfolioPerformanceModule(FazDaneModule):
             data=csv_bytes,
             file_name=f"portfolio_performance_{date_part}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
 
     def _render_details_tab(self, details: pd.DataFrame, metadata: dict):
@@ -1297,7 +1297,7 @@ class PortfolioPerformanceModule(FazDaneModule):
         available = [column for column in display_cols if column in view.columns]
         st.dataframe(
             view[available],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             height=min(820, max(460, 34 * (len(view) + 1))),
             column_config={
@@ -1322,7 +1322,7 @@ class PortfolioPerformanceModule(FazDaneModule):
             data=csv_bytes,
             file_name=f"portfolio_details_{date_part}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
 
     def _render_position_table(self, positions: pd.DataFrame):
@@ -1345,7 +1345,7 @@ class PortfolioPerformanceModule(FazDaneModule):
         available = [column for column in display_cols if column in positions.columns]
         st.dataframe(
             positions[available],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             height=min(820, max(460, 38 * (len(positions) + 1))),
             column_config={

@@ -175,7 +175,7 @@ class SectorRotationModule(FazDaneModule):
         st.checkbox("Show Transition Trails", value=True, key="sr_show_trails")
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        scan_clicked = st.button("🔄 Generate Matrix", use_container_width=True, type="primary")
+        scan_clicked = st.button("🔄 Generate Matrix", width="stretch", type="primary")
 
         if scan_clicked:
             st.session_state["sr_state"] = {
@@ -372,7 +372,7 @@ class SectorRotationModule(FazDaneModule):
             height=700,
             showlegend=False
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         st.markdown("### 📊 Matrix Status Summary")
         
@@ -589,7 +589,7 @@ class SectorRotationModule(FazDaneModule):
             )
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         st.markdown("### 📊 Matrix Status Summary")
         

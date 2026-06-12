@@ -463,7 +463,7 @@ def render_macro_dashboard(show_download: bool = True, module_tabs: list[dict] |
 
         left, right = st.columns([1, 1.35])
         with left:
-            st.plotly_chart(gauge_figure(snapshot["macro_risk"]), use_container_width=True, key="macro_home_gauge")
+            st.plotly_chart(gauge_figure(snapshot["macro_risk"]), width="stretch", key="macro_home_gauge")
         with right:
             st.markdown("### Macro Story")
             st.write(
@@ -475,28 +475,28 @@ def render_macro_dashboard(show_download: bool = True, module_tabs: list[dict] |
 
         col_a, col_b = st.columns(2)
         with col_a:
-            st.plotly_chart(factor_bar_figure(snapshot), use_container_width=True, key="macro_home_factors")
+            st.plotly_chart(factor_bar_figure(snapshot), width="stretch", key="macro_home_factors")
         with col_b:
-            st.plotly_chart(regime_map_figure(snapshot), use_container_width=True, key="macro_home_regime")
+            st.plotly_chart(regime_map_figure(snapshot), width="stretch", key="macro_home_regime")
 
     with tab_assets:
-        st.dataframe(asset_df, use_container_width=True, hide_index=True)
+        st.dataframe(asset_df, width="stretch", hide_index=True)
     with tab_indicators:
-        st.dataframe(indicators_df, use_container_width=True, hide_index=True)
+        st.dataframe(indicators_df, width="stretch", hide_index=True)
     with tab_market:
-        st.dataframe(market_snapshot_table(market).round(2), use_container_width=True, hide_index=True)
+        st.dataframe(market_snapshot_table(market).round(2), width="stretch", hide_index=True)
     with tab_raw:
         raw = pd.DataFrame([snapshot]).T.reset_index()
         raw.columns = ["Metric", "Value"]
         raw["Value"] = raw["Value"].astype(str)
-        st.dataframe(raw, use_container_width=True, hide_index=True)
+        st.dataframe(raw, width="stretch", hide_index=True)
         if show_download:
             st.download_button(
                 "Download Macro Snapshot CSV",
                 data=raw.to_csv(index=False),
                 file_name="fazdane_macro_snapshot.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )
 
     for tab, tab_config in zip(tabs[5:], tab_configs):
@@ -508,7 +508,7 @@ def render_macro_dashboard(show_download: bool = True, module_tabs: list[dict] |
             columns = st.columns(2)
             for index, item in enumerate(items):
                 with columns[index % 2]:
-                    if st.button(item["label"], key=item["key"], use_container_width=True):
+                    if st.button(item["label"], key=item["key"], width="stretch"):
                         if launch_callback:
                             launch_callback(item["module"], item["tier"])
                         else:

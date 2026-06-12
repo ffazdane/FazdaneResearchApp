@@ -1143,7 +1143,7 @@ class VolatilityEngineModule(FazDaneModule):
                     legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#CDD5E0")),
                     margin=dict(l=0, r=80, t=40, b=0)
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
                 st.caption(f"Expected move bands: **${lower_range:.2f}** to **${upper_range:.2f}** over {selected_dte} days "
                            f"using {'ATM IV' if atm_iv else 'HV20'} {(atm_iv or hv20):.1f}%")
 
@@ -1164,7 +1164,7 @@ class VolatilityEngineModule(FazDaneModule):
                     legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#CDD5E0")),
                     margin=dict(l=0, r=80, t=40, b=0)
                 )
-                st.plotly_chart(fig2, use_container_width=True)
+                st.plotly_chart(fig2, width="stretch")
                 st.markdown("**For selling options:**")
                 if iv_hv_diff is not None:
                     if iv_hv_diff > 5:    st.success(f"ATM IV is **{iv_hv_diff:.1f}%** above 20D HV - **Premium Rich**. Favorable for selling.")
@@ -1232,7 +1232,7 @@ class VolatilityEngineModule(FazDaneModule):
                     legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#CDD5E0")),
                     margin=dict(l=0, r=0, t=10, b=0)
                 )
-                st.plotly_chart(fig_ts, use_container_width=True)
+                st.plotly_chart(fig_ts, width="stretch")
                 st.markdown(f"**Shape:** {make_badge(term_shape, term_style)}", unsafe_allow_html=True)
                 st.markdown("**For selling options:**")
                 if term_shape == "Contango": st.success("Contango: Normal. Near-term options decay faster - favorable for time-decay sellers.")
@@ -1439,7 +1439,7 @@ class VolatilityEngineModule(FazDaneModule):
 
             gen_col, dl_col = st.columns([1, 4])
             with gen_col:
-                if st.button("Generate PDF Report", use_container_width=True, key="generate_pdf_btn"):
+                if st.button("Generate PDF Report", width="stretch", key="generate_pdf_btn"):
                     with st.spinner("Compiling PDF and rendering graphs..."):
                         try:
                             pdf_bytes = generate_pdf_report(
@@ -1535,7 +1535,7 @@ class VolatilityEngineModule(FazDaneModule):
                     height = 280,
                     margin = dict(l=30, r=30, t=50, b=20)
                 )
-                st.plotly_chart(fig_gauge, use_container_width=True)
+                st.plotly_chart(fig_gauge, width="stretch")
                 
             with fig_col2:
                 # Sub-score Horizontal Bar Chart
@@ -1568,7 +1568,7 @@ class VolatilityEngineModule(FazDaneModule):
                     height=280,
                     margin=dict(l=10, r=10, t=50, b=20)
                 )
-                st.plotly_chart(fig_bar, use_container_width=True)
+                st.plotly_chart(fig_bar, width="stretch")
                 
             st.markdown("---")
             
@@ -1603,7 +1603,7 @@ class VolatilityEngineModule(FazDaneModule):
                             "Macro Score": h["sub_scores"]["macro_event_score"]
                         })
                     df_hist = pd.DataFrame(hist_rows).iloc[::-1]  # Newest first
-                    st.dataframe(df_hist, use_container_width=True, hide_index=True)
+                    st.dataframe(df_hist, width="stretch", hide_index=True)
                 else:
                     st.info("No historical runs found for this ticker. Runs will be saved as you fetch volatility data.")
 
@@ -1909,11 +1909,11 @@ class VolatilityEngineModule(FazDaneModule):
 
                             chart_col1, chart_col2, chart_col3 = st.columns(3)
                             with chart_col1:
-                                st.plotly_chart(fig_dec, use_container_width=True)
+                                st.plotly_chart(fig_dec, width="stretch")
                             with chart_col2:
-                                st.plotly_chart(fig_vol, use_container_width=True)
+                                st.plotly_chart(fig_vol, width="stretch")
                             with chart_col3:
-                                st.plotly_chart(fig_idx, use_container_width=True)
+                                st.plotly_chart(fig_idx, width="stretch")
 
                             # ------------------------------------------------
                             # STATISTICS TABLES ROW (3 COLUMNS)
@@ -2206,7 +2206,7 @@ class VolatilityEngineModule(FazDaneModule):
                                         height=340,
                                         margin=dict(l=10, r=10, t=50, b=20)
                                     )
-                                    st.plotly_chart(scatter_fig, use_container_width=True)
+                                    st.plotly_chart(scatter_fig, width="stretch")
                                     st.caption(f"🟢 **Diamonds with green borders** represent current calendar year ({cur_yr}) activity. **Circles** represent previous years.")
 
                                 with adv_col2:
@@ -2239,11 +2239,11 @@ class VolatilityEngineModule(FazDaneModule):
                                         height=340,
                                         margin=dict(l=10, r=10, t=50, b=20)
                                     )
-                                    st.plotly_chart(timeline_fig, use_container_width=True)
+                                    st.plotly_chart(timeline_fig, width="stretch")
 
                                 st.markdown("---")
                                 st.markdown("#### 📋 Drawdown Alignment Data Ledger (Complete Set)")
-                                st.dataframe(df_events, use_container_width=True, hide_index=True)
+                                st.dataframe(df_events, width="stretch", hide_index=True)
 
                                 # Export CSV button
                                 csv_data = df_events.to_csv(index=False)
@@ -2252,7 +2252,7 @@ class VolatilityEngineModule(FazDaneModule):
                                     data=csv_data,
                                     file_name=f"{dd_ticker}_historical_drawdown_analysis.csv",
                                     mime="text/csv",
-                                    use_container_width=True,
+                                    width="stretch",
                                     key="ve_export_dd_csv"
                                 )
                         else:
@@ -2301,7 +2301,7 @@ class VolatilityEngineModule(FazDaneModule):
             with col_info:
                 st.caption(f"💾 **Local Database Cache Status**: {vix_db_count:,} VIX records stored from **{vix_db_start}** to **{vix_db_end}**")
             with col_btn:
-                if st.button("🔄 Refresh VIX Data", use_container_width=True, type="secondary"):
+                if st.button("🔄 Refresh VIX Data", width="stretch", type="secondary"):
                     with st.spinner("Downloading latest VIX data..."):
                         try:
                             # Use max date from DB to start downloading, fallback to 1990-01-01
@@ -2648,7 +2648,7 @@ class VolatilityEngineModule(FazDaneModule):
                             margin=dict(l=0, r=0, t=40, b=0),
                             height=360
                         )
-                        st.plotly_chart(fig_vix_seas, use_container_width=True)
+                        st.plotly_chart(fig_vix_seas, width="stretch")
                         st.caption("Historically, VIX hits its lowest average levels in June/July (summer doldrums) and December (holiday crush), and peaks in September/October (autumn equity sell-offs).")
                         
                     with c_vix2:
@@ -2671,7 +2671,7 @@ class VolatilityEngineModule(FazDaneModule):
                             margin=dict(l=0, r=0, t=40, b=0),
                             height=360
                         )
-                        st.plotly_chart(fig_vix_reg, use_container_width=True)
+                        st.plotly_chart(fig_vix_reg, width="stretch")
                         st.caption("Historically, VIX spends over 50% of its trading days between 12 and 20 (Low to Normal), and only is in the Panic (>30) regime 6-7% of the time.")
                         
                     st.markdown("---")
@@ -2690,7 +2690,7 @@ class VolatilityEngineModule(FazDaneModule):
                                     'std': 'Std Dev',
                                     'count': 'Sample Days'
                                 }),
-                                use_container_width=True,
+                                width="stretch",
                                 hide_index=True
                             )
                             st.caption("Analyzes VIX levels during option expiration weeks vs. standard weeks. Usually, VIX exhibits decay/crush during OpEx week as hedging rolls off.")
@@ -2717,7 +2717,7 @@ class VolatilityEngineModule(FazDaneModule):
                                 margin=dict(l=0, r=0, t=40, b=0),
                                 height=300
                             )
-                            st.plotly_chart(fig_opex_box, use_container_width=True)
+                            st.plotly_chart(fig_opex_box, width="stretch")
                             
                 with vix_sub2:
                     # Calculations for Selected Period Max, Min, Mean, Std Dev
@@ -2843,7 +2843,7 @@ class VolatilityEngineModule(FazDaneModule):
                         margin=dict(l=0, r=0, t=40, b=0),
                         height=400
                     )
-                    st.plotly_chart(fig_vix_bands, use_container_width=True)
+                    st.plotly_chart(fig_vix_bands, width="stretch")
                     st.caption("The normal range represents where VIX resides ~68% of the time (shaded region). Trades entering near the +/- 1 SD bands have a high statistical likelihood of mean-reversion, while +/- 2 SD lines denote extreme volatility bounds.")
                     
                     st.markdown("---")
@@ -2896,7 +2896,7 @@ class VolatilityEngineModule(FazDaneModule):
                             height=360,
                             barmode='group'
                         )
-                        st.plotly_chart(fig_wd, use_container_width=True)
+                        st.plotly_chart(fig_wd, width="stretch")
                         
                     with c_wd2:
                         st.markdown("""
@@ -3064,7 +3064,7 @@ class VolatilityEngineModule(FazDaneModule):
                             height=400,
                             barmode='overlay'
                         )
-                        st.plotly_chart(fig_dist, use_container_width=True)
+                        st.plotly_chart(fig_dist, width="stretch")
                         
                         # Show stats breakdown
                         st.markdown("#### Distribution Metrics Breakdown")
@@ -3095,7 +3095,7 @@ class VolatilityEngineModule(FazDaneModule):
                                 "REJECTED (Leptokurtic/Skewed)" if jb_nop_p < 0.05 else "Accepted (Normal)"
                             ]
                         }
-                        st.dataframe(pd.DataFrame(stats_data), use_container_width=True, hide_index=True)
+                        st.dataframe(pd.DataFrame(stats_data), width="stretch", hide_index=True)
                         
                         # Probability thresholds (Surprise Insights)
                         st.markdown("#### 🎯 Quantitative Trading Probabilities (Empirical)")

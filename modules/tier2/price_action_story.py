@@ -277,7 +277,7 @@ class PriceActionStoryModule(FazDaneModule):
         st.session_state["pa_lookback_days"] = lookback
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        scan_clicked = st.button("📊 Analyze Price Action", use_container_width=True, type="primary")
+        scan_clicked = st.button("📊 Analyze Price Action", width="stretch", type="primary")
         
         if scan_clicked or "pa_scanned_data" not in st.session_state:
             st.session_state["pa_trigger_scan"] = True
@@ -462,7 +462,7 @@ class PriceActionStoryModule(FazDaneModule):
                     height=200,
                     showlegend=True
                 )
-                st.plotly_chart(fig_donut, use_container_width=True, key="market_donut")
+                st.plotly_chart(fig_donut, width="stretch", key="market_donut")
 
             st.divider()
             
@@ -687,7 +687,7 @@ class PriceActionStoryModule(FazDaneModule):
                         height=500,
                         showlegend=False
                     )
-                    st.plotly_chart(fig, use_container_width=True, key="stage_rotational_matrix")
+                    st.plotly_chart(fig, width="stretch", key="stage_rotational_matrix")
                 else:
                     st.warning("No stage rotation data to plot.")
                     
@@ -787,7 +787,7 @@ class PriceActionStoryModule(FazDaneModule):
             except AttributeError:
                 styled_table_df = table_df.style.applymap(color_stage_cell, subset=["Stage"]).applymap(color_fdts_cell, subset=["FDTS"])
                 
-            st.dataframe(styled_table_df, use_container_width=True, hide_index=True)
+            st.dataframe(styled_table_df, width="stretch", hide_index=True)
 
         # =================================================================
         # TAB 4: Option Calendar Candidate Funnel
@@ -895,7 +895,7 @@ class PriceActionStoryModule(FazDaneModule):
                     except AttributeError:
                         styled_candidates = df_candidates.style.applymap(color_stage_cell, subset=["Stage"]).applymap(color_fdts_cell, subset=["FDTS"])
                     
-                    st.dataframe(styled_candidates, use_container_width=True, hide_index=True)
+                    st.dataframe(styled_candidates, width="stretch", hide_index=True)
 
         # =================================================================
         # TAB 5: Ticker Story Detail
@@ -1060,7 +1060,7 @@ class PriceActionStoryModule(FazDaneModule):
                     margin=dict(l=10, r=10, t=40, b=10),
                     height=500
                 )
-                st.plotly_chart(fig_cand, use_container_width=True, key="detail_candlestick")
+                st.plotly_chart(fig_cand, width="stretch", key="detail_candlestick")
                 
                 # Indicator Subplots: Volume/VPR & RSI/MACD & RS & CVD & ADX
                 sub1, sub2 = st.columns(2)
@@ -1077,7 +1077,7 @@ class PriceActionStoryModule(FazDaneModule):
                         font=dict(color="#f8fafc"), xaxis=dict(gridcolor="#1e293b"), yaxis=dict(gridcolor="#1e293b", range=[0.3, 1.1]),
                         height=250, margin=dict(l=10, r=10, t=35, b=10)
                     )
-                    st.plotly_chart(fig_vpr, use_container_width=True, key="detail_vpr")
+                    st.plotly_chart(fig_vpr, width="stretch", key="detail_vpr")
                     
                     # 2. Relative Strength Chart
                     fig_rs = go.Figure()
@@ -1090,7 +1090,7 @@ class PriceActionStoryModule(FazDaneModule):
                         font=dict(color="#f8fafc"), xaxis=dict(gridcolor="#1e293b"), yaxis=dict(gridcolor="#1e293b"),
                         height=250, margin=dict(l=10, r=10, t=35, b=10)
                     )
-                    st.plotly_chart(fig_rs, use_container_width=True, key="detail_rs")
+                    st.plotly_chart(fig_rs, width="stretch", key="detail_rs")
                     
                 with sub2:
                     # 3. Momentum Chart
@@ -1105,7 +1105,7 @@ class PriceActionStoryModule(FazDaneModule):
                         font=dict(color="#f8fafc"), xaxis=dict(gridcolor="#1e293b"), yaxis=dict(gridcolor="#1e293b", range=[10, 90]),
                         height=250, margin=dict(l=10, r=10, t=35, b=10)
                     )
-                    st.plotly_chart(fig_rsi, use_container_width=True, key="detail_rsi_plot")
+                    st.plotly_chart(fig_rsi, width="stretch", key="detail_rsi_plot")
                     
                     # 4. CVD Divergence Chart
                     fig_cvd = go.Figure()
@@ -1118,7 +1118,7 @@ class PriceActionStoryModule(FazDaneModule):
                         font=dict(color="#f8fafc"), xaxis=dict(gridcolor="#1e293b"), yaxis=dict(gridcolor="#1e293b"),
                         height=250, margin=dict(l=10, r=10, t=35, b=10)
                     )
-                    st.plotly_chart(fig_cvd, use_container_width=True, key="detail_cvd")
+                    st.plotly_chart(fig_cvd, width="stretch", key="detail_cvd")
 
         # =================================================================
         # TAB 6: Backtest Lab
@@ -1181,6 +1181,6 @@ class PriceActionStoryModule(FazDaneModule):
                                 "Win Rate (>0)": f"{win_rate:.1f}%"
                             })
                             
-                    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(summary_rows), width="stretch", hide_index=True)
                 else:
                     st.warning("Not enough historical data points to perform the backtest simulation.")

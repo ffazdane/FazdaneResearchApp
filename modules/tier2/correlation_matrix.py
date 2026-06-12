@@ -767,7 +767,7 @@ class CorrelationMatrixModule(FazDaneModule):
 
         st.divider()
         if self.run_source == "Run Live calculations (yfinance)":
-            if st.button("Run Live Calculations", use_container_width=True, type="primary", key="corr_refresh"):
+            if st.button("Run Live Calculations", width="stretch", type="primary", key="corr_refresh"):
                 fetch_close_prices.clear()
                 st.rerun()
 
@@ -855,7 +855,7 @@ class CorrelationMatrixModule(FazDaneModule):
             data=report_bytes,
             file_name=f"correlation_report_{self.universe_name.replace(' ', '_').lower()}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
             type="primary"
         )
         
@@ -919,12 +919,12 @@ class CorrelationMatrixModule(FazDaneModule):
                     automargin=True,
                 ),
             )
-            st.plotly_chart(fig, use_container_width=True, theme=None)
+            st.plotly_chart(fig, width="stretch", theme=None)
 
             st.markdown("### Correlation Table")
             st.dataframe(
                 format_correlation_table(display_corr),
-                use_container_width=True,
+                width="stretch",
                 height=min(760, 38 * (len(display_corr.index) + 1)),
             )
 
@@ -933,7 +933,7 @@ class CorrelationMatrixModule(FazDaneModule):
                 data=display_corr.to_csv(index=True),
                 file_name=f"correlations_{self.universe_name.replace(' ', '_').lower()}.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
                 key="corr_csv_dl"
             )
 
@@ -1001,7 +1001,7 @@ class CorrelationMatrixModule(FazDaneModule):
                         .map(style_fdts, subset=["FDTS"])
                         .map(style_strength, subset=["Strength"])
                         .format({"Corr_SPY": "{:.2f}", "Corr_QQQ": "{:.2f}", "Corr_IWM": "{:.2f}", "Composite": "{:.2f}", "Bull_Priority": "{:.1f}", "RealizedVol_20d": "{:.1f}%"}),
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True
                     )
                 else:
@@ -1018,7 +1018,7 @@ class CorrelationMatrixModule(FazDaneModule):
                         .map(style_fdts, subset=["FDTS"])
                         .map(style_strength, subset=["Strength"])
                         .format({"Corr_SPY": "{:.2f}", "Corr_QQQ": "{:.2f}", "Corr_IWM": "{:.2f}", "Composite": "{:.2f}", "Selloff_Priority": "{:.1f}", "RealizedVol_20d": "{:.1f}%"}),
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True
                     )
                 else:
@@ -1035,7 +1035,7 @@ class CorrelationMatrixModule(FazDaneModule):
                         .map(style_fdts, subset=["FDTS"])
                         .map(style_strength, subset=["Strength"])
                         .format({"Corr_SPY": "{:.2f}", "Corr_QQQ": "{:.2f}", "Corr_IWM": "{:.2f}", "Composite": "{:.2f}", "Idiosyncratic_Score": "{:.2f}", "Chop_Priority": "{:.1f}", "RealizedVol_20d": "{:.1f}%"}),
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True
                     )
                 else:
@@ -1055,7 +1055,7 @@ class CorrelationMatrixModule(FazDaneModule):
                     "RealizedVol_20d": "{:.1f}%", "Bull_Priority": "{:.1f}", "Selloff_Priority": "{:.1f}",
                     "Chop_Priority": "{:.1f}"
                 }),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
 
@@ -1065,7 +1065,7 @@ class CorrelationMatrixModule(FazDaneModule):
                 .style.map(color_correlation, subset=["Avg_Composite", "Avg_SPY", "Avg_QQQ", "Avg_IWM"])
                 .map(color_bucket, subset=["Bucket"])
                 .format({"Avg_Composite": "{:.3f}", "Avg_SPY": "{:.3f}", "Avg_QQQ": "{:.3f}", "Avg_IWM": "{:.3f}"}),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
 
@@ -1129,7 +1129,7 @@ class CorrelationMatrixModule(FazDaneModule):
                     margin=dict(l=40, r=20, t=50, b=45),
                     xaxis=dict(tickangle=-45)
                 )
-                st.plotly_chart(fig_bar, use_container_width=True, theme=None)
+                st.plotly_chart(fig_bar, width="stretch", theme=None)
 
                 st.markdown("### 🏆 Hedge Performance Summary")
                 st.dataframe(
@@ -1143,7 +1143,7 @@ class CorrelationMatrixModule(FazDaneModule):
                         "Best_Day_%": "{:.2f}%", "Worst_Day_%": "{:.2f}%", "Std_%": "{:.3f}%",
                         "Total_Cum_%": "{:.2f}%", "Hedge_Score": "{:.1f}"
                     }),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True
                 )
 
@@ -1155,7 +1155,7 @@ class CorrelationMatrixModule(FazDaneModule):
                         "SPY_%": "{:.2f}%", "QQQ_%": "{:.2f}%", "IWM_%": "{:.2f}%",
                         "Mkt_Avg_%": "{:.2f}%", "Pct_Tickers_Up": "{:.1f}%"
                     }),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True
                 )
 

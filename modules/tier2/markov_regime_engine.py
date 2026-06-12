@@ -57,7 +57,7 @@ class MarkovRegimeEngineModule(FazDaneModule):
         self.n_states = st.selectbox("HMM Hidden States", [3, 4, 5], index=0, key="mre_n_states")
         
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        self.run_engine = st.button("Execute Regime Scan", use_container_width=True, type="primary", key="mre_run_btn")
+        self.run_engine = st.button("Execute Regime Scan", width="stretch", type="primary", key="mre_run_btn")
 
     def execute_regime_scan(self, universe_name=None, symbols=None, lookback_years=None, n_states=None, rerun=True, progress_bar=None, status_text=None):
         """Execute empirical and hidden Markov regime scan and save results to SQLite."""
@@ -218,7 +218,7 @@ class MarkovRegimeEngineModule(FazDaneModule):
             with c_info:
                 st.info(f"💾 **Using Processed Markov Models** | Data Saved: `{st.session_state['mre_last_saved_time']}` (UTC)")
             with c_action:
-                if st.button("🔄 Reprocess Universe", key="mre_force_reprocess", use_container_width=True, type="primary"):
+                if st.button("🔄 Reprocess Universe", key="mre_force_reprocess", width="stretch", type="primary"):
                     st.session_state["mre_scan_completed"] = False
                     st.session_state["mre_results"] = {}
                     st.session_state["mre_last_saved_time"] = None
@@ -228,7 +228,7 @@ class MarkovRegimeEngineModule(FazDaneModule):
         # Prompt for scan if no data exists and no scan has run
         if not st.session_state["mre_scan_completed"] and not should_reprocess:
             st.warning("⚠️ No processed regime model data found in database for this universe. You must run a fresh scan.")
-            if st.button("🚀 Execute Markov Regime Scan Now", key="mre_first_run_btn", use_container_width=True, type="primary"):
+            if st.button("🚀 Execute Markov Regime Scan Now", key="mre_first_run_btn", width="stretch", type="primary"):
                 st.session_state["mre_needs_reprocess"] = True
                 st.rerun()
             return
@@ -263,7 +263,7 @@ class MarkovRegimeEngineModule(FazDaneModule):
                 key="mre_selected_ticker"
             )
         with c2:
-            if st.button("Re-run Models", key="mre_rerun", use_container_width=True):
+            if st.button("Re-run Models", key="mre_rerun", width="stretch"):
                 st.session_state["mre_scan_completed"] = False
                 st.session_state["mre_needs_reprocess"] = True
                 st.rerun()
@@ -342,7 +342,7 @@ class MarkovRegimeEngineModule(FazDaneModule):
                 {"Horizon": "5-Day Forecast", "Bull (Long)": f"{forecast['bull_prob_5d']:.1%}", "Sideways (Neutral)": f"{forecast['sideways_prob_5d']:.1%}", "Bear (Short)": f"{forecast['bear_prob_5d']:.1%}"},
                 {"Horizon": "20-Day Forecast", "Bull (Long)": f"{forecast['bull_prob_20d']:.1%}", "Sideways (Neutral)": f"{forecast['sideways_prob_20d']:.1%}", "Bear (Short)": f"{forecast['bear_prob_20d']:.1%}"}
             ])
-            st.dataframe(f_df, use_container_width=True, hide_index=True)
+            st.dataframe(f_df, width="stretch", hide_index=True)
             
             # Backtest Strategy Summary
             st.markdown("#### Backtest Validation Metrics (Walk-Forward)")
@@ -358,11 +358,11 @@ class MarkovRegimeEngineModule(FazDaneModule):
             with col1:
                 # Heatmap
                 fig_hm = generate_transition_heatmap(res["trans_matrix"], res["state_list"])
-                st.plotly_chart(fig_hm, use_container_width=True, key="mre_hm_plot")
+                st.plotly_chart(fig_hm, width="stretch", key="mre_hm_plot")
             with col2:
                 # Timeline
                 fig_tl = generate_regime_timeline(df, selected_ticker)
-                st.plotly_chart(fig_tl, use_container_width=True, key="mre_tl_plot")
+                st.plotly_chart(fig_tl, width="stretch", key="mre_tl_plot")
                 
         with tab3:
             st.markdown("### Historical Probability Trend Analysis")
@@ -370,7 +370,7 @@ class MarkovRegimeEngineModule(FazDaneModule):
             hist_forecasts = self._calculate_historical_rolling_probabilities(df)
             if not hist_forecasts.empty:
                 fig_prob = generate_probability_trend(hist_forecasts, selected_ticker)
-                st.plotly_chart(fig_prob, use_container_width=True, key="mre_prob_trend_plot")
+                st.plotly_chart(fig_prob, width="stretch", key="mre_prob_trend_plot")
             else:
                 st.info("Insufficient historical price history to calculate rolling probability trends.")
 
@@ -460,7 +460,7 @@ class MarkovRegimeEngineModule(FazDaneModule):
                     "Stickiness": f"{sym_forecast['stickiness_score']:.1%}",
                     "Confirmation Score": round(sym_confirm, 1)
                 })
-            st.dataframe(pd.DataFrame(universe_matrix), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(universe_matrix), width="stretch", hide_index=True)
 
         with tab5:
             st.markdown("### Calendar Options Deployment Filter")
@@ -554,7 +554,7 @@ class MarkovRegimeEngineModule(FazDaneModule):
                     ],
                     axis=1
                 )
-                st.dataframe(styled_c_df, use_container_width=True, hide_index=True)
+                st.dataframe(styled_c_df, width="stretch", hide_index=True)
 
         with tab6:
             st.markdown("### 📘 Hidden Markov Model & Empirical Regime Engine Guide")

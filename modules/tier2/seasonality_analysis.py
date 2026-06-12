@@ -413,7 +413,7 @@ class SeasonalityAnalysisModule(FazDaneModule):
         st.caption("Holiday window: 5 trading days before and after")
         self.show_raw = st.checkbox("Show event detail tables", value=True, key="seasonality_raw")
 
-        if st.button("Refresh Seasonality", use_container_width=True, type="primary", key="seasonality_refresh"):
+        if st.button("Refresh Seasonality", width="stretch", type="primary", key="seasonality_refresh"):
             fetch_seasonality_data.clear()
             st.rerun()
 
@@ -459,10 +459,10 @@ class SeasonalityAnalysisModule(FazDaneModule):
         )
 
         with tab_month:
-            st.plotly_chart(plot_monthly_scatter(df, symbol), use_container_width=True)
+            st.plotly_chart(plot_monthly_scatter(df, symbol), width="stretch")
             left, right = st.columns(2)
             with left:
-                st.plotly_chart(plot_monthly_bars(stats), use_container_width=True)
+                st.plotly_chart(plot_monthly_bars(stats), width="stretch")
             with right:
                 fig_box = px.box(
                     df,
@@ -473,9 +473,9 @@ class SeasonalityAnalysisModule(FazDaneModule):
                     title="Daily % Change Distribution by Month",
                 )
                 fig_box.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=420)
-                st.plotly_chart(fig_box, use_container_width=True)
-            st.plotly_chart(plot_pos_neg(stats), use_container_width=True)
-            st.dataframe(stats.round(2), use_container_width=True, hide_index=True)
+                st.plotly_chart(fig_box, width="stretch")
+            st.plotly_chart(plot_pos_neg(stats), width="stretch")
+            st.dataframe(stats.round(2), width="stretch", hide_index=True)
 
         with tab_cycles:
             cycle_df = df.copy()
@@ -581,8 +581,8 @@ class SeasonalityAnalysisModule(FazDaneModule):
                 )
                 fig_weekday.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
                 fig_weekday.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=380)
-                st.plotly_chart(fig_weekday, use_container_width=True)
-                st.dataframe(weekday_stats.round(2), use_container_width=True, hide_index=True)
+                st.plotly_chart(fig_weekday, width="stretch")
+                st.dataframe(weekday_stats.round(2), width="stretch", hide_index=True)
 
             with sub_tabs[1]:
                 st.markdown("### Average Week Performance")
@@ -689,7 +689,7 @@ class SeasonalityAnalysisModule(FazDaneModule):
                             xaxis=dict(title="ISO Week", tickmode="linear", tick0=start_wk, dtick=1),
                             yaxis=dict(title="Avg Daily Return (%)")
                         )
-                        st.plotly_chart(fig_q, use_container_width=True)
+                        st.plotly_chart(fig_q, width="stretch")
 
                     df_table = pd.DataFrame({
                         "ISOWeek": range(1, 53),
@@ -700,7 +700,7 @@ class SeasonalityAnalysisModule(FazDaneModule):
                         f"{current_year} Win Rate %": cy_aligned["Win_Rate"].round(1),
                         f"{current_year} Days": cy_aligned["Events"].fillna(0).astype(int),
                     })
-                    st.dataframe(df_table, use_container_width=True, hide_index=True)
+                    st.dataframe(df_table, width="stretch", hide_index=True)
                 else:
                     fig_week = px.bar(
                         weekly_stats,
@@ -715,8 +715,8 @@ class SeasonalityAnalysisModule(FazDaneModule):
                         fig_week.add_vline(x=current_week, line_dash="dash", line_color="#38bdf8")
                     fig_week.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
                     fig_week.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=440)
-                    st.plotly_chart(fig_week, use_container_width=True)
-                    st.dataframe(weekly_stats.drop(columns=["Current"]).round(2), use_container_width=True, hide_index=True)
+                    st.plotly_chart(fig_week, width="stretch")
+                    st.dataframe(weekly_stats.drop(columns=["Current"]).round(2), width="stretch", hide_index=True)
 
             with sub_tabs[2]:
                 st.markdown("### Average Month Performance")
@@ -732,8 +732,8 @@ class SeasonalityAnalysisModule(FazDaneModule):
                 )
                 fig_month_perf.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
                 fig_month_perf.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=420)
-                st.plotly_chart(fig_month_perf, use_container_width=True)
-                st.dataframe(monthly_perf.round(2), use_container_width=True, hide_index=True)
+                st.plotly_chart(fig_month_perf, width="stretch")
+                st.dataframe(monthly_perf.round(2), width="stretch", hide_index=True)
 
             with sub_tabs[3]:
                 st.markdown("### Yearly Analysis by Election Cycle")
@@ -751,12 +751,12 @@ class SeasonalityAnalysisModule(FazDaneModule):
                     )
                     fig_cycle.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
                     fig_cycle.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=420)
-                    st.plotly_chart(fig_cycle, use_container_width=True)
-                    st.dataframe(cycle_summary.round(2), use_container_width=True, hide_index=True)
+                    st.plotly_chart(fig_cycle, width="stretch")
+                    st.dataframe(cycle_summary.round(2), width="stretch", hide_index=True)
                     st.markdown("#### Year-by-Year Returns")
                     st.dataframe(
                         yearly_cycle[["Year", "ElectionCycle", "YearReturnPct", "TradingDays", "StartDate", "EndDate"]].round(2),
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                     )
 
@@ -775,7 +775,7 @@ class SeasonalityAnalysisModule(FazDaneModule):
                     )
                     fig_quarter.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
                     fig_quarter.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=360)
-                    st.plotly_chart(fig_quarter, use_container_width=True)
+                    st.plotly_chart(fig_quarter, width="stretch")
                 with extra_right:
                     st.markdown("#### Strongest / Weakest Calendar Buckets")
                     leaders = pd.DataFrame(
@@ -788,7 +788,7 @@ class SeasonalityAnalysisModule(FazDaneModule):
                             {"Bucket": "Worst Month", "Value": str(monthly_perf.sort_values("Avg_ReturnPct", ascending=True).iloc[0]["Month"]), "Avg %": monthly_perf["Avg_ReturnPct"].min()},
                         ]
                     )
-                    st.dataframe(leaders.round(2), use_container_width=True, hide_index=True)
+                    st.dataframe(leaders.round(2), width="stretch", hide_index=True)
 
         with tab_edge:
             edge_summary = pd.DataFrame(
@@ -797,7 +797,7 @@ class SeasonalityAnalysisModule(FazDaneModule):
                     {"Event": "Last Trading Day", **event_stats(last_days).to_dict()},
                 ]
             )
-            st.dataframe(edge_summary.round(2), use_container_width=True, hide_index=True)
+            st.dataframe(edge_summary.round(2), width="stretch", hide_index=True)
             edge_df = pd.concat([first_days, last_days], ignore_index=True)
 
             if not edge_monthly.empty:
@@ -824,9 +824,9 @@ class SeasonalityAnalysisModule(FazDaneModule):
                     plot_bgcolor="#0d1b2e",
                     height=480,
                 )
-                st.plotly_chart(fig_edge_month, use_container_width=True)
+                st.plotly_chart(fig_edge_month, width="stretch")
 
-                st.dataframe(edge_monthly.round(2), use_container_width=True, hide_index=True)
+                st.dataframe(edge_monthly.round(2), width="stretch", hide_index=True)
 
                 best_first = edge_monthly[edge_monthly["Event"] == "First Trading Day"].sort_values("Avg_ReturnPct", ascending=False).head(1)
                 best_last = edge_monthly[edge_monthly["Event"] == "Last Trading Day"].sort_values("Avg_ReturnPct", ascending=False).head(1)
@@ -852,7 +852,7 @@ class SeasonalityAnalysisModule(FazDaneModule):
                 title="First vs Last Trading Day Monthly Return Distribution",
             )
             fig_edge.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=500)
-            st.plotly_chart(fig_edge, use_container_width=True)
+            st.plotly_chart(fig_edge, width="stretch")
 
         with tab_weekend:
             if lw_rows.empty:
@@ -901,8 +901,8 @@ class SeasonalityAnalysisModule(FazDaneModule):
                 )
                 fig_lw.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
                 fig_lw.update_layout(template="plotly_dark", paper_bgcolor="#0d1b2e", plot_bgcolor="#0d1b2e", height=480)
-                st.plotly_chart(fig_lw, use_container_width=True)
-                st.dataframe(chart_summary.round(2), use_container_width=True, hide_index=True)
+                st.plotly_chart(fig_lw, width="stretch")
+                st.dataframe(chart_summary.round(2), width="stretch", hide_index=True)
 
         with tab_dist:
             st.markdown("### Return Distribution & Normal Fit Study")
@@ -1058,7 +1058,7 @@ class SeasonalityAnalysisModule(FazDaneModule):
                     height=420,
                     barmode='overlay'
                 )
-                st.plotly_chart(fig_dist_s, use_container_width=True)
+                st.plotly_chart(fig_dist_s, width="stretch")
                 
                 # Metrics Table
                 st.markdown("#### Distribution Statistics Comparison")
@@ -1089,7 +1089,7 @@ class SeasonalityAnalysisModule(FazDaneModule):
                         "Rejected (Non-Normal)" if jb_b_p < 0.05 else "Accepted (Normal)"
                     ]
                 }
-                st.dataframe(pd.DataFrame(dist_stats_table), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(dist_stats_table), width="stretch", hide_index=True)
                 
                 # Empirical Win Rates and Shock Probabilities
                 st.markdown("#### 🎯 Empirical Return Probabilities & Edge Comparison")
@@ -1153,21 +1153,21 @@ class SeasonalityAnalysisModule(FazDaneModule):
         with tab_data:
             if self.show_raw:
                 st.markdown("### First Trading Day Events")
-                st.dataframe(first_days[["DateStr", "Month", "ReturnPct", "Close"]].round(2), use_container_width=True, hide_index=True)
+                st.dataframe(first_days[["DateStr", "Month", "ReturnPct", "Close"]].round(2), width="stretch", hide_index=True)
                 st.markdown("### Last Trading Day Events")
-                st.dataframe(last_days[["DateStr", "Month", "ReturnPct", "Close"]].round(2), use_container_width=True, hide_index=True)
+                st.dataframe(last_days[["DateStr", "Month", "ReturnPct", "Close"]].round(2), width="stretch", hide_index=True)
                 st.markdown("### Long Weekend Event Rows")
                 display_cols = ["Holiday", "AnchorDate", "TradingDayOffset", "DateStr", "ReturnPct", "Close"]
                 if not lw_rows.empty:
-                    st.dataframe(lw_rows[display_cols].round(2), use_container_width=True, hide_index=True)
+                    st.dataframe(lw_rows[display_cols].round(2), width="stretch", hide_index=True)
                 else:
-                    st.dataframe(lw_rows, use_container_width=True, hide_index=True)
+                    st.dataframe(lw_rows, width="stretch", hide_index=True)
             st.download_button(
                 "Download Daily Seasonality CSV",
                 data=df.to_csv(index=False),
                 file_name=f"seasonality_{symbol.replace('^', '').lower()}_{self.lookback_years}y.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )
 
     def _default_index_universe(self):

@@ -168,14 +168,21 @@ Minor CPU win, but it also makes the CSS testable and keeps app.py readable.
 
 ---
 
-## Priority order
+## Implementation status (2026-06-12)
 
-1. ~~Sidebar bug~~ (fixed)
-2. §3 remove the extra navigation rerun — biggest perceived speed win
-3. §6 `use_container_width` bulk replace — prevents future breakage
-4. §7 pin Streamlit
-5. §4 non-blocking DB restore
-6. §2 rename `pages/` → `views/`
-7. §8/§9 dispatcher registry + cached CSS (refactor, do together)
-8. §5 Plotly templates
-9. §10 housekeeping
+| # | Recommendation | Status |
+|---|---|---|
+| 1 | Sidebar bug | DONE — localStorage reset + auto-expand watchdog in app.py |
+| 2 | `pages/` collision | DONE — renamed to `views/`, import updated, auto-nav CSS kept as belt-and-braces |
+| 3 | Extra navigation rerun | DONE — "Loading module..." intermediate rerun removed |
+| 4 | Blocking DB restore | DONE — startup now uses `force=False` (skips download when DBs exist on disk); forced restore stays available in the sidebar DB panel |
+| 5 | Plotly theming | DONE — custom "fazdane" template registered per theme and set as `pio.templates.default`; legacy `#0d1b2e` sentinel patch kept (20 modules still hard-code it) but now logs instead of silently swallowing errors. Remove the patch once modules stop hard-coding the color. |
+| 6 | `use_container_width` | DONE — 33 files bulk-replaced with `width="stretch"` (all usages were `=True`; st.plotly_chart/button/dataframe/image/pyplot all support it in 1.55) |
+| 7 | Pin dependencies | DONE — requirements.txt pinned to the versions installed in the bundled runtime. NOTE: `scikit-learn` and `st-img-pastebutton` are referenced by 5 module files but NOT installed in `.python/Python312` — install them if those modules are used. |
+| 8 | Dispatcher registry | DONE — `MODULE_REGISTRY` is the single source of truth; sidebar radios, tier menus, and home-dashboard tabs are generated from it; uniform lazy import + error handling via `run_module()` |
+| 9 | Cached theme CSS | DONE — `build_css()` with `@st.cache_data`, built once per theme |
+| 10 | Housekeeping | PARTIAL — `.venv-1/` added to .gitignore. Still manual: move `.python/`, `logs/`, `Preparation Files/` out of the OneDrive-synced folder; rotate any keys ever committed. |
+
+Home-dashboard widget keys changed (generated as `macro_<slug>`); these are
+stateless buttons so no user data is affected. The home-tab module order now
+matches the sidebar order exactly.

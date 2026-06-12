@@ -105,7 +105,7 @@ class FazDaneAuthenticator:
         with col:
             # ── Logo ──────────────────────────────────────────────
             try:
-                st.image("assets/logo.png", use_container_width=True)
+                st.image("assets/logo.png", width="stretch")
             except Exception:
                 st.markdown(
                     "<h1 style='text-align:center;color:#3ab54a;font-size:42px;'>Research & Trading Intelligence Platform</h1>",
@@ -159,7 +159,7 @@ class FazDaneAuthenticator:
 
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-            if st.button("Sign In →", use_container_width=True, type="primary", key="login_btn"):
+            if st.button("Sign In →", width="stretch", type="primary", key="login_btn"):
                 if not username.strip() or not password.strip():
                     st.error("Please enter both username and password.")
                     return
