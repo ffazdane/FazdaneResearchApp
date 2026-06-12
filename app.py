@@ -439,21 +439,14 @@ st.markdown(
             background: var(--sidebar-bg);
             border-right: 1px solid var(--border-color);
         }}
-        /* Force sidebar to be open and layout correctly even if Streamlit thinks it is collapsed */
-        [data-testid="stAppViewContainer"][data-sidebar-collapsed="true"] [data-testid="stSidebar"] {{
-            transform: translate3d(0, 0, 0) !important;
-            margin-left: 0 !important;
-            width: 21rem !important;
-            display: flex !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-        }}
-        [data-testid="stAppViewContainer"][data-sidebar-collapsed="true"] [data-testid="stSidebar"] * {{
-            visibility: visible !important;
-            opacity: 1 !important;
-        }}
-        [data-testid="stAppViewContainer"][data-sidebar-collapsed="true"] [data-testid="stMain"] {{
-            margin-left: 21rem !important;
+        /* NOTE: the old [data-sidebar-collapsed] force-open hack was removed.
+           That attribute does not exist in Streamlit 1.55, so it was dead CSS.
+           Sidebar auto-expand is now handled by the JS watchdog injected below. */
+
+        /* Hide Streamlit's automatic multipage nav (pages/auth.py would otherwise
+           appear as a clickable "auth" page at the top of the sidebar) */
+        [data-testid="stSidebarNav"] {{
+            display: none !important;
         }}
         [data-testid="stSidebar"] * {{ color: var(--text-color) !important; }}
         [data-testid="stSidebar"] .stButton > button {{
@@ -662,6 +655,59 @@ st.markdown(
     </style>
     """,
     unsafe_allow_html=True,
+)
+
+#
+# SIDEBAR AUTO-EXPAND WATCHDOG
+#
+# Bug: Streamlit >= 1.3x persists the sidebar collapsed/expanded state in the
+# browser's localStorage (key "stSidebarCollapsed-<appId>"), and that saved
+# value OVERRIDES initial_sidebar_state="expanded" on every page load.
+# Once the sidebar gets collapsed once (e.g. auto-collapse in a narrow
+# preview iframe, or an accidental click), the app keeps opening with the
+# sidebar hidden until the user manually reloads/expands it.
+#
+# Fix: a tiny script that (1) clears the sticky "collapsed" flag from
+# localStorage and (2) for a few seconds after load, clicks Streamlit's own
+# expand control if the sidebar is still collapsed. Clicking the real button
+# keeps Streamlit's internal state consistent (no CSS layout hacks needed).
+#
+import streamlit.components.v1 as _components
+
+_components.html(
+    """
+    <script>
+    (function () {
+        try {
+            var doc = window.parent.document;
+            var ls = window.parent.localStorage;
+            // 1) Neutralize the sticky "collapsed" state Streamlit saves per app
+            for (var i = 0; i < ls.length; i++) {
+                var k = ls.key(i);
+                if (k && k.indexOf("stSidebarCollapsed") === 0 && ls.getItem(k) === "true") {
+                    ls.setItem(k, "false");
+                }
+            }
+            // 2) Watchdog: if the sidebar is collapsed or missing, click the
+            //    expand control. Retry for ~10s to survive slow first renders
+            //    inside preview iframes, then stop.
+            var attempts = 0;
+            var timer = setInterval(function () {
+                attempts += 1;
+                var sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+                var expanded = sidebar &&
+                    sidebar.getAttribute("aria-expanded") !== "false" &&
+                    sidebar.offsetWidth > 50;
+                if (expanded || attempts > 40) { clearInterval(timer); return; }
+                var btn = doc.querySelector('[data-testid="stExpandSidebarButton"] button') ||
+                          doc.querySelector('[data-testid="stExpandSidebarButton"]');
+                if (btn) { btn.click(); }
+            }, 250);
+        } catch (e) { /* sandboxed iframe or storage blocked - ignore */ }
+    })();
+    </script>
+    """,
+    height=0,
 )
 
 #
