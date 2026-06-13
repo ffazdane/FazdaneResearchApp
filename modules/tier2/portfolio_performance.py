@@ -938,11 +938,13 @@ class PortfolioPerformanceModule(FazDaneModule):
     def _leaderboard(self, title: str, df: pd.DataFrame, column: str, color: str, money: bool = False):
         rows = []
         for _, row in df.iterrows():
-            value = fmt_money(row[column]) if money else f"{row[column]:,.2f}"
+            val = row[column]
+            val_color = BRAND["green"] if val >= 0 else BRAND["red"]
+            value = fmt_money(val) if money else f"{val:,.2f}"
             rows.append(
                 f"<div style='display:flex;justify-content:space-between;gap:16px;margin:4px 0;'>"
                 f"<span style='color:{BRAND['text']};font-weight:600;'>{row['ticker']}</span>"
-                f"<span style='color:{color};font-weight:700;'>{value}</span>"
+                f"<span style='color:{val_color};font-weight:700;'>{value}</span>"
                 f"</div>"
             )
         st.markdown(

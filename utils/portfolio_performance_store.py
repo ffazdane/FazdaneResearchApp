@@ -1174,7 +1174,11 @@ def _extract_positions(text: str, account: str) -> pd.DataFrame:
             ticker = underlying
 
         is_ticker = bool(re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", ticker))
-        is_detail_row = ticker in {"CUSTOM", "CALENDAR", "VERTICAL", "NONE"}
+        is_detail_row = ticker in {
+            "CUSTOM", "CALENDAR", "VERTICAL", "DIAGONAL", "SINGLE", "DOUBLE",
+            "TRIPLE", "QUAD", "CONDOR", "BUTTERFLY", "STRADDLE", "STRANGLE",
+            "COLLAR", "COVERED", "NONE"
+        }
         if not is_ticker or is_detail_row:
             continue
 
@@ -1254,7 +1258,11 @@ def _extract_position_details(text: str, account: str) -> pd.DataFrame:
 
         option_match = option_pattern.match(instrument)
         is_ticker = bool(re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", instrument))
-        is_strategy = instrument in {"CUSTOM", "CALENDAR", "VERTICAL", "NONE"}
+        is_strategy = instrument in {
+            "CUSTOM", "CALENDAR", "VERTICAL", "DIAGONAL", "SINGLE", "DOUBLE",
+            "TRIPLE", "QUAD", "CONDOR", "BUTTERFLY", "STRADDLE", "STRANGLE",
+            "COLLAR", "COVERED", "NONE"
+        }
 
         row_type = "detail"
         strategy = current_strategy
