@@ -260,17 +260,17 @@ class PortfolioPerformanceModule(FazDaneModule):
             "Upload Broker CSVs (Schwab / Tastytrade)",
             type=["csv"],
             accept_multiple_files=True,
-            key="pp_csv_uploads",
+            key="portfolio_csv_uploads",
         )
         self.load_latest_saved = st.checkbox(
             "Use latest saved snapshot when no file is uploaded",
             value=True,
-            key="pp_use_latest",
+            key="portfolio_use_latest",
         )
         self.auto_save = st.checkbox(
             "Save parsed upload to daily database",
             value=True,
-            key="pp_auto_save",
+            key="portfolio_auto_save",
         )
 
         if st.button("🔄 Sync 'FazDane Portfolio'", key="pp_sync_universe_btn", width="stretch"):

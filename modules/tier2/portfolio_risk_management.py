@@ -1070,10 +1070,10 @@ class PortfolioRiskManagementModule(FazDaneModule):
             "Upload Broker CSVs (Schwab / Tastytrade)",
             type=["csv"],
             accept_multiple_files=True,
-            key="prm_csv_uploads",
+            key="portfolio_csv_uploads",
         )
-        self.load_latest_saved = st.checkbox("Use latest saved snapshot", value=True, key="prm_use_latest")
-        self.auto_save = st.checkbox("Save parsed upload", value=True, key="prm_auto_save")
+        self.load_latest_saved = st.checkbox("Use latest saved snapshot", value=True, key="portfolio_use_latest")
+        self.auto_save = st.checkbox("Save parsed upload", value=True, key="portfolio_auto_save")
 
         if st.button("🔄 Sync 'FazDane Portfolio'", key="prm_sync_universe_btn", width="stretch"):
             pos, det, meta, label = self._load_active_snapshot()
