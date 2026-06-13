@@ -355,7 +355,7 @@ def parse_tastytrade_position_details_csv(
         type_str = str(row.get("Type", "")).strip().upper()
 
         underlying = get_underlying_ticker(symbol)
-        if not underlying or underlying == "CASH":
+        if not underlying:
             continue
 
         dot = get_broker_dot(account)
@@ -374,8 +374,12 @@ def parse_tastytrade_position_details_csv(
         trade_price = parse_number(row.get("Trade Price"))
         mark_price = abs(parse_number(row.get("Mark")))
 
-        # Build Schwab-style instrument name (e.g., "100 5 JUN 26 240 CALL")
-        instrument = f"100 {formatted_exp} {strike:g} {call_put}" if type_str == "OPTION" else symbol
+        if underlying == "CASH":
+            instrument = "CASH"
+            trade_price = 1.0
+            mark_price = 1.0
+        else:
+            instrument = f"100 {formatted_exp} {strike:g} {call_put}" if type_str == "OPTION" else symbol
 
         pl_open = parse_money(row.get("P/L Open w/ Percent Bar"))
         pl_day = parse_money(row.get("P/L Day w/ Percent Bar"))
@@ -444,8 +448,7 @@ def parse_tastytrade_positions_csv(
             strategy = classify_option_strategy(group)
             details.loc[details["underlying"] == und_suffixed, "strategy"] = strategy
 
-    legs = details[details["row_type"] == "option_leg"].copy()
-    if legs.empty:
+    if details.empty:
         return pd.DataFrame(), {}
 
     raw_underlyings = {}
@@ -457,18 +460,32 @@ def parse_tastytrade_positions_csv(
             raw_underlyings[und] = last_px
 
     rows = []
-    grouped = legs.groupby("underlying")
+    grouped = details.groupby("underlying")
     for und_suffixed, group in grouped:
         und = clean_ticker_for_lookup(und_suffixed)
         underlying_px = raw_underlyings.get(und, 0.0)
-        strategy = group["strategy"].iloc[0] if "strategy" in group.columns else "Position Basket"
+        
+        option_legs = group[group["row_type"] == "option_leg"]
+        equity_legs = group[group["row_type"] == "equity_description"]
+        
+        if not option_legs.empty:
+            strategy = option_legs["strategy"].iloc[0] if "strategy" in option_legs.columns else "Position Basket"
+        else:
+            strategy = "Equity" if und != "CASH" else "Cash"
+            
+        opt_mv = (option_legs["quantity"] * option_legs["mark_price"] * 100.0).sum()
+        eq_mv = (equity_legs["quantity"] * equity_legs["mark_price"]).sum()
+        total_mv = opt_mv + eq_mv
+        
+        if und == "CASH":
+            total_mv = eq_mv
 
         rows.append({
             "account_group": strategy,
             "ticker": und_suffixed,
             "quantity": float(group["quantity"].sum()),
-            "mark_price": float(underlying_px),
-            "market_value": float((group["quantity"] * group["mark_price"] * 100).sum()),
+            "mark_price": float(underlying_px if und != "CASH" else 1.0),
+            "market_value": float(total_mv),
             "theta": float(group["theta"].sum()),
             "delta": float(group["delta"].sum()),
             "gamma": float(group["gamma"].sum()),
@@ -1170,7 +1187,9 @@ def _extract_positions(text: str, account: str) -> pd.DataFrame:
         
         # Resolve option leg symbols to their underlying ticker
         underlying = get_underlying_ticker(ticker)
-        if underlying and underlying != "CASH":
+        if underlying == "CASH":
+            ticker = "CASH"
+        elif underlying:
             ticker = underlying
 
         is_ticker = bool(re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", ticker))
@@ -1255,6 +1274,10 @@ def _extract_position_details(text: str, account: str) -> pd.DataFrame:
         instrument = str(record.get("Instrument", "")).strip()
         if not instrument or instrument == "None":
             continue
+
+        underlying = get_underlying_ticker(instrument)
+        if underlying == "CASH":
+            instrument = "CASH"
 
         option_match = option_pattern.match(instrument)
         is_ticker = bool(re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", instrument))
