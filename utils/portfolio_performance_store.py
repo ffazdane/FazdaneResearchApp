@@ -686,7 +686,6 @@ def save_portfolio_snapshot(
         raise ValueError("Cannot save an empty portfolio snapshot.")
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    run_id = f"pp_{datetime.now(CENTRAL_TZ).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     snapshot_ts = str(metadata.get("snapshot_ts") or datetime.now(CENTRAL_TZ).isoformat(sep=" "))
     snapshot_date = str(metadata.get("snapshot_date") or snapshot_ts[:10])
     source_file = str(metadata.get("source_file") or "uploaded_positions.csv")
@@ -697,15 +696,39 @@ def save_portfolio_snapshot(
 
     with sqlite3.connect(db_path) as conn:
         _ensure_schema(conn)
-        conn.execute(
+        
+        # Check if there is already a run for the same snapshot_date
+        existing = conn.execute(
+            "SELECT run_id FROM pp_runs WHERE snapshot_date = ?",
+            (snapshot_date,)
+        ).fetchone()
+        
+        if existing:
+            run_id = existing[0]
+            # Delete child records so we don't duplicate them
+            conn.execute("DELETE FROM pp_position_snapshots WHERE run_id = ?", (run_id,))
+            conn.execute("DELETE FROM pp_position_details WHERE run_id = ?", (run_id,))
+            insert_query = """
+            INSERT OR REPLACE INTO pp_runs (
+                run_id, snapshot_ts, snapshot_date, source_file, file_sha256,
+                row_count, raw_row_count, totals_json, total_pl_open, total_pl_day,
+                total_theta, total_delta, total_market_value
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
+        else:
+            run_id = f"pp_{datetime.now(CENTRAL_TZ).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+            insert_query = """
             INSERT INTO pp_runs (
                 run_id, snapshot_ts, snapshot_date, source_file, file_sha256,
                 row_count, raw_row_count, totals_json, total_pl_open, total_pl_day,
                 total_theta, total_delta, total_market_value
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+            """
+
+        conn.execute(
+            insert_query,
             (
                 run_id,
                 snapshot_ts,

@@ -118,7 +118,15 @@ class MarkovRegimeEngineModule(FazDaneModule):
         except Exception as e:
             logger.error(f"Failed to backup databases: {e}")
         
-        st.session_state["mre_results"] = results
+        if symbols is not None and st.session_state.get("mre_results"):
+            st.session_state["mre_results"].update(results)
+        else:
+            st.session_state["mre_results"] = results
+
+        failed_scanned = [s for s in u_symbols if s not in results]
+        if failed_scanned:
+            st.session_state["mre_failed_symbols"].update(failed_scanned)
+
         st.session_state["mre_scan_completed"] = True
         st.session_state["mre_needs_reprocess"] = False
         
@@ -158,35 +166,41 @@ class MarkovRegimeEngineModule(FazDaneModule):
             st.session_state["mre_results"] = {}
             st.session_state["mre_last_saved_time"] = None
             st.session_state["mre_needs_reprocess"] = False
+            st.session_state["mre_failed_symbols"] = set()
+            st.session_state["mre_missing_symbols"] = []
 
         # Check if the loaded results match the currently selected watchlist
-        loaded_symbols = set(st.session_state["mre_results"].keys())
         selected_symbols = set(s.strip().upper() for s in self.symbols)
-        
-        if loaded_symbols != selected_symbols:
+        if st.session_state.get("mre_watchlist_symbols") != selected_symbols:
             st.session_state["mre_scan_completed"] = False
             st.session_state["mre_results"] = {}
             st.session_state["mre_last_saved_time"] = None
+            st.session_state["mre_watchlist_symbols"] = selected_symbols
+            st.session_state["mre_missing_symbols"] = []
 
         # Determine if we should perform calculations
         should_reprocess = self.run_engine or st.session_state.get("mre_needs_reprocess", False)
+        should_scan_missing = st.session_state.get("mre_needs_scan_missing", False)
 
         # Try to load existing data from database if not loaded and we are not reprocessing
-        if not should_reprocess and not st.session_state["mre_scan_completed"]:
+        if not should_reprocess and not should_scan_missing and not st.session_state["mre_scan_completed"]:
             db_results = {}
             newest_timestamp = None
-            all_found = True
+            missing_symbols = []
             
             for symbol in self.symbols:
                 sym = symbol.strip().upper()
+                if sym in st.session_state["mre_failed_symbols"]:
+                    continue
+                    
                 forecast = get_latest_forecast(sym)
                 backtest = get_latest_backtest(sym)
                 hist_states = get_historical_states(sym)
                 trans_matrix, state_list = get_latest_transition_matrix(sym)
                 
                 if not forecast or not backtest or not hist_states or trans_matrix is None:
-                    all_found = False
-                    break
+                    missing_symbols.append(sym)
+                    continue
                     
                 df_db = pd.DataFrame(hist_states)
                 df_db = df_db.rename(columns={"close_price": "close"})
@@ -206,27 +220,37 @@ class MarkovRegimeEngineModule(FazDaneModule):
                     if not newest_timestamp or ts > newest_timestamp:
                         newest_timestamp = ts
                         
-            if all_found and db_results:
+            if db_results:
                 st.session_state["mre_results"] = db_results
                 st.session_state["mre_scan_completed"] = True
                 st.session_state["mre_last_saved_time"] = newest_timestamp
                 st.session_state["mre_needs_reprocess"] = False
+                st.session_state["mre_missing_symbols"] = missing_symbols
 
         # Render status banner and reprocess button
         if st.session_state["mre_scan_completed"] and st.session_state.get("mre_last_saved_time"):
-            c_info, c_action = st.columns([3, 1], vertical_alignment="center")
+            missing_scannable = [s for s in st.session_state.get("mre_missing_symbols", []) if s not in st.session_state["mre_failed_symbols"]]
+            if missing_scannable:
+                st.warning(f"⚠️ **Watchlist contains {len(missing_scannable)} unscanned ticker(s)** (e.g. {', '.join(missing_scannable[:5])}). You can scan them incrementally below.")
+                
+            c_info, c_action1, c_action2 = st.columns([2, 1, 1], vertical_alignment="center")
             with c_info:
                 st.info(f"💾 **Using Processed Markov Models** | Data Saved: `{st.session_state['mre_last_saved_time']}` (UTC)")
-            with c_action:
-                if st.button("🔄 Reprocess Universe", key="mre_force_reprocess", width="stretch", type="primary"):
+            with c_action1:
+                if st.button("🔄 Reprocess Universe", key="mre_force_reprocess", width="stretch", type="secondary"):
                     st.session_state["mre_scan_completed"] = False
                     st.session_state["mre_results"] = {}
                     st.session_state["mre_last_saved_time"] = None
                     st.session_state["mre_needs_reprocess"] = True
                     st.rerun()
+            with c_action2:
+                btn_type = "primary" if missing_scannable else "secondary"
+                if st.button("🚀 Scan Missing Tickers", key="mre_scan_missing_btn", width="stretch", type=btn_type, disabled=not missing_scannable):
+                    st.session_state["mre_needs_scan_missing"] = True
+                    st.rerun()
 
         # Prompt for scan if no data exists and no scan has run
-        if not st.session_state["mre_scan_completed"] and not should_reprocess:
+        if not st.session_state["mre_scan_completed"] and not should_reprocess and not should_scan_missing:
             st.warning("⚠️ No processed regime model data found in database for this universe. You must run a fresh scan.")
             if st.button("🚀 Execute Markov Regime Scan Now", key="mre_first_run_btn", width="stretch", type="primary"):
                 st.session_state["mre_needs_reprocess"] = True
@@ -235,6 +259,7 @@ class MarkovRegimeEngineModule(FazDaneModule):
 
         if should_reprocess:
             with st.spinner(f"Processing regime engine models across '{self.universe_name}'..."):
+                st.session_state["mre_failed_symbols"] = set()
                 self.execute_regime_scan(
                     universe_name=self.universe_name,
                     symbols=self.symbols,
@@ -243,6 +268,25 @@ class MarkovRegimeEngineModule(FazDaneModule):
                     rerun=False
                 )
                 st.session_state["mre_show_success_banner"] = True
+                st.rerun()
+
+        if should_scan_missing:
+            missing_to_scan = [s for s in st.session_state.get("mre_missing_symbols", []) if s not in st.session_state["mre_failed_symbols"]]
+            if missing_to_scan:
+                with st.spinner(f"Scanning {len(missing_to_scan)} missing tickers in watchlist..."):
+                    self.execute_regime_scan(
+                        universe_name=self.universe_name,
+                        symbols=missing_to_scan,
+                        lookback_years=self.lookback_years,
+                        n_states=self.n_states,
+                        rerun=False
+                    )
+                    st.session_state["mre_missing_symbols"] = []
+                    st.session_state["mre_needs_scan_missing"] = False
+                    st.session_state["mre_show_success_banner"] = True
+                    st.rerun()
+            else:
+                st.session_state["mre_needs_scan_missing"] = False
                 st.rerun()
                 
         results = st.session_state["mre_results"]

@@ -30,13 +30,17 @@ def run_walk_forward_backtest(df: pd.DataFrame, initial_train_pct: float = 0.3) 
     state_list = ["BULL", "SIDEWAYS", "BEAR"]
     state_to_idx = {s: i for i, s in enumerate(state_list)}
     
+    # Convert columns to numpy arrays for fast lookups
+    price_states = df["price_state"].to_numpy()
+    daily_returns = df["daily_return"].fillna(0.0).to_numpy()
+    
     # Initialize transition counts matrix (Laplace smoothing)
     counts = np.ones((3, 3)) * 0.1
     
-    # Populate initial training counts
+    # Populate initial training counts using array lookups
     for t in range(1, start_idx):
-        s_curr = df.loc[t-1, "price_state"]
-        s_next = df.loc[t, "price_state"]
+        s_curr = price_states[t-1]
+        s_next = price_states[t]
         if s_curr in state_to_idx and s_next in state_to_idx:
             counts[state_to_idx[s_curr], state_to_idx[s_next]] += 1.0
             
@@ -48,7 +52,7 @@ def run_walk_forward_backtest(df: pd.DataFrame, initial_train_pct: float = 0.3) 
     benchmark_returns = []
     
     for t in range(start_idx, n_samples - 1):
-        s_curr = df.loc[t, "price_state"]
+        s_curr = price_states[t]
         s_curr_idx = state_to_idx.get(s_curr)
         
         # Calculate transition probabilities for this day based on history
@@ -71,13 +75,11 @@ def run_walk_forward_backtest(df: pd.DataFrame, initial_train_pct: float = 0.3) 
         signals.append(markov_sig)
         
         # Compare with actual next state
-        s_next = df.loc[t+1, "price_state"]
+        s_next = price_states[t+1]
         actuals.append(s_next)
         
         # Strategy Return simulation
-        next_return = df.loc[t+1, "daily_return"]
-        if pd.isna(next_return):
-            next_return = 0.0
+        next_return = daily_returns[t+1]
             
         # Strategy action based on signal score
         action = 1.0 if markov_sig >= 0.20 else -1.0 if markov_sig <= -0.50 else 0.0
