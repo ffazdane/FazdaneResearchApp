@@ -260,6 +260,7 @@ MODULE_REGISTRY = {
     # Tier 3  Forecasting & Cycles
     "Bradley Siderograph": ("modules.tier3.bradley_siderograph", "BradleySiderographModule", 3),
     "Elliott Wave Analysis": ("modules.tier3.elliott_wave_analysis", "ElliottWaveAnalysisModule", 3),
+    "Cycle Analysis Engine": ("modules.cycle_engine.cycle_dashboard", "CycleAnalysisDashboardModule", 3),
     # Tier 4  Volatility
     "Volatility Strategy Engine": ("modules.tier4.volatility_engine", "VolatilityEngineModule", 4),
     "Gamma Flip Line Module": ("modules.tier4.gamma_flip.gamma_dashboard", "GammaFlipLineModule", 4),

@@ -75,9 +75,12 @@ data/volatility_engine/*.sqlite
 data/volatility_engine/*.sqlite-*
 data/correlation_analysis/*.sqlite
 data/correlation_analysis/*.sqlite-*
+data/cycle_engine/*.sqlite
+data/cycle_engine/*.sqlite-*
 
 # Scratch directory
 scratch/
+
 
 
 

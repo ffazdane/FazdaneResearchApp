@@ -57,6 +57,10 @@ DATABASES = {
         "env_var": "CORRELATION_ANALYSIS_DB_PATH",
         "default_path": REPO_ROOT / "data" / "correlation_analysis" / "correlation_analysis.sqlite",
     },
+    "cycle_engine": {
+        "env_var": "CYCLE_ENGINE_DB_PATH",
+        "default_path": REPO_ROOT / "data" / "cycle_engine" / "cycle_engine.sqlite",
+    },
 }
 
 BACKUP_DIR = REPO_ROOT / "data" / "backups"
