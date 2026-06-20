@@ -1275,7 +1275,7 @@ else:
         for tier_id, tab_label in [
             (1, "Live Trading"),
             (2, "Analysis & Intelligence"),
-            (3, "Forecasting"),
+            (3, "Forecasting & Cycles"),
             (4, "Volatility"),
         ]
     ]

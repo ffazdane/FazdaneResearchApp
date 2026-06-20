@@ -505,7 +505,7 @@ def render_macro_dashboard(show_download: bool = True, module_tabs: list[dict] |
                 width="stretch",
             )
 
-    for tab, tab_config in zip(tabs[5:], tab_configs):
+    for tab, tab_config in zip(tabs[6:], tab_configs):
         with tab:
             items = tab_config.get("items", [])
             if not items:
