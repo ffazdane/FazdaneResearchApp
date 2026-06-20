@@ -412,17 +412,31 @@ def build_css(theme_name: str) -> str:
             pointer-events: auto !important;
         }}
 
-        /* Permanently hide sidebar collapse control (inside expanded sidebar) */
-        /*
-        [data-testid="stSidebarCollapseButton"] {{
-            opacity: 0 !important;
-            pointer-events: none !important;
-            position: absolute !important;
-            width: 0 !important;
-            height: 0 !important;
-            overflow: hidden !important;
+        /* Enable pointer-events on the header for mobile/tablet screens to fix the iOS sidebar expand click bug */
+        @media (max-width: 768px) {{
+            header[data-testid="stHeader"] {{
+                pointer-events: auto !important;
+            }}
         }}
-        */
+
+        /* Force-show the sidebar collapse/expand button and ensure it is clickable and visible */
+        [data-testid="stSidebarCollapseButton"],
+        [data-testid="stSidebarCollapseButton"] button,
+        [data-testid="stSidebarCollapseButton"] svg,
+        [data-testid="stExpandSidebarButton"],
+        [data-testid="stExpandSidebarButton"] button,
+        [data-testid="stExpandSidebarButton"] svg,
+        [data-testid="collapsedControl"],
+        [data-testid="collapsedControl"] button,
+        [data-testid="collapsedControl"] svg {{
+            opacity: 1 !important;
+            visibility: visible !important;
+            display: inline-flex !important;
+            pointer-events: auto !important;
+            color: var(--text-color) !important;
+            fill: var(--text-color) !important;
+            z-index: 999999 !important;
+        }}
 
         /* Hide decorative bar, toolbar, hamburger menu, deploy button, and footer */
         [data-testid="stDecoration"],
@@ -785,6 +799,37 @@ _components.html(
                           doc.querySelector('[data-testid="stExpandSidebarButton"]');
                 if (btn) { btn.click(); }
             }, 250);
+
+            // 3) Mobile Sidebar Button Injection
+            if (!doc.getElementById('mobile-sidebar-btn')) {
+                var mobileBtn = doc.createElement('button');
+                mobileBtn.id = 'mobile-sidebar-btn';
+                mobileBtn.innerHTML = '☰';
+                mobileBtn.style.cssText = 'display: none; position: fixed; bottom: 20px; right: 20px; background-color: #3ab54a; color: white; border: none; border-radius: 50%; width: 56px; height: 56px; font-size: 24px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); z-index: 9999999; cursor: pointer; text-align: center; line-height: 56px; transition: all 0.2s ease;';
+                
+                mobileBtn.onclick = function() {
+                    var expandBtn = doc.querySelector('[data-testid="stExpandSidebarButton"] button') || 
+                                    doc.querySelector('[data-testid="stExpandSidebarButton"]') || 
+                                    doc.querySelector('[data-testid="collapsedControl"] button') ||
+                                    doc.querySelector('[data-testid="collapsedControl"] svg') ||
+                                    doc.querySelector('[data-testid="collapsedControl"]');
+                    if(expandBtn) { 
+                        expandBtn.click(); 
+                    }
+                };
+                
+                doc.body.appendChild(mobileBtn);
+                
+                function checkSize() {
+                    if (doc.body.clientWidth <= 768) {
+                        mobileBtn.style.display = 'block';
+                    } else {
+                        mobileBtn.style.display = 'none';
+                    }
+                }
+                doc.defaultView.addEventListener('resize', checkSize);
+                checkSize();
+            }
         } catch (e) { /* sandboxed iframe or storage blocked - ignore */ }
     })();
     </script>
