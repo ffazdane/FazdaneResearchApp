@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import copy
 
 def render_dataframe_filter(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
     """
@@ -17,22 +18,32 @@ def render_dataframe_filter(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
     st.markdown("### 🎛️ Dynamic Data Filter")
     
     rules_key = f"{key_prefix}_filter_rules"
+    applied_rules_key = f"{key_prefix}_applied_rules"
+    
     if rules_key not in st.session_state:
         st.session_state[rules_key] = []
+    if applied_rules_key not in st.session_state:
+        st.session_state[applied_rules_key] = []
         
     rules = st.session_state[rules_key]
+    applied_rules = st.session_state[applied_rules_key]
     
     columns = list(df.columns)
     
-    col1, col2 = st.columns([1, 5])
+    col1, col2, col3 = st.columns([2, 2, 5])
     with col1:
-        if st.button("➕ Add Filter", key=f"{key_prefix}_add_btn"):
+        if st.button("▶️ Apply Filters", key=f"{key_prefix}_apply_btn", type="primary"):
+            st.session_state[applied_rules_key] = copy.deepcopy(st.session_state[rules_key])
+            
+    with col2:
+        if st.button("➕ Add Rule", key=f"{key_prefix}_add_btn"):
             rules.append({"id": len(rules), "action": "Include", "column": columns[0], "values": []})
             st.rerun()
             
-    with col2:
+    with col3:
         if st.button("🗑️ Clear All", key=f"{key_prefix}_clear_btn"):
             st.session_state[rules_key] = []
+            st.session_state[applied_rules_key] = []
             st.rerun()
 
     if rules:
@@ -130,7 +141,7 @@ def render_dataframe_filter(df: pd.DataFrame, key_prefix: str) -> pd.DataFrame:
     # Apply Filters
     filtered_df = df.copy()
     
-    for rule in rules_to_keep:
+    for rule in st.session_state[applied_rules_key]:
         col = rule.get("column")
         vals = rule.get("values")
         action = rule.get("action")
