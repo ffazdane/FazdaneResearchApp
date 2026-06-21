@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from modules.base_module import FazDaneModule
 from utils.universe_manager import render_universe_manager, format_ticker_display, get_ticker_names
+from utils.dataframe_filter import render_dataframe_filter
 from utils.persistence import get_db_path, backup_database
 from modules.calendar_scoring.technical_indicators import (
     calculate_rsi,
@@ -357,6 +358,33 @@ class PriceActionStoryModule(FazDaneModule):
         st.session_state["pa_benchmarks"] = {"SPY": bench_res, "QQQ": qqq_res, "IWM": iwm_res}
         st.session_state["pa_bench_df"] = bench_df
         
+        # Pre-calculate stage trails
+        status_text.text("Calculating Stage Rotation trails...")
+        stage_trails = {}
+        if not scanned_df.empty:
+            for ticker in scanned_df["Ticker"].values:
+                ticker_df = ticker_data_cache.get(ticker)
+                if ticker_df is not None and len(ticker_df) >= 30:
+                    x_vals = []
+                    y_vals = []
+                    for offset in range(5, -1, -1):
+                        idx = len(ticker_df) - 1 - offset
+                        if idx >= 0:
+                            hist_slice = ticker_df.iloc[:idx + 1]
+                            hist_bench = bench_df.iloc[:idx + 1]
+                            res = evaluate_ticker_price_action(hist_slice, hist_bench)
+                            if res:
+                                x_vals.append(res["Health Score"])
+                                y_vals.append(res["VPR"])
+                    if x_vals:
+                        stage_trails[ticker] = {
+                            "x": x_vals,
+                            "y": y_vals,
+                            "name": scanned_df.loc[scanned_df["Ticker"] == ticker, "Name"].values[0],
+                            "fdts": scanned_df.loc[scanned_df["Ticker"] == ticker, "FDTS"].values[0]
+                        }
+        st.session_state["pa_stage_trails"] = stage_trails
+        
         # Save scan run to sqlite database
         if not scanned_df.empty:
             status_text.text("Saving price action scan to SQLite database...")
@@ -538,36 +566,22 @@ class PriceActionStoryModule(FazDaneModule):
                 highlight_ticker = st.selectbox("🎯 Highlight Ticker in Chart:", options=["None"] + all_tickers, key="pa_highlight_ticker")
             
             try:
-                # Calculate trails for Health Score vs VPR
+                # Retrieve pre-calculated trails
+                stage_trails_cache = st.session_state.get("pa_stage_trails", {})
+                
+                # Apply show_trails logic
                 stage_trails = {}
-                for ticker in scanned_df["Ticker"].values:
-                    ticker_df = ticker_cache.get(ticker)
-                    if ticker_df is not None and len(ticker_df) >= 30:
-                        x_vals = []
-                        y_vals = []
-                        if show_trails:
-                            for offset in range(5, -1, -1):
-                                idx = len(ticker_df) - 1 - offset
-                                if idx >= 0:
-                                    hist_slice = ticker_df.iloc[:idx + 1]
-                                    hist_bench = bench_df.iloc[:idx + 1]
-                                    res = evaluate_ticker_price_action(hist_slice, hist_bench)
-                                    if res:
-                                        x_vals.append(res["Health Score"])
-                                        y_vals.append(res["VPR"])
-                        else:
-                            t_row = scanned_df[scanned_df["Ticker"] == ticker]
-                            if not t_row.empty:
-                                x_vals.append(t_row["Health Score"].values[0])
-                                y_vals.append(t_row["VPR"].values[0])
-                                
-                        if x_vals:
-                            stage_trails[ticker] = {
-                                "x": x_vals,
-                                "y": y_vals,
-                                "name": scanned_df.loc[scanned_df["Ticker"] == ticker, "Name"].values[0],
-                                "fdts": scanned_df.loc[scanned_df["Ticker"] == ticker, "FDTS"].values[0]
-                            }
+                for ticker, data in stage_trails_cache.items():
+                    if show_trails:
+                        stage_trails[ticker] = data
+                    else:
+                        # Only keep the last point
+                        stage_trails[ticker] = {
+                            "x": [data["x"][-1]],
+                            "y": [data["y"][-1]],
+                            "name": data["name"],
+                            "fdts": data["fdts"]
+                        }
                 
                 if stage_trails:
                     fig = go.Figure()
@@ -750,20 +764,10 @@ class PriceActionStoryModule(FazDaneModule):
         with tab3:
             st.markdown("### Scanned Universe Stage Map")
             
-            # Interactive Filters
-            fc1, fc2 = st.columns(2)
-            with fc1:
-                search_txt = st.text_input("Search Ticker:", key="universe_search").upper()
-            with fc2:
-                selected_stages = st.multiselect("Filter by Stage:", options=list(STAGE_DETAILS.keys()), default=None)
-                
             # Filter Dataframe
             df_display = scanned_df.copy()
-            if search_txt:
-                df_display = df_display[df_display["Ticker"].str.contains(search_txt)]
-            if selected_stages:
-                df_display = df_display[df_display["Stage"].isin(selected_stages)]
-                
+            df_display = render_dataframe_filter(df_display, key_prefix="universe_map")
+            
             df_display = df_display.sort_values("Health Score", ascending=False)
             
             # Formatting Columns
@@ -796,17 +800,8 @@ class PriceActionStoryModule(FazDaneModule):
             st.markdown("### Calendar Spread candidates (Early Bull & Strong Bull)")
             st.caption("Filters for assets transitioning from Accumulation to Expansion where IV remains cheap and range expansion is imminent.")
             
-            # Interactive Filters
-            fc1, fc2 = st.columns(2)
-            with fc1:
-                search_txt_funnel = st.text_input("Search Ticker:", key="funnel_search").upper()
-            with fc2:
-                selected_actions = st.multiselect("Filter by Action:", options=["🟢 Deploy Calendar", "🟢 Deploy Calendar (Watch Spread)", "🟡 Watch (Earnings Risk)", "🔴 Avoid (Extended Vol)"], default=None, key="funnel_actions")
-            
             # Filter candidates: Stage is Early Bull / Expansion or Strong Bull
             candidates = scanned_df[scanned_df["Stage"].isin(["Early Bull / Expansion", "Strong Bull"])].copy()
-            if search_txt_funnel:
-                candidates = candidates[candidates["Ticker"].str.contains(search_txt_funnel)]
             
             if candidates.empty:
                 st.info("No candidates currently in the sweet spot (Early Bull or Strong Bull) matching your search criteria.")
@@ -884,11 +879,10 @@ class PriceActionStoryModule(FazDaneModule):
                     })
                     
                 df_candidates = pd.DataFrame(rows)
-                if selected_actions:
-                    df_candidates = df_candidates[df_candidates["Action"].isin(selected_actions)]
+                df_candidates = render_dataframe_filter(df_candidates, key_prefix="calendar_funnel")
                 
                 if df_candidates.empty:
-                    st.info("No candidates matching the selected actions filters.")
+                    st.info("No candidates matching the selected filters.")
                 else:
                     try:
                         styled_candidates = df_candidates.style.map(color_stage_cell, subset=["Stage"]).map(color_fdts_cell, subset=["FDTS"])
