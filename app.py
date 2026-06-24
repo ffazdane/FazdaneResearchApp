@@ -1249,9 +1249,22 @@ else:
             <div style="color:#3ab54a;font-size:18px;font-weight:700;margin-bottom:6px;">
                 Welcome back, {user['display_name']}!
             </div>
-            <div style="color:#94a3b8;font-size:14px;">
+            <div style="color:#94a3b8;font-size:14px;margin-bottom:16px;">
                 Your personal finance research platform is ready. Select a module from the sidebar to begin.
             </div>
+            <a href="https://fazdane-portfolio.streamlit.app/portfolio_monitor" target="_blank" style="
+                display: inline-block;
+                background: linear-gradient(135deg, #1a3a8f 0%, #3ab54a 100%);
+                color: #ffffff;
+                padding: 10px 20px;
+                text-decoration: none;
+                border-radius: 8px;
+                font-weight: 600;
+                font-size: 14px;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+            ">
+                🚀 Launch Portfolio Monitor
+            </a>
         </div>
         """,
         unsafe_allow_html=True,
