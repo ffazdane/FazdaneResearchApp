@@ -111,7 +111,7 @@ def render_master_gauge(score: float):
     return fig
 
 
-def render_history_chart(history: pd.Series):
+def render_history_chart(history: pd.Series, spx: pd.Series = None):
     fig = go.Figure()
 
     # Danger-zone bands.
@@ -127,10 +127,26 @@ def render_history_chart(history: pd.Series):
                       annotation_position="right",
                       annotation_font=dict(size=9, color=col))
 
+    # S&P 500 overlay, normalized to the same 0-100 scale as the bubble
+    # score (min-max of log price over the visible window). Drawn first so
+    # the bubble score renders on top. Hover shows the real index level.
+    if spx is not None and len(spx) > 1:
+        import numpy as np
+        log_px = np.log(spx.values.astype(float))
+        rng = log_px.max() - log_px.min()
+        norm = (log_px - log_px.min()) / (rng if rng else 1.0) * 100.0
+        fig.add_trace(go.Scatter(
+            x=spx.index, y=norm, mode="lines",
+            name="S&P 500 (log, normalized 0-100)",
+            line=dict(color=BLUE, width=1.2), opacity=0.55,
+            customdata=spx.values,
+            hovertemplate="%{x|%b %Y}: %{customdata:,.0f}<extra>S&P 500</extra>",
+        ))
+
     fig.add_trace(go.Scatter(
         x=history.index, y=history.values, mode="lines", name="Bubble Score",
         line=dict(color=ORANGE, width=1.6),
-        hovertemplate="%{x|%b %Y}: %{y:.0f}<extra></extra>",
+        hovertemplate="%{x|%b %Y}: %{y:.0f}<extra>Bubble Score</extra>",
     ))
 
     # Historical bubble annotations (only where data exists).
@@ -155,7 +171,10 @@ def render_history_chart(history: pd.Series):
 
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=10, r=70, t=25, b=10), height=250, showlegend=False,
+        margin=dict(l=10, r=70, t=25, b=10), height=250,
+        showlegend=spx is not None and len(spx) > 1,
+        legend=dict(orientation="h", x=0, y=1.14, font=dict(size=9),
+                    bgcolor="rgba(0,0,0,0)"),
         font=dict(color=TEXT_PRIMARY, size=10),
         xaxis=dict(showgrid=False, showline=True, linecolor=BORDER_COLOR),
         yaxis=dict(showgrid=True, gridcolor="rgba(41,50,65,0.5)",
@@ -337,7 +356,8 @@ def render_bubble_indicator_dashboard():
             f'(computed from component series)</span></div>',
             unsafe_allow_html=True)
         if not data["history"].empty:
-            st.plotly_chart(render_history_chart(data["history"]),
+            st.plotly_chart(render_history_chart(data["history"],
+                                                 data.get("spx_history")),
                             use_container_width=True, key="bubble_history")
         else:
             st.info("History unavailable.")

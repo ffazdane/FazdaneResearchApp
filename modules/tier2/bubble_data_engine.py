@@ -690,9 +690,15 @@ def fetch_bubble_data() -> dict:
     # Crash-probability heuristic: logistic mapping of score, labelled as such.
     crash_12m = 100 / (1 + np.exp(-(master - 72) / 9.0))
 
+    spx_hist = pd.Series(dtype=float)
+    if "^GSPC" in px:
+        spx_full = px["^GSPC"].dropna()
+        spx_hist = spx_full[spx_full.index >= "1990-01-01"]
+
     return {
         "master_score": master,
         "history": master_hist[master_hist.index >= "1990-01-01"],
+        "spx_history": spx_hist,
         "components": comps_now,
         "trends": trends,
         "val_snapshot": _valuation_snapshot(multpl, fred),

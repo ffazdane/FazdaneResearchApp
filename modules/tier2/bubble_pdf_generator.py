@@ -73,7 +73,7 @@ def _risk_color_label(score):
 # Matplotlib chart renderers (dark theme, temp PNG files)
 # ---------------------------------------------------------------------------
 
-def _render_history_png(history, path):
+def _render_history_png(history, path, spx=None):
     if history is None or len(history) < 2:
         return False
     fig, ax = plt.subplots(figsize=(7.6, 2.05), dpi=160)
@@ -84,15 +84,30 @@ def _render_history_png(history, path):
         ax.axhspan(lo, hi, color=col, alpha=alpha)
     for y, col in [(80, "#EF4444"), (60, "#F97316"), (40, "#F59E0B"), (20, "#10B981")]:
         ax.axhline(y, color=col, linewidth=0.7, linestyle="--", alpha=0.6)
-    ax.plot(history.index, history.values, color="#F97316", linewidth=1.2)
+    if spx is not None and len(spx) > 1:
+        import numpy as np
+        log_px = np.log(spx.values.astype(float))
+        rng = log_px.max() - log_px.min()
+        norm = (log_px - log_px.min()) / (rng if rng else 1.0) * 100.0
+        ax.plot(spx.index, norm, color="#3B82F6", linewidth=0.9, alpha=0.65)
+    ax.plot(history.index, history.values, color="#F97316", linewidth=1.2,
+            zorder=5)
     ax.plot(history.index[-1], history.values[-1], "o", color="#EF4444",
-            markersize=5, markeredgecolor="white", markeredgewidth=0.8)
+            markersize=5, markeredgecolor="white", markeredgewidth=0.8,
+            zorder=6)
     ax.set_ylim(0, 105)
     ax.set_yticks([0, 25, 50, 75, 100])
     ax.tick_params(axis="both", labelsize=6, colors="#9CA3AF")
     ax.grid(True, color="#293241", linewidth=0.5, alpha=0.5)
     for spine in ax.spines.values():
         spine.set_color("#293241")
+    if spx is not None and len(spx) > 1:
+        ax.plot([], [], color="#F97316", linewidth=1.2, label="Bubble Score")
+        ax.plot([], [], color="#3B82F6", linewidth=0.9,
+                label="S&P 500 (log, normalized 0-100)")
+        ax.legend(fontsize=5.5, loc="upper left", framealpha=0.3,
+                  facecolor=PANEL_HEX, edgecolor="#293241",
+                  labelcolor="#9CA3AF")
     fig.tight_layout(pad=0.6)
     fig.savefig(path, format="png", facecolor=PANEL_HEX, bbox_inches="tight")
     plt.close(fig)
@@ -281,7 +296,8 @@ def build_bubble_pdf(data) -> bytes:
     pdf.set_fill_color(*PANEL)
     pdf.set_draw_color(*BORDER)
     pdf.rect(10, y + 7, 190, 58, style="DF")
-    if _render_history_png(data.get("history"), hist_png):
+    if _render_history_png(data.get("history"), hist_png,
+                           data.get("spx_history")):
         pdf.image(hist_png, x=12, y=y + 9, w=186)
     y += 71
 
