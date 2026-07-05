@@ -10,10 +10,19 @@ import streamlit as st
 from modules.base_module import FazDaneModule
 from utils.universe_manager import format_ticker_display, get_ticker_names, render_universe_manager
 
-from .data_loader import get_available_expirations, load_option_chain
+from .data_loader import (
+    get_expirations_for_source,
+    load_chain_for_source,
+    tastytrade_configured,
+)
 from .export import analysis_to_excel
 from .gex_engine import build_gex_analysis
-from .visualization import expiration_heatmap, net_gex_by_strike_chart, simulated_gex_chart
+from .visualization import (
+    expiration_gex_chart,
+    expiration_heatmap,
+    net_gex_by_strike_chart,
+    simulated_gex_chart,
+)
 
 
 class GammaFlipLineModule(FazDaneModule):
@@ -23,7 +32,7 @@ class GammaFlipLineModule(FazDaneModule):
     TIER = 4
     SOURCE_NOTEBOOK = "Gamma Flip Line / GEX Engine"
     REQUIRES_LIVE_DATA = True
-    DATA_SOURCES = ["yfinance"]
+    DATA_SOURCES = ["Tastytrade", "yfinance"]
 
     def render_sidebar(self):
         st.markdown("**Dealer Gamma Exposure**")
@@ -52,11 +61,25 @@ class GammaFlipLineModule(FazDaneModule):
         ticker = custom_ticker or selected_ticker or "SPY"
         st.session_state["gex_ticker"] = ticker.strip().upper()
 
+        tasty_ok = tastytrade_configured()
+        source_options = ["Tastytrade (live)", "yfinance (free)"] if tasty_ok else ["yfinance (free)"]
+        source_label = st.selectbox(
+            "Data Source",
+            source_options,
+            key="gex_data_source",
+            help="Tastytrade provides real-time OI/IV via the production provider. "
+                 "yfinance OI is previous-day and IV can be stale.",
+        )
+        source = "tastytrade" if source_label.startswith("Tastytrade") else "yfinance"
+        st.session_state["gex_source"] = source
+        if not tasty_ok:
+            st.caption("Tastytrade credentials not configured - using yfinance.")
+
         if st.button("Refresh Gamma Data", width="stretch", key="gex_refresh"):
             st.cache_data.clear()
             st.rerun()
 
-        expirations = get_available_expirations(ticker)
+        expirations = get_expirations_for_source(ticker, source)
         st.session_state["gex_available_expirations"] = expirations
         mode = st.selectbox(
             "Expiration Selector",
@@ -68,6 +91,10 @@ class GammaFlipLineModule(FazDaneModule):
         if mode == "Custom selected expirations":
             custom = st.multiselect("Expirations", options=expirations, default=expirations[:4], key="gex_custom_expirations")
 
+        st.slider("Strike Window (+/- % of spot)", 5.0, 50.0, 25.0, 5.0, key="gex_strike_window",
+                  help="Contracts outside this window are excluded. Far OTM strikes "
+                       "contribute negligible gamma; a tighter window is faster "
+                       "(and limits Tastytrade quote calls).")
         st.slider("Simulation Range (+/- %)", 2.0, 30.0, 10.0, 0.5, key="gex_range_pct")
         st.slider("Simulation Step (%)", 0.1, 2.0, 0.5, 0.1, key="gex_step_pct")
         st.session_state["gex_custom_selected"] = tuple(custom)
@@ -94,23 +121,29 @@ class GammaFlipLineModule(FazDaneModule):
         )
 
         ticker = st.session_state.get("gex_ticker", "SPY").strip().upper() or "SPY"
-        expirations = st.session_state.get("gex_available_expirations") or get_available_expirations(ticker)
+        source = st.session_state.get("gex_source", "yfinance")
+        strike_window = float(st.session_state.get("gex_strike_window", 25.0))
+        expirations = st.session_state.get("gex_available_expirations") or get_expirations_for_source(ticker, source)
         selected = self._select_expirations(expirations)
         if not expirations:
-            st.warning(f"No yfinance option expirations found for {ticker}. Try another ticker or refresh later.")
+            st.warning(f"No option expirations found for {ticker}. Try another ticker or refresh later.")
             return
         if not selected:
             st.warning("No expirations match the selected filter.")
             return
 
-        with st.spinner(f"Loading {ticker} option chains..."):
-            result = load_option_chain(ticker, tuple(selected))
+        with st.spinner(f"Loading {ticker} option chains ({source})..."):
+            result = load_chain_for_source(ticker, tuple(selected), source, strike_window)
 
         for warning in result.warnings:
             st.warning(warning)
         if result.chain.empty:
             st.info("No usable option chain rows were available after filtering.")
             return
+        st.caption(
+            f"Data source: **{result.source}** | contracts analyzed: "
+            f"{len(result.chain):,} | strike window: +/-{strike_window:.0f}% of spot"
+        )
 
         analysis = build_gex_analysis(
             result.chain,
@@ -133,6 +166,7 @@ class GammaFlipLineModule(FazDaneModule):
                         summary["Gamma Flip Line"],
                         summary["Call Wall"],
                         summary["Put Wall"],
+                        focus_range_pct=st.session_state.get("gex_range_pct", 10.0),
                     ),
                     width="stretch",
                 )
@@ -141,6 +175,7 @@ class GammaFlipLineModule(FazDaneModule):
                     simulated_gex_chart(analysis["simulation"], summary["Spot Price"], summary["Gamma Flip Line"]),
                     width="stretch",
                 )
+            st.plotly_chart(expiration_gex_chart(analysis["by_expiration"]), width="stretch")
             with st.expander("Strike x Expiration GEX Heatmap", expanded=False):
                 st.plotly_chart(expiration_heatmap(analysis["gex_rows"], summary["Spot Price"]), width="stretch")
 
@@ -185,10 +220,21 @@ class GammaFlipLineModule(FazDaneModule):
             return monthly
         return expirations
 
+    @staticmethod
+    def _format_gex_dollars(value: float) -> str:
+        if pd.isna(value):
+            return "N/A"
+        abs_val = abs(value)
+        if abs_val >= 1e9:
+            return f"${value / 1e9:,.2f}B"
+        if abs_val >= 1e6:
+            return f"${value / 1e6:,.1f}M"
+        return f"${value:,.0f}"
+
     def _render_summary(self, summary: dict, message: str, expiration_count: int):
         metric_cols = st.columns(4)
         metric_cols[0].metric("Spot Price", f"${summary['Spot Price']:,.2f}")
-        metric_cols[1].metric("Net GEX", f"{summary['Net GEX']:,.0f}")
+        metric_cols[1].metric("Net GEX (per 1% move)", self._format_gex_dollars(summary["Net GEX"]))
         flip = summary.get("Gamma Flip Line")
         metric_cols[2].metric("Gamma Flip", "N/A" if pd.isna(flip) else f"${flip:,.2f}")
         metric_cols[3].metric("Regime", summary["Gamma Regime"])
@@ -199,6 +245,16 @@ class GammaFlipLineModule(FazDaneModule):
         metric_cols[1].metric("Call Wall", "N/A" if pd.isna(summary.get("Call Wall")) else f"${summary['Call Wall']:,.2f}")
         metric_cols[2].metric("Put Wall", "N/A" if pd.isna(summary.get("Put Wall")) else f"${summary['Put Wall']:,.2f}")
         metric_cols[3].metric("Expirations", expiration_count)
+
+        call_wall, put_wall, spot = summary.get("Call Wall"), summary.get("Put Wall"), summary.get("Spot Price")
+        if not pd.isna(call_wall) and not pd.isna(put_wall) and spot:
+            range_width = (call_wall - put_wall) / spot * 100
+            crossings = summary.get("Zero Crossings", 1)
+            extra = f" | GEX curve crosses zero {int(crossings)}x in range" if crossings and crossings > 1 else ""
+            st.caption(
+                f"Dealer-implied range: **${put_wall:,.2f} (put wall) - "
+                f"${call_wall:,.2f} (call wall)** ({range_width:.1f}% of spot){extra}"
+            )
 
         if summary["Gamma Regime"] == "Positive Gamma":
             st.success(message)

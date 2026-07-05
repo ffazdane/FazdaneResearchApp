@@ -56,40 +56,42 @@ def net_gex_by_strike_chart(
     spot: float,
     gamma_flip: float | None,
     call_wall: float | None,
-    put_wall: float | None
+    put_wall: float | None,
+    focus_range_pct: float | None = None,
 ) -> go.Figure:
     fig = go.Figure()
     if not by_strike.empty:
+        scale = 1e6  # display in $ millions per 1% move
         # Plot Call GEX (Positive green bars)
         fig.add_trace(
             go.Bar(
                 x=by_strike["Strike"],
-                y=by_strike["Call GEX"],
+                y=by_strike["Call GEX"] / scale,
                 name="Call GEX",
                 marker_color="rgba(58, 181, 74, 0.6)",
-                hovertemplate="Call GEX: %{y:,.0f}<extra></extra>",
+                hovertemplate="Call GEX: %{y:,.1f}M<extra></extra>",
             )
         )
         # Plot Put GEX (Negative red bars)
         fig.add_trace(
             go.Bar(
                 x=by_strike["Strike"],
-                y=by_strike["Put GEX"],
+                y=by_strike["Put GEX"] / scale,
                 name="Put GEX",
                 marker_color="rgba(239, 68, 68, 0.6)",
-                hovertemplate="Put GEX: %{y:,.0f}<extra></extra>",
+                hovertemplate="Put GEX: %{y:,.1f}M<extra></extra>",
             )
         )
         # Plot Net GEX (Bold line overlay)
         fig.add_trace(
             go.Scatter(
                 x=by_strike["Strike"],
-                y=by_strike["Net GEX"],
+                y=by_strike["Net GEX"] / scale,
                 name="Net GEX",
                 line=dict(color="#38bdf8", width=2.5),
                 mode="lines+markers",
                 marker=dict(size=4, color="#38bdf8"),
-                hovertemplate="Net GEX: %{y:,.0f}<extra></extra>",
+                hovertemplate="Net GEX: %{y:,.1f}M<extra></extra>",
             )
         )
 
@@ -132,19 +134,28 @@ def net_gex_by_strike_chart(
 
     layout = _base_layout("Gamma Exposure Profile by Strike")
     layout["xaxis"]["title"] = "Strike Price"
-    layout["yaxis"]["title"] = "Gamma Exposure ($ / point)"
+    layout["yaxis"]["title"] = "Gamma Exposure ($M per 1% move)"
+    # Focus the x-axis on the tradeable window around spot; full strike
+    # range remains available via zoom/pan.
+    if focus_range_pct and spot > 0:
+        layout["xaxis"]["range"] = [
+            spot * (1 - focus_range_pct / 100.0),
+            spot * (1 + focus_range_pct / 100.0),
+        ]
     fig.update_layout(**layout, barmode="relative")
     return fig
 
 
 def simulated_gex_chart(simulation: pd.DataFrame, spot: float, gamma_flip: float | None) -> go.Figure:
     fig = go.Figure()
+    scale = 1e6  # display in $ millions per 1% move
     if not simulation.empty:
+        scaled = simulation["total_gex"] / scale
         # Shaded Positive Gamma Zone (above 0)
         fig.add_trace(
             go.Scatter(
                 x=simulation["price_level"],
-                y=simulation["total_gex"].clip(lower=0),
+                y=scaled.clip(lower=0),
                 fill="tozeroy",
                 fillcolor="rgba(58, 181, 74, 0.15)",
                 line=dict(width=0),
@@ -156,7 +167,7 @@ def simulated_gex_chart(simulation: pd.DataFrame, spot: float, gamma_flip: float
         fig.add_trace(
             go.Scatter(
                 x=simulation["price_level"],
-                y=simulation["total_gex"].clip(upper=0),
+                y=scaled.clip(upper=0),
                 fill="tozeroy",
                 fillcolor="rgba(239, 68, 68, 0.15)",
                 line=dict(width=0),
@@ -168,13 +179,39 @@ def simulated_gex_chart(simulation: pd.DataFrame, spot: float, gamma_flip: float
         fig.add_trace(
             go.Scatter(
                 x=simulation["price_level"],
-                y=simulation["total_gex"],
+                y=scaled,
                 mode="lines",
                 name="Simulated GEX Profile",
                 line=dict(color="#f8fafc", width=3.5),
-                hovertemplate="Total GEX: %{y:,.0f}<extra></extra>"
+                hovertemplate="Total GEX: %{y:,.1f}M<extra></extra>"
             )
         )
+        # Regime zone labels
+        y_max = float(scaled.max())
+        y_min = float(scaled.min())
+        if y_max > 0:
+            fig.add_annotation(
+                x=float(simulation["price_level"].iloc[-1]), y=y_max * 0.9,
+                text="POSITIVE GAMMA<br>mean reversion", showarrow=False,
+                font=dict(size=9, color=BRAND_GREEN), xanchor="right",
+            )
+        if y_min < 0:
+            fig.add_annotation(
+                x=float(simulation["price_level"].iloc[0]), y=y_min * 0.9,
+                text="NEGATIVE GAMMA<br>momentum / vol expansion", showarrow=False,
+                font=dict(size=9, color="#ef4444"), xanchor="left",
+            )
+        # Flip point marker
+        if gamma_flip is not None:
+            fig.add_trace(
+                go.Scatter(
+                    x=[gamma_flip], y=[0], mode="markers",
+                    marker=dict(size=10, color="#f59e0b", symbol="diamond",
+                                line=dict(color="#f8fafc", width=1)),
+                    name="Gamma Flip",
+                    hovertemplate="Gamma Flip: %{x:,.2f}<extra></extra>",
+                )
+            )
 
     fig.add_hline(y=0, line_color="rgba(226,232,240,0.45)", line_dash="dot")
     fig.add_vline(
@@ -197,8 +234,51 @@ def simulated_gex_chart(simulation: pd.DataFrame, spot: float, gamma_flip: float
 
     layout = _base_layout("Simulated Total GEX across Price Levels")
     layout["xaxis"]["title"] = "Underlying Price Level"
-    layout["yaxis"]["title"] = "Total Gamma Exposure ($ / point)"
+    layout["yaxis"]["title"] = "Total Gamma Exposure ($M per 1% move)"
     fig.update_layout(**layout)
+    return fig
+
+
+def expiration_gex_chart(by_expiration: pd.DataFrame) -> go.Figure:
+    """Call/Put/Net GEX contribution per expiration."""
+    fig = go.Figure()
+    if not by_expiration.empty:
+        scale = 1e6
+        fig.add_trace(
+            go.Bar(
+                x=by_expiration["Expiration"],
+                y=by_expiration["Call GEX"] / scale,
+                name="Call GEX",
+                marker_color="rgba(58, 181, 74, 0.6)",
+                hovertemplate="Call GEX: %{y:,.1f}M<extra></extra>",
+            )
+        )
+        fig.add_trace(
+            go.Bar(
+                x=by_expiration["Expiration"],
+                y=by_expiration["Put GEX"] / scale,
+                name="Put GEX",
+                marker_color="rgba(239, 68, 68, 0.6)",
+                hovertemplate="Put GEX: %{y:,.1f}M<extra></extra>",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=by_expiration["Expiration"],
+                y=by_expiration["Net GEX"] / scale,
+                name="Net GEX",
+                mode="lines+markers",
+                line=dict(color="#38bdf8", width=2.5),
+                marker=dict(size=6, color="#38bdf8"),
+                hovertemplate="Net GEX: %{y:,.1f}M<extra></extra>",
+            )
+        )
+    fig.add_hline(y=0, line_color="rgba(226,232,240,0.45)", line_dash="dot")
+    layout = _base_layout("GEX Contribution by Expiration")
+    layout["xaxis"]["title"] = "Expiration"
+    layout["yaxis"]["title"] = "Gamma Exposure ($M per 1% move)"
+    layout["hovermode"] = "x unified"
+    fig.update_layout(**layout, barmode="relative")
     return fig
 
 

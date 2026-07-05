@@ -1,11 +1,21 @@
-"""Gamma exposure aggregation and gamma flip simulation engine."""
+"""Gamma exposure aggregation and gamma flip simulation engine.
+
+v2 changes:
+- Fully vectorized gamma / GEX computation (numpy broadcasting) - the
+  simulation previously looped price levels x option rows in Python and
+  took minutes for SPY full chains; it now runs in well under a second.
+- Gamma flip = zero crossing NEAREST to spot (profiles frequently cross
+  zero more than once); all crossings are also reported.
+- Call/Put walls are computed within the simulation window around spot,
+  so far-dated LEAP strikes with big OI no longer hijack the walls.
+"""
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
-from .greeks import black_scholes_gamma, gamma_exposure
+from .greeks import black_scholes_gamma_vec, gamma_exposure_vec
 
 
 def _regime_message(spot: float, gamma_flip: float | None, net_gex: float) -> tuple[str, str]:
@@ -26,41 +36,59 @@ def _regime_message(spot: float, gamma_flip: float | None, net_gex: float) -> tu
     return "Neutral Gamma", "Net gamma exposure is close to balanced."
 
 
-def _find_zero_crossing(simulation: pd.DataFrame) -> float | None:
+def _find_zero_crossings(simulation: pd.DataFrame) -> list[float]:
+    """Return every interpolated zero crossing of the simulated GEX curve."""
     if simulation.empty:
-        return None
+        return []
     ordered = simulation.sort_values("price_level").reset_index(drop=True)
     values = ordered["total_gex"].to_numpy(dtype=float)
     prices = ordered["price_level"].to_numpy(dtype=float)
+    crossings: list[float] = []
     for idx in range(1, len(values)):
         prev_val, cur_val = values[idx - 1], values[idx]
         if prev_val == 0:
-            return float(prices[idx - 1])
+            crossings.append(float(prices[idx - 1]))
+            continue
         if np.sign(prev_val) != np.sign(cur_val):
             denom = cur_val - prev_val
             if denom == 0:
-                return float(prices[idx])
-            weight = -prev_val / denom
-            return float(prices[idx - 1] + weight * (prices[idx] - prices[idx - 1]))
-    return None
+                crossings.append(float(prices[idx]))
+            else:
+                weight = -prev_val / denom
+                crossings.append(float(prices[idx - 1] + weight * (prices[idx] - prices[idx - 1])))
+    return crossings
+
+
+def _nearest_crossing(crossings: list[float], spot: float) -> float | None:
+    if not crossings:
+        return None
+    return float(min(crossings, key=lambda level: abs(level - spot)))
+
+
+def _chain_arrays(chain: pd.DataFrame) -> dict[str, np.ndarray]:
+    return {
+        "strike": chain["strike"].to_numpy(dtype=float),
+        "dte": chain["dte"].to_numpy(dtype=float),
+        "iv": chain["impliedVolatility"].to_numpy(dtype=float),
+        "oi": chain["openInterest"].to_numpy(dtype=float),
+        "sign": np.where(chain["option_type"].eq("call").to_numpy(), 1.0, -1.0),
+    }
 
 
 def calculate_row_gex(chain: pd.DataFrame, spot_price: float) -> pd.DataFrame:
+    """Per-contract gamma and signed GEX (vectorized)."""
     data = chain.copy()
-    data["gamma"] = data.apply(
-        lambda row: black_scholes_gamma(
-            spot=spot_price,
-            strike=row["strike"],
-            days_to_expiration=row["dte"],
-            implied_volatility=row["impliedVolatility"],
-        ),
-        axis=1,
-    )
-    data["raw_gex"] = data.apply(
-        lambda row: gamma_exposure(row["gamma"], row["openInterest"], spot_price),
-        axis=1,
-    )
-    data["signed_gex"] = np.where(data["option_type"].eq("call"), data["raw_gex"], -data["raw_gex"])
+    if data.empty:
+        data["gamma"] = []
+        data["raw_gex"] = []
+        data["signed_gex"] = []
+        return data
+    arr = _chain_arrays(data)
+    gamma = black_scholes_gamma_vec(spot_price, arr["strike"], arr["dte"], arr["iv"])
+    raw = gamma_exposure_vec(gamma, arr["oi"], spot_price)
+    data["gamma"] = gamma
+    data["raw_gex"] = raw
+    data["signed_gex"] = raw * arr["sign"]
     return data
 
 
@@ -107,6 +135,11 @@ def aggregate_by_expiration(gex_rows: pd.DataFrame) -> pd.DataFrame:
 
 
 def simulate_total_gex(chain: pd.DataFrame, spot_price: float, range_pct: float, step_pct: float) -> pd.DataFrame:
+    """
+    Total signed GEX across hypothetical price levels (vectorized).
+
+    Broadcasting shape: levels (L, 1) against option rows (1, N).
+    """
     if chain.empty or spot_price <= 0:
         return pd.DataFrame(columns=["price_level", "total_gex"])
 
@@ -114,15 +147,26 @@ def simulate_total_gex(chain: pd.DataFrame, spot_price: float, range_pct: float,
     high = spot_price * (1 + range_pct / 100.0)
     step = max(spot_price * (step_pct / 100.0), 0.01)
     levels = np.arange(low, high + step, step)
-    rows = []
-    for level in levels:
-        total = 0.0
-        for row in chain.itertuples(index=False):
-            gamma = black_scholes_gamma(level, row.strike, row.dte, row.impliedVolatility)
-            gex = gamma_exposure(gamma, row.openInterest, level)
-            total += gex if row.option_type == "call" else -gex
-        rows.append({"price_level": float(level), "total_gex": float(total)})
-    return pd.DataFrame(rows)
+
+    arr = _chain_arrays(chain)
+    levels_col = levels[:, None]  # (L, 1)
+
+    # Chunk option rows to bound memory for very large chains.
+    n = len(arr["strike"])
+    chunk = max(int(4_000_000 / max(len(levels), 1)), 500)
+    totals = np.zeros(len(levels))
+    for start in range(0, n, chunk):
+        end = min(start + chunk, n)
+        gamma = black_scholes_gamma_vec(
+            levels_col,
+            arr["strike"][None, start:end],
+            arr["dte"][None, start:end],
+            arr["iv"][None, start:end],
+        )
+        gex = gamma_exposure_vec(gamma, arr["oi"][None, start:end], levels_col)
+        totals += (gex * arr["sign"][None, start:end]).sum(axis=1)
+
+    return pd.DataFrame({"price_level": levels.astype(float), "total_gex": totals.astype(float)})
 
 
 def build_gex_analysis(chain: pd.DataFrame, ticker: str, spot_price: float, range_pct: float, step_pct: float) -> dict:
@@ -132,17 +176,25 @@ def build_gex_analysis(chain: pd.DataFrame, ticker: str, spot_price: float, rang
     simulation = simulate_total_gex(chain, spot_price, range_pct, step_pct)
 
     net_gex = float(gex_rows["signed_gex"].sum()) if not gex_rows.empty else 0.0
-    gamma_flip = _find_zero_crossing(simulation)
+    crossings = _find_zero_crossings(simulation)
+    gamma_flip = _nearest_crossing(crossings, spot_price)
     distance_pct = None if gamma_flip is None or spot_price <= 0 else (gamma_flip - spot_price) / spot_price * 100.0
     regime, message = _regime_message(spot_price, gamma_flip, net_gex)
 
+    # Walls restricted to the simulation window so distant LEAP strikes
+    # with large OI cannot hijack them.
     call_wall = None
     put_wall = None
     peak_gamma = None
-    if not by_strike.empty:
-        call_wall = float(by_strike.loc[by_strike["Call GEX"].idxmax(), "Strike"])
-        put_wall = float(by_strike.loc[by_strike["Put GEX"].idxmin(), "Strike"])
-        peak_gamma = float(by_strike.loc[by_strike["Net GEX"].abs().idxmax(), "Strike"])
+    if not by_strike.empty and spot_price > 0:
+        low = spot_price * (1 - range_pct / 100.0)
+        high = spot_price * (1 + range_pct / 100.0)
+        window = by_strike[(by_strike["Strike"] >= low) & (by_strike["Strike"] <= high)]
+        if window.empty:
+            window = by_strike
+        call_wall = float(window.loc[window["Call GEX"].idxmax(), "Strike"])
+        put_wall = float(window.loc[window["Put GEX"].idxmin(), "Strike"])
+        peak_gamma = float(window.loc[window["Net GEX"].abs().idxmax(), "Strike"])
 
     summary = pd.DataFrame(
         [
@@ -156,6 +208,7 @@ def build_gex_analysis(chain: pd.DataFrame, ticker: str, spot_price: float, rang
                 "Call Wall": call_wall,
                 "Put Wall": put_wall,
                 "Peak Gamma Strike": peak_gamma,
+                "Zero Crossings": len(crossings),
             }
         ]
     )
@@ -167,5 +220,5 @@ def build_gex_analysis(chain: pd.DataFrame, ticker: str, spot_price: float, rang
         "simulation": simulation,
         "gex_rows": gex_rows,
         "message": message,
+        "all_crossings": crossings,
     }
-
