@@ -450,15 +450,19 @@ def render_macro_dashboard(show_download: bool = True, module_tabs: list[dict] |
         st.info("FRED_API_KEY is not configured. Yahoo market proxies are live; FRED macro series display as N/A until a key is added.")
 
     from modules.tier2.market_regime_ui import render_market_regime_center
+    from modules.tier2.bubble_indicator_ui import render_bubble_indicator_dashboard
     
     tab_configs = module_tabs or []
-    tab_labels = ["Market Regime Center", "Dashboard", "Asset Outlook", "Key Indicators", "Market Snapshot", "Raw Snapshot"]
+    tab_labels = ["Market Regime Center", "Bubble Indicator", "Dashboard", "Asset Outlook", "Key Indicators", "Market Snapshot", "Raw Snapshot"]
     tab_labels.extend(tab_config["label"] for tab_config in tab_configs)
     tabs = st.tabs(tab_labels)
-    tab_regime, tab_dashboard, tab_assets, tab_indicators, tab_market, tab_raw = tabs[:6]
+    tab_regime, tab_bubble, tab_dashboard, tab_assets, tab_indicators, tab_market, tab_raw = tabs[:7]
     
     with tab_regime:
         render_market_regime_center()
+        
+    with tab_bubble:
+        render_bubble_indicator_dashboard()
         
     with tab_dashboard:
         c1, c2, c3, c4 = st.columns(4)
