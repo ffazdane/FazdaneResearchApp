@@ -57,13 +57,14 @@ def get_text_color(val, bg_color):
     return 'black'
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_money_flow_data(tickers, interval, days_mult, lookback):
+def fetch_money_flow_data(tickers, interval, days_mult):
     tickers = list(tickers)
     if not tickers:
         return pd.DataFrame()
 
+    # Always fetch the max possible periods (500) so that changing lookback uses cache instantly
     end_date = datetime.now()
-    start_date = end_date - timedelta(days=lookback * days_mult)
+    start_date = end_date - timedelta(days=500 * days_mult)
     
     data = yf.download(
         tickers,
@@ -110,11 +111,16 @@ class MoneyFlowModule(FazDaneModule):
         st.markdown("**View Filters**")
         self.filter_type = st.selectbox(
             "View Filter:",
-            options=['Top 15', 'Bottom 10', 'Perf Range (Custom %)', 'Show All (Sorted)'],
+            options=['Ranked Pagination', 'Bottom 10', 'Perf Range (Custom %)', 'Show All (Sorted)'],
             index=0
         )
         
-        if self.filter_type == 'Perf Range (Custom %)':
+        if self.filter_type == 'Ranked Pagination':
+            col1, col2 = st.columns(2)
+            self.rank_start = col1.number_input("Start Rank:", min_value=1, value=1, step=15)
+            self.rank_count = col2.number_input("Count:", min_value=1, value=15, step=15)
+            self.range_limits = None
+        elif self.filter_type == 'Perf Range (Custom %)':
             self.range_limits = st.slider("Range %:", min_value=-100.0, max_value=500.0, value=(5.0, 30.0), step=1.0)
         else:
             self.range_limits = None
@@ -139,8 +145,7 @@ class MoneyFlowModule(FazDaneModule):
             close_data = fetch_money_flow_data(
                 tickers=initial_tickers, 
                 interval=cfg['interval'], 
-                days_mult=cfg['days_mult'], 
-                lookback=self.lookback
+                days_mult=cfg['days_mult']
             )
             
         if close_data.empty:
@@ -161,9 +166,14 @@ class MoneyFlowModule(FazDaneModule):
         sorted_all = cumulative.sort_values(ascending=False)
         
         # Filtering
-        if self.filter_type == 'Top 15':
-            tickers = sorted_all.head(15).index.tolist()
-            header_filter = "TOP 15"
+        if self.filter_type == 'Ranked Pagination':
+            start_idx = self.rank_start - 1
+            end_idx = start_idx + self.rank_count
+            tickers = sorted_all.iloc[start_idx:end_idx].index.tolist()
+            if not tickers:
+                st.warning(f"No tickers found at rank {self.rank_start}. Max rank is {len(sorted_all)}.")
+                return
+            header_filter = f"RANKS {self.rank_start} TO {start_idx + len(tickers)}"
         elif self.filter_type == 'Bottom 10':
             tickers = sorted_all.tail(10).index.tolist()
             header_filter = "BOTTOM 10"
@@ -202,36 +212,39 @@ class MoneyFlowModule(FazDaneModule):
         fig.patch.set_facecolor('white')
         ax.set_facecolor('white')
 
+        n_rows = len(final_df)
+        n_tickers = len(tickers)
+        num_cells = n_rows * n_tickers
+        
+        show_annotations = num_cells <= 1500
+
         sns.heatmap(
             final_df,
-            annot=True,
+            annot=show_annotations,
             cmap='RdYlGn',
             center=0,
-            fmt=".1f",
+            fmt=".1f" if show_annotations else "",
             linewidths=.5,
             cbar_kws={'shrink': 0.25},
             ax=ax
         )
 
-        n_rows = len(final_df)
-        n_tickers = len(tickers)
-
-        facecolors = ax.collections[0].get_facecolors()
-
-        for i, text in enumerate(ax.texts):
-            try:
-                val_str = text.get_text().replace('%', '')
-                val = float(val_str)
-                text.set_text(f"{val:.1f}%")
-                bg_color = facecolors[i] if i < len(facecolors) else None
-                text.set_color(get_text_color(val, bg_color))
-                if abs(val) >= 5 or val < 0:
-                    text.set_weight('bold')
-                if i >= (n_rows - 1) * n_tickers:
-                    text.set_weight('bold')
-                    text.set_fontsize(12)
-            except Exception:
-                continue
+        if show_annotations:
+            facecolors = ax.collections[0].get_facecolors()
+            for i, text in enumerate(ax.texts):
+                try:
+                    val_str = text.get_text().replace('%', '')
+                    val = float(val_str)
+                    text.set_text(f"{val:.1f}%")
+                    bg_color = facecolors[i] if i < len(facecolors) else None
+                    text.set_color(get_text_color(val, bg_color))
+                    if abs(val) >= 5 or val < 0:
+                        text.set_weight('bold')
+                    if i >= (n_rows - 1) * n_tickers:
+                        text.set_weight('bold')
+                        text.set_fontsize(12)
+                except Exception:
+                    continue
 
         ax.axhline(n_rows - 1, color='black', linewidth=4)
         ax.xaxis.tick_top()
@@ -293,3 +306,16 @@ class MoneyFlowModule(FazDaneModule):
         )
 
         st.pyplot(fig)
+        
+        st.markdown("---")
+        st.markdown("### 📋 Export Tickers")
+        st.markdown("**Current View**")
+        st.code(", ".join(tickers), language="text")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Top 25**")
+            st.code(", ".join(sorted_all.head(25).index.tolist()), language="text")
+        with col2:
+            st.markdown("**Bottom 25**")
+            st.code(", ".join(sorted_all.tail(25).index.tolist()), language="text")
