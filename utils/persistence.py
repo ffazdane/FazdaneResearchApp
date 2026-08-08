@@ -61,6 +61,10 @@ DATABASES = {
         "env_var": "CYCLE_ENGINE_DB_PATH",
         "default_path": REPO_ROOT / "data" / "cycle_engine" / "cycle_engine.sqlite",
     },
+    "master_ticker_analysis": {
+        "env_var": "MASTER_TICKER_ANALYSIS_DB_PATH",
+        "default_path": REPO_ROOT / "data" / "master_ticker_analysis.sqlite",
+    },
 }
 
 BACKUP_DIR = REPO_ROOT / "data" / "backups"

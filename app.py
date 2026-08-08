@@ -257,6 +257,7 @@ MODULE_REGISTRY = {
     "Calendar Opportunity Scoring Engine": ("modules.calendar_scoring.dashboard", "CalendarOpportunityScoringModule", 2),
     "Price Action Story Engine": ("modules.tier2.price_action_story", "PriceActionStoryModule", 2),
     "Regime Intelligence Dashboard": ("modules.tier2.markov_regime_engine", "MarkovRegimeEngineModule", 2),
+    "Master Ticker Universe Filter": ("modules.tier2.master_ticker_filter", "MasterTickerFilterModule", 2),
     # Tier 3  Forecasting & Cycles
     "Bradley Siderograph": ("modules.tier3.bradley_siderograph", "BradleySiderographModule", 3),
     "Elliott Wave Analysis": ("modules.tier3.elliott_wave_analysis", "ElliottWaveAnalysisModule", 3),
