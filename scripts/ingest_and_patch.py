@@ -410,6 +410,9 @@ def main():
             conn.commit()
             
     logger.info("Database migration, patching, and 2026 updates successfully completed!")
+    
+    from utils.persistence import backup_database
+    backup_database("options_liquidity", reason="ingest and patch complete")
 
 if __name__ == "__main__":
     main()

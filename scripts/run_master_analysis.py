@@ -328,6 +328,9 @@ def main():
 
     write_progress({"status": "completed", "total": total, "current": total, "ticker": "Done"})
     logger.info("Master Ticker Analysis Process Completed Successfully!")
+    
+    from utils.persistence import backup_database
+    backup_database("master_ticker_analysis", reason="Automated run_master_analysis completion")
 
 if __name__ == "__main__":
     main()
