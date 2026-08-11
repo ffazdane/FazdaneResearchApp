@@ -117,8 +117,9 @@ class MoneyFlowModule(FazDaneModule):
         
         if self.filter_type == 'Ranked Pagination':
             col1, col2 = st.columns(2)
-            self.rank_start = col1.number_input("Start Rank:", min_value=1, value=1, step=15)
             self.rank_count = col2.number_input("Count:", min_value=1, value=15, step=15)
+            max_start_rank = max(1, len(self.mf_tickers))
+            self.rank_start = col1.number_input("Start Rank:", min_value=1, max_value=max_start_rank, value=1, step=self.rank_count)
             self.range_limits = None
         elif self.filter_type == 'Perf Range (Custom %)':
             self.range_limits = st.slider("Range %:", min_value=-100.0, max_value=500.0, value=(5.0, 30.0), step=1.0)
@@ -168,6 +169,10 @@ class MoneyFlowModule(FazDaneModule):
         # Filtering
         if self.filter_type == 'Ranked Pagination':
             start_idx = self.rank_start - 1
+            if start_idx >= len(sorted_all):
+                start_idx = 0
+                self.rank_start = 1
+                
             end_idx = start_idx + self.rank_count
             tickers = sorted_all.iloc[start_idx:end_idx].index.tolist()
             if not tickers:
@@ -253,8 +258,18 @@ class MoneyFlowModule(FazDaneModule):
         plt.yticks(color='black')
 
         ax_bottom = ax.secondary_xaxis('bottom')
-        ax_bottom.set_xticks(range(len(tickers)))
-        ax_bottom.set_xticklabels(tickers, fontweight='bold', fontsize=12, color='black')
+        ax_bottom.set_xticks([i + 0.5 for i in range(len(tickers))])
+        ax_bottom.tick_params(length=0)
+        mf_tickers_list = list(self.mf_tickers)
+        ranks = [str(mf_tickers_list.index(t) + 1) if t in mf_tickers_list else '?' for t in tickers]
+        ax_bottom.set_xticklabels(ranks, fontweight='bold', fontsize=12, color='black')
+        
+        ax.text(
+            0, -0.02, 'Ticker Ranks -', 
+            transform=ax.transAxes, 
+            ha='right', va='center', 
+            fontweight='normal', fontsize=11, color='#333333'
+        )
 
         SIDEWAYS_THRESHOLD = 1.0
         blend = blended_transform_factory(ax.transData, ax.transAxes)
@@ -277,19 +292,6 @@ class MoneyFlowModule(FazDaneModule):
                 clip_on=False
             )
 
-        for x_frac, label, color in [
-            (0.20, '● Uptrend',   '#00BB00'),
-            (0.50, '● Sideways',  '#DDAA00'),
-            (0.80, '● Downtrend', '#EE2222'),
-        ]:
-            ax.text(
-                x_frac, -0.115,
-                label,
-                transform=ax.transAxes,
-                ha='center', va='center',
-                fontsize=9, fontweight='bold',
-                color=color, clip_on=False
-            )
 
         plt.subplots_adjust(bottom=0.25, top=0.9)
 
@@ -298,11 +300,11 @@ class MoneyFlowModule(FazDaneModule):
         plt.title(title_str, fontsize=18, fontweight='bold', pad=60, color='black')
         
         plt.text(
-            1.0, -0.155, 'Copyright (c) FazDane Analytics | Research & Trading Intelligence Platform',
+            0.5, -0.155, 'Copyright © FazDane Analytics | Research & Trading Intelligence Platform',
             transform=ax.transAxes,
-            ha='right', va='top',
-            fontsize=14, fontweight='bold',
-            color='#444444', style='italic'
+            ha='center', va='top',
+            fontsize=10, fontweight='normal',
+            color='#777777'
         )
 
         st.pyplot(fig)
