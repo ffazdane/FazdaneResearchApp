@@ -157,6 +157,71 @@ def calculate_fdts_macd(df, period=20,
     
     return state, days_in_state
 
+def get_upcoming_earnings(tickers, days=40):
+    try:
+        from utils.earnings_calendar_store import DB_PATH as ec_db_path
+        import sqlite3
+        from datetime import datetime, timedelta
+        import yfinance as yf
+        import concurrent.futures
+        
+        if not tickers:
+            return {}
+            
+        today_date = datetime.now()
+        today_str = today_date.strftime("%Y-%m-%d")
+        future_str = (today_date + timedelta(days=days)).strftime("%Y-%m-%d")
+        
+        result = {}
+        missing_tickers = list(tickers)
+        
+        if ec_db_path.exists():
+            placeholders = ",".join("?" for _ in tickers)
+            with sqlite3.connect(ec_db_path) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT ticker, MIN(date) 
+                    FROM ec_earnings_events 
+                    WHERE ticker IN ({placeholders}) AND date >= ? AND date <= ?
+                    GROUP BY ticker
+                    """,
+                    [*tickers, today_str, future_str]
+                ).fetchall()
+                for row in rows:
+                    result[row[0]] = row[1]
+                    if row[0] in missing_tickers:
+                        missing_tickers.remove(row[0])
+                        
+        # Fallback to yfinance for missing tickers
+        if missing_tickers:
+            def fetch_yf(t):
+                try:
+                    cal = yf.Ticker(t).calendar
+                    if isinstance(cal, dict) and "Earnings Date" in cal:
+                        ed = cal.get("Earnings Date")
+                        if isinstance(ed, list) and len(ed) > 0:
+                            ed_val = ed[0].strftime("%Y-%m-%d")
+                            if today_str <= ed_val <= future_str:
+                                return t, ed_val
+                    elif hasattr(cal, 'columns') and "Earnings Date" in cal.columns:
+                        ed_val = cal["Earnings Date"].iloc[0].strftime("%Y-%m-%d")
+                        if today_str <= ed_val <= future_str:
+                            return t, ed_val
+                except Exception:
+                    pass
+                return t, None
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                for t, ed_val in executor.map(fetch_yf, missing_tickers):
+                    if ed_val:
+                        result[t] = ed_val
+
+        return result
+    except Exception as e:
+        import logging
+        logging.getLogger("FazDaneApp").error(f"Failed to fetch earnings dates: {e}")
+        return {}
+
 class MoneyFlowModule(FazDaneModule):
     MODULE_NAME = "Multi-Timeframe Money Flow"
     MODULE_ICON = "🔥"
@@ -178,7 +243,7 @@ class MoneyFlowModule(FazDaneModule):
 
         self.timeframe = st.selectbox("Interval:", options=['Daily', 'Weekly', 'Monthly', 'Yearly'], index=0)
         self.lookback = st.number_input("Lookback Periods:", min_value=1, max_value=500, value=10)
-        self.sort_order = st.selectbox("Sort Order:", options=['Total Cumulative %', 'FDTS Signal & Days'], index=0)
+        self.sort_order = st.selectbox("Sort Order:", options=['Total Cumulative %', 'FDTS Signal & Days', 'Ticker Rank'], index=0)
         
         st.markdown("**View Filters**")
         self.filter_type = st.selectbox(
@@ -279,6 +344,10 @@ class MoneyFlowModule(FazDaneModule):
                     score = -20000
                 scores[ticker] = score
             sorted_all = pd.Series(scores).sort_values(ascending=False)
+        elif self.sort_order == 'Ticker Rank':
+            mf_tickers_list = list(self.mf_tickers)
+            valid_tickers = [t for t in mf_tickers_list if t in cumulative.index]
+            sorted_all = cumulative.loc[valid_tickers]
         else:
             sorted_all = cumulative.sort_values(ascending=False)
         
@@ -322,6 +391,10 @@ class MoneyFlowModule(FazDaneModule):
         cum_footer = cumulative.loc[tickers].to_frame().T
         cum_footer.index = ['TOTAL CUMULATIVE %']
         final_df = pd.concat([plot_data, cum_footer]).fillna(0)
+        
+        # Add earnings indication
+        upcoming_earnings = get_upcoming_earnings(tickers, days=40)
+        final_df.columns = [f"{t} ☎️" if t in upcoming_earnings else t for t in tickers]
         final_df.columns.name = None  # Remove 'Ticker' label for cleaner top axis
         
         # -------- PLOT --------
@@ -373,6 +446,11 @@ class MoneyFlowModule(FazDaneModule):
         ax.xaxis.set_label_position('top')
         plt.xticks(rotation=0, ha='center', fontweight='bold', color='#111111', fontsize=11)
         plt.yticks(color='#333333', fontsize=10)
+        
+        # Color the xtick labels red if they have upcoming earnings
+        for tick_label in ax.get_xticklabels():
+            if '☎' in tick_label.get_text():
+                tick_label.set_color("red")
 
         mf_tickers_list = list(self.mf_tickers)
         
