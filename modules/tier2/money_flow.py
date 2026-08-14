@@ -444,7 +444,7 @@ class MoneyFlowModule(FazDaneModule):
         ax.axhline(n_rows - 1, color='#222222', linewidth=3)
         ax.xaxis.tick_top()
         ax.xaxis.set_label_position('top')
-        plt.xticks(rotation=0, ha='center', fontweight='bold', color='#111111', fontsize=11)
+        plt.xticks(rotation=0, ha='center', fontweight='bold', color='#111111', fontsize=9)
         plt.yticks(color='#333333', fontsize=10)
         
         # Color the xtick labels red if they have upcoming earnings
