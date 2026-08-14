@@ -65,6 +65,10 @@ DATABASES = {
         "env_var": "MASTER_TICKER_ANALYSIS_DB_PATH",
         "default_path": REPO_ROOT / "data" / "master_ticker_analysis.sqlite",
     },
+    "universes_config": {
+        "env_var": "UNIVERSES_CONFIG_PATH",
+        "default_path": REPO_ROOT / "config" / "universes.json",
+    },
 }
 
 BACKUP_DIR = REPO_ROOT / "data" / "backups"
@@ -198,6 +202,10 @@ def db_exists_and_has_data(db_name: str) -> bool:
         db_path = get_db_path(db_name)
         if not db_path.exists():
             return False
+            
+        if db_name == "universes_config":
+            return db_path.stat().st_size > 10
+            
         if db_path.stat().st_size < 4096:
             return False
 

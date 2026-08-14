@@ -11,8 +11,9 @@ import re
 
 import streamlit as st
 
-
-UNIVERSE_CONFIG_PATH = os.path.join("config", "universes.json")
+from pathlib import Path
+REPO_ROOT = Path(__file__).resolve().parents[1]
+UNIVERSE_CONFIG_PATH = str(REPO_ROOT / "config" / "universes.json")
 
 KNOWN_TICKER_NAMES = {
     "^GSPC": "S&P 500 Index",
@@ -216,6 +217,14 @@ def save_universes(universes: dict) -> None:
     os.makedirs(os.path.dirname(UNIVERSE_CONFIG_PATH), exist_ok=True)
     with open(UNIVERSE_CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(universes, f, indent=4)
+        
+    # Trigger persistence backup
+    try:
+        from utils.persistence import backup_database
+        backup_database("universes_config", reason="auto-save")
+    except Exception as e:
+        import logging
+        logging.getLogger("FazDanePersistence").warning(f"Failed to backup universe config: {e}")
 
 
 def delete_universe(name: str) -> None:
