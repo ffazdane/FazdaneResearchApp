@@ -78,13 +78,84 @@ def fetch_money_flow_data(tickers, interval, days_mult):
     if data.empty:
         return pd.DataFrame()
         
-    close_data = data['Close'] if 'Close' in data else data['Adj Close']
+    return data
+
+def calculate_fdts_macd(df, period=20, 
+                        macdFastLong=3, macdSlowLong=10, macdSignalLong=16,
+                        macdFastShort=12, macdSlowShort=26, macdSignalShort=9):
+    def exp_average(series, span):
+        return series.ewm(span=span, adjust=False).mean()
+
+    open_p = df['Open']
+    high_p = df['High']
+    low_p = df['Low']
+    close_p = df['Close']
     
-    # If there's only one ticker, it returns a Series. Convert to DataFrame.
-    if isinstance(close_data, pd.Series):
-        close_data = pd.DataFrame(close_data, columns=[tickers[0]])
+    price = (high_p + low_p + close_p) / 3
+    
+    ema1 = exp_average(price, period)
+    ema2 = exp_average(ema1, period)
+    ema3 = exp_average(ema2, period)
+    tma1 = 3 * ema1 - 3 * ema2 + ema3
+    
+    tma1_ema1 = exp_average(tma1, period)
+    tma1_ema2 = exp_average(tma1_ema1, period)
+    tma1_ema3 = exp_average(tma1_ema2, period)
+    tma2 = 3 * tma1_ema1 - 3 * tma1_ema2 + tma1_ema3
+    
+    typical_tema = tma1 + (tma1 - tma2)
+    
+    # Heikin-Ashi
+    ha_open = pd.Series(np.nan, index=df.index)
+    
+    first_valid = close_p.first_valid_index()
+    if first_valid is not None:
+        idx = df.index.get_loc(first_valid)
+        hl2 = (high_p.iloc[idx] + low_p.iloc[idx]) / 2
+        ha_open.iloc[idx] = hl2
+    
+    ohlc4 = (open_p + high_p + low_p + close_p) / 4
+    if first_valid is not None:
+        for i in range(idx + 1, len(df)):
+            ha_open.iloc[i] = (ohlc4.iloc[i-1] + ha_open.iloc[i-1]) / 2
         
-    return close_data
+    ha_close = (ohlc4 + ha_open + np.maximum(high_p, ha_open) + np.minimum(low_p, ha_open)) / 4
+    
+    ha_ema1 = exp_average(ha_close, period)
+    ha_ema2 = exp_average(ha_ema1, period)
+    ha_ema3 = exp_average(ha_ema2, period)
+    ha_tma1 = 3 * ha_ema1 - 3 * ha_ema2 + ha_ema3
+    
+    ha_tma1_ema1 = exp_average(ha_tma1, period)
+    ha_tma1_ema2 = exp_average(ha_tma1_ema1, period)
+    ha_tma1_ema3 = exp_average(ha_tma1_ema2, period)
+    ha_tma2 = 3 * ha_tma1_ema1 - 3 * ha_tma1_ema2 + ha_tma1_ema3
+    
+    ha_tema = ha_tma1 + (ha_tma1 - ha_tma2)
+    fdts_dev = typical_tema - ha_tema
+    
+    macd_long = exp_average(close_p, macdFastLong) - exp_average(close_p, macdSlowLong)
+    macd_long_dev = macd_long - exp_average(macd_long, macdSignalLong)
+    
+    macd_short = exp_average(close_p, macdFastShort) - exp_average(close_p, macdSlowShort)
+    macd_short_dev = macd_short - exp_average(macd_short, macdSignalShort)
+    
+    buy_signal = (fdts_dev > 0) & (macd_long_dev > 0)
+    sell_signal = (fdts_dev < 0) & (macd_short_dev < 0)
+    
+    state = pd.Series(0, index=df.index)
+    state[close_p.isna()] = np.nan
+    state[buy_signal] = 1
+    state[sell_signal] = -1
+    
+    state_changed = state != state.shift(1)
+    state_changed[state.isna()] = False
+    
+    group_id = state_changed.cumsum()
+    group_id = group_id.where(~state.isna())
+    days_in_state = group_id.groupby(group_id).cumcount() + 1
+    
+    return state, days_in_state
 
 class MoneyFlowModule(FazDaneModule):
     MODULE_NAME = "Multi-Timeframe Money Flow"
@@ -107,6 +178,7 @@ class MoneyFlowModule(FazDaneModule):
 
         self.timeframe = st.selectbox("Interval:", options=['Daily', 'Weekly', 'Monthly', 'Yearly'], index=0)
         self.lookback = st.number_input("Lookback Periods:", min_value=1, max_value=500, value=10)
+        self.sort_order = st.selectbox("Sort Order:", options=['Total Cumulative %', 'FDTS Signal & Days'], index=0)
         
         st.markdown("**View Filters**")
         self.filter_type = st.selectbox(
@@ -116,10 +188,9 @@ class MoneyFlowModule(FazDaneModule):
         )
         
         if self.filter_type == 'Ranked Pagination':
-            col1, col2 = st.columns(2)
-            self.rank_count = col2.number_input("Count:", min_value=1, value=15, step=15)
+            self.rank_count = st.number_input("Count:", min_value=1, value=15, step=15)
             max_start_rank = max(1, len(self.mf_tickers))
-            self.rank_start = col1.number_input("Start Rank:", min_value=1, max_value=max_start_rank, value=1, step=self.rank_count)
+            self.rank_start = st.number_input("Start Rank:", min_value=1, max_value=max_start_rank, value=1, step=self.rank_count)
             self.range_limits = None
         elif self.filter_type == 'Perf Range (Custom %)':
             self.range_limits = st.slider("Range %:", min_value=-100.0, max_value=500.0, value=(5.0, 30.0), step=1.0)
@@ -143,15 +214,41 @@ class MoneyFlowModule(FazDaneModule):
             return
             
         with st.spinner(f"Fetching {self.timeframe} data for {len(initial_tickers)} tickers..."):
-            close_data = fetch_money_flow_data(
+            full_data = fetch_money_flow_data(
                 tickers=initial_tickers, 
                 interval=cfg['interval'], 
                 days_mult=cfg['days_mult']
             )
             
-        if close_data.empty:
+        if full_data.empty:
             st.warning("⚠️ No data found for the selected parameters.")
             return
+            
+        is_multi = isinstance(full_data.columns, pd.MultiIndex)
+        
+        # Calculate FDTS for each ticker
+        fdts_results = {}
+        for ticker in initial_tickers:
+            try:
+                if is_multi:
+                    df = full_data.xs(ticker, level=1, axis=1)
+                else:
+                    df = full_data  # Only one ticker, columns are Open, High, Low, Close
+                    
+                state_series, days_series = calculate_fdts_macd(df)
+                if not state_series.empty:
+                    fdts_results[ticker] = {
+                        'state': state_series.iloc[-1],
+                        'days': days_series.iloc[-1]
+                    }
+            except Exception as e:
+                logger.error(f"Error calculating FDTS for {ticker}: {e}")
+                
+        if is_multi:
+            close_data = full_data['Close'] if 'Close' in full_data else full_data['Adj Close']
+        else:
+            close_data = full_data['Close'] if 'Close' in full_data else full_data['Adj Close']
+            close_data = pd.DataFrame(close_data, columns=[initial_tickers[0]])
             
         if self.timeframe == 'Yearly':
             close_data = close_data.resample('YE').last()
@@ -164,7 +261,26 @@ class MoneyFlowModule(FazDaneModule):
         
         # True Cumulative
         cumulative = ((period_returns / 100 + 1).prod() - 1) * 100
-        sorted_all = cumulative.sort_values(ascending=False)
+        
+        # Sorting
+        if self.sort_order == 'FDTS Signal & Days':
+            scores = {}
+            for ticker, cum in cumulative.items():
+                if ticker in fdts_results:
+                    stt = fdts_results[ticker]['state']
+                    dys = fdts_results[ticker]['days']
+                    if stt == 1:
+                        score = 10000 - dys  # Buy, ascending days (lowest days at top, so highest score = 10000 - 1 = 9999)
+                    elif stt == 0:
+                        score = 0 + dys      # Neutral, descending days (most days at top)
+                    else:
+                        score = -10000 - dys # Sell, ascending days (lowest days at top of sells = highest score among sells)
+                else:
+                    score = -20000
+                scores[ticker] = score
+            sorted_all = pd.Series(scores).sort_values(ascending=False)
+        else:
+            sorted_all = cumulative.sort_values(ascending=False)
         
         # Filtering
         if self.filter_type == 'Ranked Pagination':
@@ -206,6 +322,7 @@ class MoneyFlowModule(FazDaneModule):
         cum_footer = cumulative.loc[tickers].to_frame().T
         cum_footer.index = ['TOTAL CUMULATIVE %']
         final_df = pd.concat([plot_data, cum_footer]).fillna(0)
+        final_df.columns.name = None  # Remove 'Ticker' label for cleaner top axis
         
         # -------- PLOT --------
         cfg = CONFIG[self.timeframe]
@@ -251,30 +368,77 @@ class MoneyFlowModule(FazDaneModule):
                 except Exception:
                     continue
 
-        ax.axhline(n_rows - 1, color='black', linewidth=4)
+        ax.axhline(n_rows - 1, color='#222222', linewidth=3)
         ax.xaxis.tick_top()
         ax.xaxis.set_label_position('top')
-        plt.xticks(rotation=0, ha='center', fontweight='bold', color='black')
-        plt.yticks(color='black')
+        plt.xticks(rotation=0, ha='center', fontweight='bold', color='#111111', fontsize=11)
+        plt.yticks(color='#333333', fontsize=10)
 
-        ax_bottom = ax.secondary_xaxis('bottom')
-        ax_bottom.set_xticks([i + 0.5 for i in range(len(tickers))])
-        ax_bottom.tick_params(length=0)
         mf_tickers_list = list(self.mf_tickers)
-        ranks = [str(mf_tickers_list.index(t) + 1) if t in mf_tickers_list else '?' for t in tickers]
-        ax_bottom.set_xticklabels(ranks, fontweight='bold', fontsize=12, color='black')
+        
+        blend_labels = blended_transform_factory(ax.transAxes, ax.transData)
+        y_rank = n_rows + 0.5
+        y_fdts = n_rows + 1.2
+        y_dots = n_rows + 1.8
+
+        ax.text(
+            -0.01, y_rank, 'Ticker Ranks', 
+            transform=blend_labels, 
+            ha='right', va='center', 
+            fontweight='bold', fontsize=10, color='#444444'
+        )
         
         ax.text(
-            0, -0.02, 'Ticker Ranks -', 
-            transform=ax.transAxes, 
+            -0.01, y_fdts, 'FDTS Signal (Days)', 
+            transform=blend_labels, 
             ha='right', va='center', 
-            fontweight='normal', fontsize=11, color='#333333'
+            fontweight='bold', fontsize=10, color='#444444'
         )
 
         SIDEWAYS_THRESHOLD = 1.0
-        blend = blended_transform_factory(ax.transData, ax.transAxes)
 
         for i, ticker in enumerate(tickers):
+            # Draw Ticker Rank
+            rank_str = str(mf_tickers_list.index(ticker) + 1) if ticker in mf_tickers_list else '?'
+            ax.text(
+                i + 0.5, y_rank,
+                rank_str,
+                transform=ax.transData,
+                ha='center', va='center',
+                fontsize=11, fontweight='bold', color='black',
+                clip_on=False
+            )
+
+            # Draw FDTS Signal
+            if 'fdts_results' in locals() and ticker in fdts_results:
+                stt = fdts_results[ticker]['state']
+                dys = fdts_results[ticker]['days']
+                if pd.isna(stt):
+                    txt = "-"
+                    tcolor = 'black'
+                elif stt == 1:
+                    txt = f"B({int(dys)})"
+                    tcolor = '#008800'
+                elif stt == -1:
+                    txt = f"S({int(dys)})"
+                    tcolor = '#BB0000'
+                else:
+                    txt = f"N({int(dys)})"
+                    tcolor = '#888800'
+            else:
+                txt = "-"
+                tcolor = 'black'
+                
+            ax.text(
+                i + 0.5, y_fdts,
+                txt,
+                transform=ax.transData,
+                ha='center', va='center',
+                fontsize=10, fontweight='bold', color=tcolor,
+                clip_on=False
+            )
+
+            # Draw Dots
             cum_val = cumulative.get(ticker, 0)
             if cum_val > SIDEWAYS_THRESHOLD:
                 dot_color = '#00BB00'
@@ -284,27 +448,28 @@ class MoneyFlowModule(FazDaneModule):
                 dot_color = '#DDAA00'
 
             ax.text(
-                i + 0.5, -0.075,
+                i + 0.5, y_dots,
                 '●',
-                transform=blend,
+                transform=ax.transData,
                 ha='center', va='center',
                 fontsize=14, color=dot_color,
                 clip_on=False
             )
 
 
+        # Increase bottom margin slightly to fit the new manual labels
         plt.subplots_adjust(bottom=0.25, top=0.9)
 
         universe_name = getattr(self, "mf_universe_name", "Selected Universe")
         title_str = f'{self.timeframe.upper()} {header_filter}: {universe_name.upper()}'
-        plt.title(title_str, fontsize=18, fontweight='bold', pad=60, color='black')
+        plt.title(title_str, fontsize=20, fontweight='900', pad=80, color='#111111')
         
         plt.text(
-            0.5, -0.155, 'Copyright © FazDane Analytics | Research & Trading Intelligence Platform',
+            0.5, 1.12, 'Copyright © FazDane Analytics | Research & Trading Intelligence Platform',
             transform=ax.transAxes,
-            ha='center', va='top',
-            fontsize=10, fontweight='normal',
-            color='#777777'
+            ha='center', va='bottom',
+            fontsize=10, fontstyle='italic',
+            color='#666666'
         )
 
         st.pyplot(fig)
