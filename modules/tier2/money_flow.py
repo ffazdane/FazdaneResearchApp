@@ -479,6 +479,9 @@ class MoneyFlowModule(FazDaneModule):
         st.markdown("**Current View**")
         st.code(", ".join(tickers), language="text")
         
+        st.markdown("**Full Sorted List**")
+        st.code(", ".join(sorted_all.index.tolist()), language="text")
+        
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("**Top 25**")
