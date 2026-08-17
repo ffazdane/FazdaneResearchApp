@@ -293,6 +293,7 @@ class MoneyFlowModule(FazDaneModule):
         
         # Calculate FDTS for each ticker
         fdts_results = {}
+        ichimoku_results = {}
         for ticker in initial_tickers:
             try:
                 if is_multi:
@@ -306,8 +307,36 @@ class MoneyFlowModule(FazDaneModule):
                         'state': state_series.iloc[-1],
                         'days': days_series.iloc[-1]
                     }
+                    
+                # Ichimoku Cloud Check
+                try:
+                    high_9 = df['High'].rolling(window=9).max()
+                    low_9 = df['Low'].rolling(window=9).min()
+                    tenkan_sen = (high_9 + low_9) / 2
+
+                    high_26 = df['High'].rolling(window=26).max()
+                    low_26 = df['Low'].rolling(window=26).min()
+                    kijun_sen = (high_26 + low_26) / 2
+
+                    senkou_span_a = ((tenkan_sen + kijun_sen) / 2).shift(26)
+
+                    high_52 = df['High'].rolling(window=52).max()
+                    low_52 = df['Low'].rolling(window=52).min()
+                    senkou_span_b = ((high_52 + low_52) / 2).shift(26)
+
+                    current_price = df['Close'].iloc[-1]
+                    curr_span_a = senkou_span_a.iloc[-1]
+                    curr_span_b = senkou_span_b.iloc[-1]
+
+                    if not (pd.isna(curr_span_a) or pd.isna(curr_span_b)):
+                        min_cloud = min(curr_span_a, curr_span_b)
+                        if current_price < min_cloud:
+                            ichimoku_results[ticker] = 'below'
+                except Exception as e_ich:
+                    logger.debug(f"Could not calc ichimoku for {ticker}: {e_ich}")
+                    
             except Exception as e:
-                logger.error(f"Error calculating FDTS for {ticker}: {e}")
+                logger.error(f"Error calculating FDTS/Ichimoku for {ticker}: {e}")
                 
         if is_multi:
             close_data = full_data['Close'] if 'Close' in full_data else full_data['Adj Close']
@@ -447,10 +476,18 @@ class MoneyFlowModule(FazDaneModule):
         plt.xticks(rotation=0, ha='center', fontweight='bold', color='#111111', fontsize=9)
         plt.yticks(color='#333333', fontsize=10)
         
-        # Color the xtick labels red if they have upcoming earnings
+        # Color the xtick labels
         for tick_label in ax.get_xticklabels():
-            if '☎' in tick_label.get_text():
+            label_text = tick_label.get_text()
+            raw_ticker = label_text.replace(" ☎️", "").strip()
+            
+            has_earnings = '☎' in label_text
+            is_below_cloud = ichimoku_results.get(raw_ticker) == 'below'
+
+            if has_earnings:
                 tick_label.set_color("red")
+            elif is_below_cloud:
+                tick_label.set_color("orange")
 
         mf_tickers_list = list(self.mf_tickers)
         
