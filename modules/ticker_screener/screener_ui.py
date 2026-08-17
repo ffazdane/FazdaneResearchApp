@@ -13,15 +13,8 @@ class TickerScreenerModule(FazDaneModule):
     def render_sidebar(self):
         st.markdown("**Screener Configuration**")
         
-        universes = load_universes()
-        universe_names = [name for name in universes.keys() if not name.startswith("__")]
-        
-        self.selected_universes = st.multiselect(
-            "Select Universes to Scan",
-            options=universe_names,
-            default=universe_names[:1] if universe_names else None
-        )
-        
+        st.info("Scanning all available universes automatically (excluding futures and indices).")
+
         self.min_volume = st.number_input("Minimum Average Volume", value=5000000, step=1000000)
         self.min_premium = st.number_input("Minimum Option Premium ($)", value=1.50, step=0.50)
         self.max_spread = st.number_input("Maximum Bid/Ask Spread (%)", value=10.0, step=1.0)
@@ -40,15 +33,14 @@ class TickerScreenerModule(FazDaneModule):
         if st.session_state.get("run_liquidity_screen"):
             st.session_state["run_liquidity_screen"] = False
             
-            if not getattr(self, "selected_universes", None):
-                st.warning("Please select at least one universe from the sidebar.")
-                return
-                
             universes = load_universes()
             all_tickers = set()
-            for u in self.selected_universes:
-                for t in universes[u].get("tickers", []):
-                    all_tickers.add(t)
+            for u_name, data in universes.items():
+                if not u_name.startswith("__"):
+                    for t in data.get("tickers", []):
+                        # Filter out futures (start with /) and common indices
+                        if t and not t.startswith("/") and not t.startswith("^") and t not in ["SPX", "NDX", "RUT", "VIX"]:
+                            all_tickers.add(t)
                     
             tickers = sorted(list(all_tickers))
             
