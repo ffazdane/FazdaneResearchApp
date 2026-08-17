@@ -95,4 +95,4 @@ class TickerScreenerModule(FazDaneModule):
                         use_container_width=True
                     )
                     
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(df, use_container_width=True, hide_index=True, height=800)
