@@ -13,12 +13,12 @@ from modules.tier4.volatility_engine import get_liquidity_score
 
 logger = logging.getLogger(__name__)
 
-def check_volume_and_options(ticker):
+def check_volume_and_options(ticker, min_volume=5000000, min_premium=1.50, max_spread_pct=10.0):
     """
     Checks if a ticker matches the liquidity screening criteria:
-    - Average daily volume > 5,000,000
-    - Options are highly liquid ("GOOD" rating from get_liquidity_score)
-    - ATM Option premium is >= $1.50
+    - Average daily volume >= min_volume
+    - ATM Option premium is >= min_premium
+    - ATM Option Bid-Ask Spread <= max_spread_pct
     """
     try:
         hist = yf.Ticker(ticker).history(period="1mo")
@@ -26,7 +26,7 @@ def check_volume_and_options(ticker):
             return None
             
         avg_vol = hist["Volume"].mean()
-        if avg_vol < 5_000_000:
+        if avg_vol < min_volume:
             return None
             
         last_price = hist["Close"].iloc[-1]
@@ -78,9 +78,15 @@ def check_volume_and_options(ticker):
         calls["dist"] = (calls["strike"] - last_price).abs()
         atm_call = calls.loc[calls["dist"].idxmin()]
         
-        atm_call_mid = (float(atm_call.get("bid", 0)) + float(atm_call.get("ask", 0))) / 2
+        bid = float(atm_call.get("bid", 0))
+        ask = float(atm_call.get("ask", 0))
+        atm_call_mid = (bid + ask) / 2
         
-        if atm_call_mid < 1.50:
+        if atm_call_mid < min_premium:
+            return None
+            
+        spread_pct = ((ask - bid) / atm_call_mid * 100) if atm_call_mid > 0 else 999.0
+        if spread_pct > max_spread_pct:
             return None
             
         return {
@@ -88,6 +94,7 @@ def check_volume_and_options(ticker):
             "Last Price": round(last_price, 2),
             "Avg Volume (20d)": int(avg_vol),
             "ATM Call Premium": round(atm_call_mid, 2),
+            "ATM Spread %": round(spread_pct, 1),
             "Liquidity Score": lbl,
             "Option Source": source
         }

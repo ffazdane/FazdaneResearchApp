@@ -24,6 +24,7 @@ class TickerScreenerModule(FazDaneModule):
         
         self.min_volume = st.number_input("Minimum Average Volume", value=5000000, step=1000000)
         self.min_premium = st.number_input("Minimum Option Premium ($)", value=1.50, step=0.50)
+        self.max_spread = st.number_input("Maximum Bid/Ask Spread (%)", value=10.0, step=1.0)
         
         if st.button("Run Screen", width="stretch", type="primary"):
             st.session_state["run_liquidity_screen"] = True
@@ -67,13 +68,10 @@ class TickerScreenerModule(FazDaneModule):
                 
                 # In a real heavy-duty app this might be a background task, 
                 # but for a targeted universe Streamlit can handle it synchronously.
-                res = check_volume_and_options(ticker)
+                res = check_volume_and_options(ticker, min_volume=self.min_volume, min_premium=self.min_premium, max_spread_pct=self.max_spread)
                 
-                # Additional dynamic check for the UI parameters since the engine was hardcoded to 5M / 1.50
-                # We can just enforce it here if we want to allow user tweaks:
                 if res:
-                    if res["Avg Volume (20d)"] >= self.min_volume and res["ATM Call Premium"] >= self.min_premium:
-                        results.append(res)
+                    results.append(res)
                         
                 progress_bar.progress((i + 1) / len(tickers))
                 
