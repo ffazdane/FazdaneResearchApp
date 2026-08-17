@@ -248,6 +248,7 @@ MODULE_REGISTRY = {
     "Multi-Timeframe Money Flow": ("modules.tier2.money_flow", "MoneyFlowModule", 2),
     "Market Trend Analysis": ("modules.tier2.market_trend_analysis", "MarketTrendAnalysisModule", 2),
     "Market Structure Heatmap": ("modules.tier2.market_structure", "MarketStructureModule", 2),
+    "Ticker Screener": ("modules.ticker_screener.screener_ui", "TickerScreenerModule", 2),
     "Correlation Matrix": ("modules.tier2.correlation_matrix", "CorrelationMatrixModule", 2),
     "Earnings Calendar": ("modules.tier2.earnings_calendar", "EarningsCalendarModule", 2),
     "Equity Income Statement": ("modules.tier2.equity_income_statement", "EquityIncomeStatementModule", 2),
