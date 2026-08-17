@@ -14,12 +14,6 @@ from modules.tier4.volatility_engine import get_liquidity_score
 logger = logging.getLogger(__name__)
 
 def check_volume_and_options(ticker, min_volume=5000000, min_premium=1.50, max_spread_pct=10.0):
-    """
-    Checks if a ticker matches the liquidity screening criteria:
-    - Average daily volume >= min_volume
-    - ATM Option premium is >= min_premium
-    - ATM Option Bid-Ask Spread <= max_spread_pct
-    """
     try:
         hist = yf.Ticker(ticker).history(period="1mo")
         if hist.empty or len(hist) < 5:
@@ -46,9 +40,12 @@ def check_volume_and_options(ticker, min_volume=5000000, min_premium=1.50, max_s
         if not expirations:
             return None
             
-        # Get nearest monthly expiration (or just the very next expiration)
-        # The prompt didn't specify DTE, so we just use the nearest expiration to check general option liquidity
-        nearest_exp = expirations[0]
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        valid_exp = [exp for exp in expirations if exp > today_str]
+        if not valid_exp:
+            valid_exp = expirations
+            
+        nearest_exp = valid_exp[0]
         
         try:
             if "tastytrade" in source:
@@ -72,9 +69,6 @@ def check_volume_and_options(ticker, min_volume=5000000, min_premium=1.50, max_s
         
         lbl, sty, detail = get_liquidity_score(calls, puts, last_price)
         
-        if lbl not in ["GOOD", "MODERATE"]:
-            return None
-            
         calls["dist"] = (calls["strike"] - last_price).abs()
         atm_call = calls.loc[calls["dist"].idxmin()]
         
