@@ -534,13 +534,9 @@ def _normalize_universes(universes: dict) -> dict:
         if isinstance(data, list):
             tickers = _clean_tickers(data)
             ticker_names = _build_ticker_names(tickers)
-            if name == "Correlation Matrix Assets":
-                sorted_tickers = tickers
-            else:
-                sorted_tickers = sorted(tickers, key=lambda t: t.strip().upper())
             normalized[name] = {
-                "tickers": sorted_tickers,
-                "ticker_names": {t: ticker_names[t] for t in sorted_tickers if t in ticker_names},
+                "tickers": tickers,
+                "ticker_names": {t: ticker_names[t] for t in tickers if t in ticker_names},
                 "benchmark": "SPY",
                 "description": "",
                 "module": "general",
@@ -548,13 +544,9 @@ def _normalize_universes(universes: dict) -> dict:
             continue
         tickers = _clean_tickers(data.get("tickers", []))
         ticker_names = _normalize_ticker_names(tickers, data.get("ticker_names", {}))
-        if name == "Correlation Matrix Assets":
-            sorted_tickers = tickers
-        else:
-            sorted_tickers = sorted(tickers, key=lambda t: t.strip().upper())
         normalized[name] = {
-            "tickers": sorted_tickers,
-            "ticker_names": {t: ticker_names[t] for t in sorted_tickers if t in ticker_names},
+            "tickers": tickers,
+            "ticker_names": {t: ticker_names[t] for t in tickers if t in ticker_names},
             "benchmark": str(data.get("benchmark", "SPY")).strip().upper(),
             "description": data.get("description", ""),
             "module": data.get("module", "general"),
@@ -621,7 +613,6 @@ def update_fazdane_portfolio_universe(tickers: list[str]) -> None:
         if clean_t and clean_t not in cleaned:
             cleaned.append(clean_t)
             
-    cleaned = sorted(cleaned)
     ticker_names = {}
     for t in cleaned:
         if t in KNOWN_TICKER_NAMES:
