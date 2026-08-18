@@ -310,23 +310,23 @@ class MoneyFlowModule(FazDaneModule):
                     
                 # Ichimoku Cloud Check
                 try:
-                    high_9 = df['High'].rolling(window=9).max()
-                    low_9 = df['Low'].rolling(window=9).min()
-                    tenkan_sen = (high_9 + low_9) / 2
+                    valid_df = df.dropna(subset=['High', 'Low', 'Close'])
+                    if len(valid_df) > 0:
+                        high_9 = valid_df['High'].rolling(window=9).max()
+                        low_9 = valid_df['Low'].rolling(window=9).min()
+                        tenkan_sen = (high_9 + low_9) / 2
 
-                    high_26 = df['High'].rolling(window=26).max()
-                    low_26 = df['Low'].rolling(window=26).min()
-                    kijun_sen = (high_26 + low_26) / 2
+                        high_26 = valid_df['High'].rolling(window=26).max()
+                        low_26 = valid_df['Low'].rolling(window=26).min()
+                        kijun_sen = (high_26 + low_26) / 2
 
-                    senkou_span_a = ((tenkan_sen + kijun_sen) / 2).shift(26)
+                        senkou_span_a = ((tenkan_sen + kijun_sen) / 2).shift(26)
 
-                    high_52 = df['High'].rolling(window=52).max()
-                    low_52 = df['Low'].rolling(window=52).min()
-                    senkou_span_b = ((high_52 + low_52) / 2).shift(26)
+                        high_52 = valid_df['High'].rolling(window=52).max()
+                        low_52 = valid_df['Low'].rolling(window=52).min()
+                        senkou_span_b = ((high_52 + low_52) / 2).shift(26)
 
-                    valid_close = df['Close'].dropna()
-                    if len(valid_close) > 0:
-                        current_price = valid_close.iloc[-1]
+                        current_price = valid_df['Close'].iloc[-1]
                         curr_span_a = senkou_span_a.iloc[-1]
                         curr_span_b = senkou_span_b.iloc[-1]
 
