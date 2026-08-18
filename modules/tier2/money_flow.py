@@ -590,7 +590,7 @@ class MoneyFlowModule(FazDaneModule):
             color='#666666'
         )
 
-        st.pyplot(fig, theme=None)
+        st.pyplot(fig)
         
         st.markdown("---")
         st.markdown("### 📋 Export Tickers")
