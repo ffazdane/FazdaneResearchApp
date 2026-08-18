@@ -324,16 +324,17 @@ class MoneyFlowModule(FazDaneModule):
                     low_52 = df['Low'].rolling(window=52).min()
                     senkou_span_b = ((high_52 + low_52) / 2).shift(26)
 
-                    current_price = df['Close'].iloc[-1]
-                    curr_tenkan = tenkan_sen.iloc[-1]
-                    curr_kijun = kijun_sen.iloc[-1]
-                    curr_span_a = senkou_span_a.iloc[-1]
-                    curr_span_b = senkou_span_b.iloc[-1]
+                    valid_close = df['Close'].dropna()
+                    if len(valid_close) > 0:
+                        current_price = valid_close.iloc[-1]
+                        curr_span_a = senkou_span_a.iloc[-1]
+                        curr_span_b = senkou_span_b.iloc[-1]
 
-                    if not (pd.isna(curr_span_a) or pd.isna(curr_span_b) or pd.isna(curr_tenkan) or pd.isna(curr_kijun)):
-                        max_all = max(curr_tenkan, curr_kijun, curr_span_a, curr_span_b)
-                        if current_price <= max_all:
-                            ichimoku_results[ticker] = 'below'
+                        # Check if price is below ANY of the cloud (meaning below the highest part of the cloud)
+                        if not (pd.isna(curr_span_a) or pd.isna(curr_span_b)):
+                            max_cloud = max(curr_span_a, curr_span_b)
+                            if current_price <= max_cloud:
+                                ichimoku_results[ticker] = 'below'
                 except Exception as e_ich:
                     logger.debug(f"Could not calc ichimoku for {ticker}: {e_ich}")
                     
