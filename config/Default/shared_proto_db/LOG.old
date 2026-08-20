@@ -1,3 +1,3 @@
-2026/08/18-12:00:40.856 2a Reusing MANIFEST /app/data/fazdane_config/Default/shared_proto_db/MANIFEST-000001
-2026/08/18-12:00:40.890 2a Recovering log #3
-2026/08/18-12:00:40.895 2a Reusing old log /app/data/fazdane_config/Default/shared_proto_db/000003.log 
+2026/08/20-18:24:14.014 322 Reusing MANIFEST /app/data/fazdane_config/Default/shared_proto_db/MANIFEST-000001
+2026/08/20-18:24:14.939 322 Recovering log #3
+2026/08/20-18:24:14.942 322 Reusing old log /app/data/fazdane_config/Default/shared_proto_db/000003.log 

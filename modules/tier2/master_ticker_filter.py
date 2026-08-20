@@ -26,6 +26,7 @@ class MasterTickerFilterModule(FazDaneModule):
         self.fdts_sig = st.multiselect("FDTS Signal", ["Buy", "Sell", "Neutral"], default=["Buy", "Sell", "Neutral"])
         
         self.max_call_spread = st.number_input("Max Call Spread", min_value=0.0, max_value=50.0, value=50.0, step=0.1)
+        self.min_price = st.number_input("Price Above", min_value=0.0, value=0.0, step=1.0)
         
         self.above_vwap = st.checkbox("Above VWAP", value=False)
         self.has_weeklys = st.checkbox("Has Weeklys", value=False)
@@ -111,6 +112,10 @@ class MasterTickerFilterModule(FazDaneModule):
             if self.max_call_spread < 50.0:
                 query += " AND (m.call_spread <= ? AND m.call_spread IS NOT NULL)"
                 params.append(self.max_call_spread)
+                
+            if self.min_price > 0.0:
+                query += " AND m.price > ?"
+                params.append(self.min_price)
                 
             if self.fdts_sig:
                 placeholders = ','.join(['?']*len(self.fdts_sig))
