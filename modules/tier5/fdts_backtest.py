@@ -63,6 +63,7 @@ class FDTSBacktestModule(FazDaneModule):
                 options=tickers,
                 format_func=lambda x: f"{x} - {ticker_names.get(x, x)}" if ticker_names.get(x) else x
             )
+            st.markdown("<div style='margin-top: 40px'></div>", unsafe_allow_html=True)
             manual_ticker = st.text_input("Or enter a custom ticker manually:", placeholder="e.g. SPY").strip().upper()
             if manual_ticker:
                 selected_ticker = manual_ticker
