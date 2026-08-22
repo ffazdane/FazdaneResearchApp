@@ -24,8 +24,12 @@ def get_historical_data(symbol: str, months: int = 24) -> pd.DataFrame:
         df_db = pd.DataFrame()
     else:
         with sqlite3.connect(db_path) as conn:
-            query = "SELECT date, open, high, low, close, volume FROM daily_prices WHERE symbol = ? ORDER BY date ASC"
-            df_db = pd.read_sql_query(query, conn, params=(symbol,))
+            try:
+                query = "SELECT date, open, high, low, close, volume FROM daily_prices WHERE symbol = ? ORDER BY date ASC"
+                df_db = pd.read_sql_query(query, conn, params=(symbol,))
+            except Exception as e:
+                logger.warning(f"Could not read from daily_prices table (it may not exist): {e}")
+                df_db = pd.DataFrame()
             
     today = datetime.now().date()
     target_start = today - timedelta(days=30 * months)
