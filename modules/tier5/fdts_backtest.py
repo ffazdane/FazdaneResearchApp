@@ -102,9 +102,10 @@ class FDTSBacktestModule(FazDaneModule):
         st.markdown("### Bulk Universe Backtest")
         st.markdown("Run the backtest on an entire universe and segment the results by Market Regime.")
         
+        run_all = st.checkbox("Run across ALL Universes (combine all, exclude futures)")
+        
         col_univ, col_filt, col_btn = st.columns([2, 1, 1])
         with col_univ:
-            run_all = st.checkbox("Run across ALL Universes (combine all, exclude futures)")
             universe_name, tickers, _ = render_universe_manager(key_prefix="bulk_univ")
             if run_all:
                 all_univs = load_universes()
