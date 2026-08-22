@@ -59,10 +59,13 @@ class FDTSBacktestModule(FazDaneModule):
         with col2:
             ticker_names = get_ticker_names(universe_name)
             selected_ticker = st.selectbox(
-                "Select Ticker",
+                "Select Ticker from Universe",
                 options=tickers,
                 format_func=lambda x: f"{x} - {ticker_names.get(x, x)}" if ticker_names.get(x) else x
             )
+            manual_ticker = st.text_input("Or enter a custom ticker manually:", placeholder="e.g. SPY").strip().upper()
+            if manual_ticker:
+                selected_ticker = manual_ticker
 
         st.divider()
 
