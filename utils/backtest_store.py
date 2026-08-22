@@ -24,11 +24,24 @@ def get_historical_data(symbol: str, months: int = 24) -> pd.DataFrame:
         df_db = pd.DataFrame()
     else:
         with sqlite3.connect(db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS daily_prices (
+                    date TEXT,
+                    symbol TEXT,
+                    open REAL,
+                    high REAL,
+                    low REAL,
+                    close REAL,
+                    volume REAL,
+                    open_interest REAL,
+                    PRIMARY KEY (date, symbol)
+                )
+            """)
             try:
                 query = "SELECT date, open, high, low, close, volume FROM daily_prices WHERE symbol = ? ORDER BY date ASC"
                 df_db = pd.read_sql_query(query, conn, params=(symbol,))
             except Exception as e:
-                logger.warning(f"Could not read from daily_prices table (it may not exist): {e}")
+                logger.warning(f"Could not read from daily_prices table: {e}")
                 df_db = pd.DataFrame()
             
     today = datetime.now().date()
@@ -79,13 +92,16 @@ def get_historical_data(symbol: str, months: int = 24) -> pd.DataFrame:
             
     if db_path.exists():
         with sqlite3.connect(db_path) as conn:
-            query = "SELECT date, open, high, low, close, volume FROM daily_prices WHERE symbol = ? ORDER BY date ASC"
-            df_full = pd.read_sql_query(query, conn, params=(symbol,))
-            if not df_full.empty:
-                df_full['date_obj'] = pd.to_datetime(df_full['date']).dt.date
-                df_filtered = df_full[df_full['date_obj'] >= target_start].copy()
-                df_filtered.drop(columns=['date_obj'], inplace=True)
-                return df_filtered.reset_index(drop=True)
+            try:
+                query = "SELECT date, open, high, low, close, volume FROM daily_prices WHERE symbol = ? ORDER BY date ASC"
+                df_full = pd.read_sql_query(query, conn, params=(symbol,))
+                if not df_full.empty:
+                    df_full['date_obj'] = pd.to_datetime(df_full['date']).dt.date
+                    df_filtered = df_full[df_full['date_obj'] >= target_start].copy()
+                    df_filtered.drop(columns=['date_obj'], inplace=True)
+                    return df_filtered.reset_index(drop=True)
+            except Exception as e:
+                logger.warning(f"Could not read from daily_prices table after insert: {e}")
                 
     return df_new
 
