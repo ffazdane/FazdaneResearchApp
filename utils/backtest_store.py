@@ -105,6 +105,120 @@ def get_historical_data(symbol: str, months: int = 24) -> pd.DataFrame:
                 
     return df_new
 
+def prefetch_historical_data_bulk(tickers: list[str], months: int = 24) -> None:
+    """
+    Prefetch historical data for a list of tickers in bulk to avoid Yahoo Finance rate limits.
+    It checks which tickers are missing data in the local database and uses yfinance's
+    multi-threaded downloader to fetch only what's necessary.
+    """
+    if not tickers:
+        return
+        
+    db_path = get_db_path("options_liquidity")
+    today = datetime.now().date()
+    target_start = today - timedelta(days=30 * months)
+    start_fetch_date = target_start.strftime("%Y-%m-%d")
+    end_fetch_date = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    missing_tickers = []
+    
+    # 1. Identify missing tickers
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS daily_prices (
+                date TEXT,
+                symbol TEXT,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                volume REAL,
+                open_interest REAL,
+                PRIMARY KEY (date, symbol)
+            )
+        """)
+        
+        for ticker in tickers:
+            try:
+                query = "SELECT MAX(date) as last_date FROM daily_prices WHERE symbol = ?"
+                df_db = pd.read_sql_query(query, conn, params=(ticker,))
+                last_date_str = df_db.iloc[0]['last_date']
+                
+                if last_date_str:
+                    last_date = pd.to_datetime(last_date_str).date()
+                    if last_date < today - timedelta(days=1):
+                        missing_tickers.append(ticker)
+                else:
+                    missing_tickers.append(ticker)
+            except Exception:
+                missing_tickers.append(ticker)
+                
+    if not missing_tickers:
+        logger.info(f"All {len(tickers)} tickers are up-to-date in options_liquidity.sqlite.")
+        return
+        
+    logger.info(f"Prefetching data for {len(missing_tickers)} missing tickers from {start_fetch_date} to {end_fetch_date} via yfinance bulk download...")
+    
+    # Map symbols to Yahoo symbols
+    yahoo_symbols = [YAHOO_MAPPING.get(t, t) for t in missing_tickers]
+    
+    # 2. Bulk download using yfinance
+    try:
+        data = yf.download(yahoo_symbols, start=start_fetch_date, end=end_fetch_date, group_by='ticker', threads=True, progress=False)
+    except Exception as e:
+        logger.error(f"Bulk download failed: {e}")
+        return
+        
+    if data.empty:
+        logger.warning("Bulk download returned empty data.")
+        return
+        
+    # 3. Parse and insert data
+    records = []
+    
+    if len(yahoo_symbols) == 1:
+        # Single ticker result doesn't have multi-index columns for ticker
+        sym = yahoo_symbols[0]
+        orig_sym = missing_tickers[0]
+        df = data.dropna(subset=['Close'])
+        for idx, row in df.iterrows():
+            records.append((
+                idx.strftime("%Y-%m-%d"),
+                orig_sym,
+                float(row['Open']) if pd.notna(row['Open']) else None,
+                float(row['High']) if pd.notna(row['High']) else None,
+                float(row['Low']) if pd.notna(row['Low']) else None,
+                float(row['Close']) if pd.notna(row['Close']) else None,
+                float(row['Volume']) if pd.notna(row['Volume']) else 0.0,
+                0.0
+            ))
+    else:
+        for sym, orig_sym in zip(yahoo_symbols, missing_tickers):
+            if sym in data.columns.levels[0]:
+                df = data[sym].dropna(subset=['Close'])
+                for idx, row in df.iterrows():
+                    records.append((
+                        idx.strftime("%Y-%m-%d"),
+                        orig_sym,
+                        float(row['Open']) if pd.notna(row['Open']) else None,
+                        float(row['High']) if pd.notna(row['High']) else None,
+                        float(row['Low']) if pd.notna(row['Low']) else None,
+                        float(row['Close']) if pd.notna(row['Close']) else None,
+                        float(row['Volume']) if pd.notna(row['Volume']) else 0.0,
+                        0.0
+                    ))
+                    
+    if records:
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.executemany("""
+                INSERT OR REPLACE INTO daily_prices (date, symbol, open, high, low, close, volume, open_interest)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, records)
+            conn.commit()
+            logger.info(f"Inserted {cursor.rowcount} bulk price records into options_liquidity.sqlite.")
+
+
 def init_backtest_db():
     db_path = get_db_path("backtest_engine")
     db_path.parent.mkdir(parents=True, exist_ok=True)

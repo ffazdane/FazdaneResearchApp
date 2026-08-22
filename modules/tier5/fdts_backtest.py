@@ -2,11 +2,17 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from modules.base_module import FazDaneModule
-from utils.universe_manager import render_universe_manager, get_ticker_names
-from utils.backtest_store import get_historical_data, save_backtest_result, get_latest_backtest_result, get_latest_option_spreads
+from utils.universe_manager import render_universe_manager, load_universes, get_ticker_names
+from utils.backtest_store import (
+    get_historical_data, 
+    prefetch_historical_data_bulk,
+    save_backtest_result, 
+    get_latest_backtest_result, 
+    get_latest_option_spreads
+)
 
 class FDTSBacktestModule(FazDaneModule):
     MODULE_NAME = "FDTS Regime Backtester"
@@ -98,7 +104,18 @@ class FDTSBacktestModule(FazDaneModule):
         
         col_univ, col_filt, col_btn = st.columns([2, 1, 1])
         with col_univ:
+            run_all = st.checkbox("Run across ALL Universes (combine all, exclude futures)")
             universe_name, tickers, _ = render_universe_manager(key_prefix="bulk_univ")
+            if run_all:
+                all_univs = load_universes()
+                all_tickers = set()
+                for v in all_univs.values():
+                    for t in v.get("tickers", []):
+                        if not t.endswith("=F"):
+                            all_tickers.add(t)
+                tickers = sorted(list(all_tickers))
+                universe_name = "All Universes"
+                
         with col_filt:
             max_spread = st.number_input("Max Option Spread ($)", value=0.50, step=0.10)
         with col_btn:
@@ -112,6 +129,10 @@ class FDTSBacktestModule(FazDaneModule):
                 
             progress_bar = st.progress(0)
             status_text = st.empty()
+            
+            # 1. Prefetch all missing historical data in one batch
+            status_text.text(f"Batch downloading missing historical data for {len(tickers)} tickers...")
+            prefetch_historical_data_bulk(tickers, months=24)
             
             bulk_results = []
             skipped_tickers = []
