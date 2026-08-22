@@ -64,6 +64,12 @@ DATABASES = {
     "master_ticker_analysis": {
         "env_var": "MASTER_TICKER_ANALYSIS_DB_PATH",
         "default_path": REPO_ROOT / "data" / "master_ticker_analysis.sqlite",
+        "description": "Master ticker cross-sectional analysis database"
+    },
+    "backtest_engine": {
+        "env_var": "BACKTEST_ENGINE_DB_PATH",
+        "default_path": REPO_ROOT / "data" / "backtest_engine.sqlite",
+        "description": "Backtest results and saved historical runs"
     },
     "universes_config": {
         "env_var": "UNIVERSES_CONFIG_PATH",

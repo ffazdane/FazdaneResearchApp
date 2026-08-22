@@ -226,6 +226,7 @@ TIER1_DEFAULT = "Select Live Trading Module..."
 TIER2_DEFAULT = "Select Analysis Module..."
 TIER3_DEFAULT = "Select Forecasting Module..."
 TIER4_DEFAULT = "Select Volatility Module..."
+TIER5_DEFAULT = "Select Backtest Module..."
 
 #
 # MODULE REGISTRY  single source of truth for every module:
@@ -266,6 +267,8 @@ MODULE_REGISTRY = {
     # Tier 4  Volatility
     "Volatility Strategy Engine": ("modules.tier4.volatility_engine", "VolatilityEngineModule", 4),
     "Gamma Flip Line Module": ("modules.tier4.gamma_flip.gamma_dashboard", "GammaFlipLineModule", 4),
+    # Tier 5  Backtesting & Strategies
+    "FDTS Regime Backtester": ("modules.tier5.fdts_backtest", "FDTSBacktestModule", 5),
 }
 
 
@@ -316,6 +319,13 @@ def select_sidebar_tier(tier: int) -> None:
         st.session_state["tier1_module_nav"] = TIER1_DEFAULT
         st.session_state["tier2_nav"] = TIER2_DEFAULT
         st.session_state["tier3_nav"] = TIER3_DEFAULT
+        st.session_state["tier5_nav"] = TIER5_DEFAULT
+        st.session_state.pop("active_menu_tier", None)
+    elif tier == 5 and st.session_state.get("tier5_nav") != TIER5_DEFAULT:
+        st.session_state["tier1_module_nav"] = TIER1_DEFAULT
+        st.session_state["tier2_nav"] = TIER2_DEFAULT
+        st.session_state["tier3_nav"] = TIER3_DEFAULT
+        st.session_state["tier4_nav"] = TIER4_DEFAULT
         st.session_state.pop("active_menu_tier", None)
 
 
@@ -350,6 +360,8 @@ def back_to_current_menu() -> None:
         st.session_state["pending_nav"] = {"action": "clear_tier", "tier": 3}
     elif st.session_state.get("tier4_nav") and st.session_state.get("tier4_nav") != TIER4_DEFAULT:
         st.session_state["pending_nav"] = {"action": "clear_tier", "tier": 4}
+    elif st.session_state.get("tier5_nav") and st.session_state.get("tier5_nav") != TIER5_DEFAULT:
+        st.session_state["pending_nav"] = {"action": "clear_tier", "tier": 5}
     else:
         st.session_state["active_menu_tier"] = st.session_state.get("active_menu_tier", 1)
     st.rerun()
@@ -934,6 +946,7 @@ if pending_nav:
         st.session_state["tier2_nav"] = TIER2_DEFAULT
         st.session_state["tier3_nav"] = TIER3_DEFAULT
         st.session_state["tier4_nav"] = TIER4_DEFAULT
+        st.session_state["tier5_nav"] = TIER5_DEFAULT
         st.session_state.pop("active_menu_tier", None)
     elif action == "clear_tier" and tier == 1:
         st.session_state["tier1_module_nav"] = TIER1_DEFAULT
@@ -947,6 +960,9 @@ if pending_nav:
     elif action == "clear_tier" and tier == 4:
         st.session_state["tier4_nav"] = TIER4_DEFAULT
         st.session_state["active_menu_tier"] = 4
+    elif action == "clear_tier" and tier == 5:
+        st.session_state["tier5_nav"] = TIER5_DEFAULT
+        st.session_state["active_menu_tier"] = 5
     elif tier == 1:
         st.session_state.pop("active_menu_tier", None)
         st.session_state["tier1_module_nav"] = module_name
@@ -971,6 +987,14 @@ if pending_nav:
         st.session_state["tier2_nav"] = TIER2_DEFAULT
         st.session_state["tier3_nav"] = TIER3_DEFAULT
         st.session_state["tier4_nav"] = module_name
+        st.session_state["tier5_nav"] = TIER5_DEFAULT
+    elif tier == 5:
+        st.session_state.pop("active_menu_tier", None)
+        st.session_state["tier1_module_nav"] = TIER1_DEFAULT
+        st.session_state["tier2_nav"] = TIER2_DEFAULT
+        st.session_state["tier3_nav"] = TIER3_DEFAULT
+        st.session_state["tier4_nav"] = TIER4_DEFAULT
+        st.session_state["tier5_nav"] = module_name
 
 with st.sidebar:
     # Logo
@@ -1125,6 +1149,18 @@ with st.sidebar:
             args=(4,),
         )
 
+    #  Tier 5: Backtesting
+    with st.expander("Backtesting & Strategies", expanded=False):
+        tier5_options = [TIER5_DEFAULT] + modules_for_tier(5)
+        tier5_sel = st.radio(
+            "tier5",
+            tier5_options,
+            key="tier5_nav",
+            label_visibility="collapsed",
+            on_change=select_sidebar_tier,
+            args=(5,),
+        )
+
     st.divider()
 
     #  Logout
@@ -1150,6 +1186,8 @@ elif st.session_state.get("tier3_nav") and st.session_state.get("tier3_nav") != 
     active_module = st.session_state.get("tier3_nav")
 elif st.session_state.get("tier4_nav") and st.session_state.get("tier4_nav") != tier4_options[0]:
     active_module = st.session_state.get("tier4_nav")
+elif st.session_state.get("tier5_nav") and st.session_state.get("tier5_nav") != tier5_options[0]:
+    active_module = st.session_state.get("tier5_nav")
 elif st.session_state.get("active_menu_tier"):
     active_module = f"__MENU_TIER_{st.session_state.get('active_menu_tier')}__"
 else:
@@ -1168,6 +1206,7 @@ if active_module.startswith("__MENU_TIER_"):
         2: ("Analysis & Intelligence", "Research modules for cross-market, fundamental, seasonal, and sentiment work", tier2_options[1:]),
         3: ("Forecasting & Cycles", "Cycle and forecasting modules for turning-window analysis", tier3_options[1:]),
         4: ("Volatility", "Dealer gamma, implied-volatility, and premium-selling regime dashboards", tier4_options[1:]),
+        5: ("Backtesting & Strategies", "Systematic strategy testing and regime classification", tier5_options[1:]),
     }
 
     try:
@@ -1193,7 +1232,7 @@ if active_module.startswith("__MENU_TIER_"):
         unsafe_allow_html=True,
     )
 
-    switch_cols = st.columns(4)
+    switch_cols = st.columns(5)
     for tier_id, (switch_label, _, _) in menu_config.items():
         with switch_cols[tier_id - 1]:
             button_type = "primary" if menu_tier == tier_id else "secondary"
@@ -1220,6 +1259,9 @@ elif active_module in tier3_options:
 
 elif active_module in tier4_options:
     st.info(f"{active_module}  Volatility module coming soon")
+
+elif active_module in tier5_options:
+    st.info(f"{active_module}  Backtesting module coming soon")
 
 else:
     #
@@ -1292,6 +1334,7 @@ else:
             (2, "Analysis & Intelligence"),
             (3, "Forecasting & Cycles"),
             (4, "Volatility"),
+            (5, "Backtesting & Strategies"),
         ]
     ]
 
