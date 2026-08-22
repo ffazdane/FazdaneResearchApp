@@ -114,6 +114,7 @@ class FDTSBacktestModule(FazDaneModule):
             status_text = st.empty()
             
             bulk_results = []
+            skipped_tickers = []
             
             for i, ticker in enumerate(tickers):
                 status_text.text(f"Processing {ticker} ({i+1}/{len(tickers)})...")
@@ -129,6 +130,8 @@ class FDTSBacktestModule(FazDaneModule):
                         "Days In Regime": df['DaysInState'].iloc[-1] if not df.empty else 0,
                         "Max Points": kpis.get(f"Max Points ({'Buy' if kpis.get('Current Regime') == 'BUY' else 'Sell'})", 0.0)
                     })
+                else:
+                    skipped_tickers.append(ticker)
                 
                 progress_bar.progress((i + 1) / len(tickers))
                 
@@ -144,14 +147,19 @@ class FDTSBacktestModule(FazDaneModule):
             status_text.empty()
             progress_bar.empty()
             st.session_state['bulk_backtest_results'] = bulk_results
+            st.session_state['bulk_skipped_tickers'] = skipped_tickers
             
         if 'bulk_backtest_results' in st.session_state:
             results_df = pd.DataFrame(st.session_state['bulk_backtest_results'])
+            skipped = st.session_state.get('bulk_skipped_tickers', [])
+            
+            if skipped:
+                st.warning(f"⚠️ **{len(skipped)} tickers were skipped** because they lacked sufficient historical data (likely due to Yahoo Finance rate-limiting in the cloud). To fix this, run the backtest locally to populate the database, then Backup/Restore DBs.")
             
             # Apply Filter
             filtered_df = results_df[results_df['Max Spread'] <= max_spread]
             
-            st.markdown(f"**Showing {len(filtered_df)} out of {len(results_df)} tickers with Option Spread <= ${max_spread}**")
+            st.markdown(f"**Showing {len(filtered_df)} out of {len(results_df)} successfully processed tickers with Option Spread <= ${max_spread}**")
             
             buy_df = filtered_df[filtered_df['Regime'] == 'BUY'].drop(columns=['Regime', 'Max Spread'])
             sell_df = filtered_df[filtered_df['Regime'] == 'SELL'].drop(columns=['Regime', 'Max Spread'])
